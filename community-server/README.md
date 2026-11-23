@@ -4,7 +4,7 @@ The server stores shared best-lap ZIPs and lets friends browse and import them f
 
 ## Start the Windows app
 
-1. Extract the Windows x64 ZIP to a folder and open **Total Telemetry Community Server.exe**. Keep the files from the archive together.
+1. Download the Windows x64 ZIP from [Community Server releases](https://github.com/lflem29/totaltelemetry/releases/tag/community-server-v1.0.1). Extract it to a folder and open **Total Telemetry Community Server.exe**. Keep the files from the archive together.
 2. Choose a port, listening mode and lap storage folder. The app generates a shared access key and a separate owner password on first launch.
 3. Click **Start Server**. Use **Copy Address** and **Copy Key** to give your friends the address, port and key privately. The shared key and separate owner password are saved using Windows secure storage. Give friends only the shared key.
 4. Leave the app open while friends use the server. **Stop Server** stops incoming connections. Closing the window exits the app.

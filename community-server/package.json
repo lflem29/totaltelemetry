@@ -1,7 +1,7 @@
 {
   "name": "total-telemetry-community-server",
   "productName": "Total Telemetry Community Server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "main": "main.cjs",
   "scripts": {

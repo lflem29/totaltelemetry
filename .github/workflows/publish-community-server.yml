@@ -1,0 +1,49 @@
+name: Publish Community Server
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Package and publish Windows x64 server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init --quiet source
+          git -C source fetch --quiet --depth=1 "https://github.com/$GITHUB_REPOSITORY.git" "$GITHUB_SHA"
+          git -C source checkout --quiet FETCH_HEAD
+          package=source/community-server/package.json
+          version=$(jq -er '.version' "$package")
+          electron=$(jq -er '.devDependencies.electron' "$package")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$electron" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          jq -e '.communityDefaults.host == "127.0.0.1" and .communityDefaults.key == ""' "$package" >/dev/null
+          distribution="electron-v$electron-win32-x64.zip"
+          base="https://github.com/electron/electron/releases/download/v$electron"
+          curl --fail --silent --show-error --location "$base/$distribution" --output "$distribution"
+          curl --fail --silent --show-error --location "$base/SHASUMS256.txt" --output SHASUMS256.txt
+          grep -F " *$distribution" SHASUMS256.txt | sha256sum --check ||
+            grep -F "  $distribution" SHASUMS256.txt | sha256sum --check
+          install_dir="Total Telemetry Community Server"
+          unzip -q "$distribution" -d "$install_dir"
+          mv "$install_dir/electron.exe" "$install_dir/Total Telemetry Community Server.exe"
+          app_dir="$install_dir/resources/app"
+          mkdir -p "$app_dir"
+          cp source/community-server/{app.js,index.html,main.cjs,package.json,preload.cjs,server.cjs,style.css} "$app_dir/"
+          cp source/community-server/README.md "$install_dir/"
+          archive="Total-Telemetry-Community-Server-v$version-win-x64.zip"
+          zip -q -r -1 "$archive" "$install_dir"
+          unzip -tq "$archive"
+          unzip -p "$archive" "$app_dir/package.json" | cmp - "$package"
+          cat > release-notes.md <<'NOTES'
+          Download and extract the Windows x64 ZIP, then open **Total Telemetry Community Server.exe** from the extracted folder.
+
+          - The server supplies layout choices for the selected track when browsing Community Laps.
+          - The server window shows the version and has room for its settings and controls.
+          - The public build generates a shared access key and an owner password on first launch. Share your server address, port, and shared access key privately with your group.
+          NOTES
+          printf '\nArchive SHA-256: `%s`\n' "$(sha256sum "$archive" | cut -d' ' -f1)" >> release-notes.md
+          gh release create "community-server-v$version" "$archive" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --latest=false --title "Total Telemetry Community Server $version" --notes-file release-notes.md
