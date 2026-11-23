@@ -13,6 +13,17 @@ Download and run the Windows setup executable from [Releases](https://github.com
 
 For Discord exports or Community Server access, enter your own connection details under **Settings → Sharing**.
 
+## How It Works
+
+1. **Record a session.** Enable **Automatically Record Telemetry** in Le Mans Ultimate and drive a few timed laps. Open the recording from **Session Library → My Recent Sessions**.
+2. **Choose a lap and a reference.** In **Telemetry Viewer**, pick the lap you want to review and compare it with another lap from your recordings or an imported reference. The comparison strip shows which laps are loaded and their times.
+3. **Find where the gap changed.** **Time Delta** compares elapsed time at the same point on the track. A positive gap means the selected lap is behind the reference. Drag across a chart to zoom all graphs, or click to pin the cursor and read the values at that point.
+4. **Inspect a corner.** Expand a row in **Corner Time Loss** to highlight the section on the track map and charts. Compare braking and throttle points, minimum speed, exit speed, and the highest speed reached before the next brake application. Use **Previous Corner** and **Next Corner** to review corners in track order.
+5. **Review the session.** Open **Driver Performance** for lap and sector consistency, inconsistent corners, and post-corner speed spreads. Filter by stint or track condition to compare similar laps. Switch to **Vehicle Performance** to review recorded data such as tyre, brake, and engine temperatures.
+6. **Share what you found.** Use **Export Image** to save a chart as a PNG. Use **Export the Best Lap from This Session to Share** to save a reference-lap ZIP or send it through a configured Discord webhook or Community Server. To compare a lap someone sent you, use **Imported Laps** in the Session Library.
+
+The viewer reads your recorded telemetry locally. A Community Server is optional for sharing and browsing laps.
+
 ## Run from source
 
 Install Node.js and Python 3. On Windows, make sure the `python` command is on your PATH.
