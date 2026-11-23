@@ -9,7 +9,7 @@ Total Telemetry is a Windows telemetry viewer for **Le Mans Ultimate**. Open rec
 
 ## Install on Windows
 
-Download both Windows installer parts from [Releases](https://github.com/lflem29/totaltelemetry/releases), save them in the same folder, and open the .001 file in 7-Zip. Run the extracted setup executable. Enable **Automatically Record Telemetry** in Le Mans Ultimate. If Total Telemetry cannot find your recording folders, select them under **Settings → LMU Folders**.
+Download and run the Windows setup executable from [Releases](https://github.com/lflem29/totaltelemetry/releases). Enable **Automatically Record Telemetry** in Le Mans Ultimate. If Total Telemetry cannot find your recording folders, select them under **Settings → LMU Folders**.
 
 For Discord exports or Community Server access, enter your own connection details under **Settings → Sharing**.
 
