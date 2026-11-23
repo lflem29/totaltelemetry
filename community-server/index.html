@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'">
+  <title>Total Telemetry Community Server</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Community Server <span id="server-version"></span></h1>
+      <output id="server-state">Loading…</output>
+    </header>
+    <form id="server-form">
+      <fieldset id="server-settings" disabled>
+        <legend>Server Settings</legend>
+        <div class="settings-grid">
+          <label>Port<input id="port" type="number" required min="1" max="65535"></label>
+          <label>Listen On<select id="scope"><option value="network">Local Network</option><option value="local">This PC Only</option></select></label>
+          <div class="wide">
+            <label for="directory">Lap Storage Folder</label>
+            <div class="field-action"><input id="directory" required readonly><button id="choose" type="button">Browse</button></div>
+          </div>
+          <div class="wide">
+            <label for="key">Shared Access Key</label>
+            <div class="field-action"><input id="key" required type="password" minlength="24" maxlength="256" autocomplete="off" spellcheck="false">
+              <button id="reveal" type="button" aria-pressed="false">Show</button><button id="generate" type="button">Generate</button>
+            </div>
+          </div>
+          <div class="wide">
+            <label for="owner-password">Owner Password</label>
+            <div class="field-action"><input id="owner-password" required type="password" minlength="12" maxlength="256" autocomplete="off" spellcheck="false">
+              <button id="reveal-owner" type="button" aria-pressed="false">Show</button><button id="generate-owner" type="button">Generate</button>
+            </div>
+            <p>Keep this password private. It allows lap removal.</p>
+          </div>
+        </div>
+      </fieldset>
+      <div class="actions">
+        <button id="start" type="submit" disabled>Start Server</button>
+        <button id="stop" type="button" disabled>Stop Server</button>
+        <p id="message" role="status"></p>
+      </div>
+    </form>
+    <section aria-labelledby="connection-title">
+      <h2 id="connection-title">Connect Total Telemetry</h2>
+      <p>Enter the address, port and shared key in Total Telemetry’s Sharing settings.</p>
+      <label for="address">Connection Address</label>
+      <div class="field-action">
+        <select id="address" disabled></select>
+        <button id="copy-address" type="button" disabled>Copy Address</button>
+        <button id="copy-key" type="button" disabled>Copy Key</button>
+        <button id="copy-owner" type="button" disabled>Copy Owner Password</button>
+      </div>
+      <p>Keep this app open while sharing. For remote friends, use a private VPN or HTTPS reverse proxy.</p>
+    </section>
+  </main>
+</body>
+</html>

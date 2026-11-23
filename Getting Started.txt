@@ -1,0 +1,10 @@
+TOTAL TELEMETRY
+Windows 11 x64
+
+Open Total Telemetry from the Start menu. On first run it checks the default
+Steam installation for Le Mans Ultimate and opens a folder picker if needed.
+You can also select Telemetry and Session results separately in Settings.
+
+Drag across any chart to zoom all charts, click to pin the cursor, and drag
+the handle below a chart to set its height. Open Select Channels to
+browse all recorded channels. Tyre pressures are in psi.

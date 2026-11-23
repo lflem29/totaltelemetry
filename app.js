@@ -1,0 +1,4719 @@
+'use strict';
+const popoutWindows = new Map();
+const $ = id => {
+  const inline = document.getElementById(id);
+  if (inline) return inline;
+  for (const popup of popoutWindows.values()) {
+    const element = !popup.closed && popup.document.getElementById(id);
+    if (element) return element;
+  }
+  return null;
+};
+const palette = ['#c6f36c', '#75dfc2', '#7baeff', '#eaa8ed'];
+const comparison = ['#f0a479', '#f9cc81', '#d3a8ff', '#f68398'];
+const wheels = ['FL', 'FR', 'RL', 'RR'];
+const tyreChannels = {
+  'TyresTempCentre': 'Centre Tread', 'TyresTempLeft': 'Left Tread', 'TyresTempRight': 'Right Tread',
+  'TyresRubberTemp': 'Rubber', 'TyresCarcassTemp': 'Carcass', 'TyresRimTemp': 'Rim'
+};
+const deltaGraph = ['Time Delta','delta'];
+const speedActivations = [
+  ['ABS', '#ff626c', '#a8192d'],
+  ['TC', '#45d4df', '#007482']
+];
+const chartSpecs = [
+  ['Speed','Ground Speed'], ['Throttle','Throttle Pos'], ['Brake','Brake Pos'], ['Gear','Gear'],
+  ['Steering','Steering Pos'], ['Brake Temperatures','Brakes Temp'], ['Tyre Temperatures','tyres'],
+  ['Tyre Pressures','TyresPressure'], ['Oil Temperature','Engine Oil Temp'], ['Water Temperature','Engine Water Temp']
+];
+const defaultHiddenGraphs = ['Engine Oil Temp', 'Engine Water Temp'];
+const builtInGraphKeys = new Set(chartSpecs.map(([, key]) => key));
+const builtIn = {
+  Driving: ['Ground Speed','Throttle Pos','Brake Pos','Gear','Steering Pos','Engine RPM','G Force Lat','G Force Long'],
+  'Tyres & Brakes': ['Brakes Temp','Brakes Force','TyresTempCentre','TyresPressure','Tyres Wear','TyresCompound','Brake Thickness'],
+  Engine: ['Engine RPM','Engine Oil Temp','Engine Water Temp','Fuel Level','Turbo Boost Pressure']
+};
+let settings = {};
+let sessions = [], resultGameVersions = [];
+let scanBusy = false, runningScanAgain = false, scanKey;
+let scanFailed = false;
+let selected, lap, reference, primary, secondary;
+let referenceLoading = false;
+let referenceSessionPath;
+let referenceSessionLapId;
+let manualReference = undefined;
+let loadGeneration = 0, ready = false;
+let view = 'library';
+let enabled = new Set(builtIn.Driving), chartRows = [], readoutRows = [];
+let range = [0, 1], cursor = 0, playTime = 0, pinned = false, playing = false, frame = 0;
+let selection = null;
+let pinnedGraph;
+let renderRequested = false;
+let mergeChoices = new Set();
+const mergeColors = ['#c6f36c','#74d8ff','#ffb583','#d7a5ff','#70e4c0','#ff91ad','#f4dc72','#a2b4ff'];
+const graphColor = (key, fallback = palette[0]) => settings.colors?.[key] || fallback;
+
+function node(tag, text, className) {
+  const el = document.createElement(tag);
+  if (text !== undefined) el.textContent = text;
+  if (className) el.className = className;
+  return el;
+}
+function option(select, label, value) {
+  const el = node('option', label);
+  el.value = value;
+  select.append(el);
+}
+const headerStatus = $('status');
+function fitHeaderStatus() {
+  headerStatus.style.removeProperty('font-size');
+  if (!headerStatus.textContent || !headerStatus.clientWidth) return;
+  const naturalWidth = headerStatus.scrollWidth;
+  if (naturalWidth <= headerStatus.clientWidth) return;
+  const baseSize = parseFloat(getComputedStyle(headerStatus).fontSize);
+  const fitted = Math.max(10, Math.floor(baseSize * headerStatus.clientWidth / naturalWidth * 10) / 10);
+  headerStatus.style.fontSize = Math.min(baseSize, fitted) + 'px';
+}
+new ResizeObserver(fitHeaderStatus).observe(headerStatus);
+document.fonts.ready.then(fitHeaderStatus);
+
+const statusTimers = new WeakMap();
+function setStatus(element, text, {error = false, temporary = true} = {}) {
+  clearTimeout(statusTimers.get(element));
+  statusTimers.delete(element);
+  element.classList.toggle('status-error', error);
+  element.textContent = text;
+  if (element === headerStatus) {
+    if (text) headerStatus.title = text;
+    else headerStatus.removeAttribute('title');
+    fitHeaderStatus();
+  }
+  if (text && temporary) {
+    statusTimers.set(element, setTimeout(() => setStatus(element, ''), 20_000));
+  }
+}
+function number(value, digits = 2) {
+  return Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+function timeGapLabel(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  const rounded = Math.round(seconds * 1000) / 1000;
+  return (rounded > 0 ? '+' : '') + number(rounded, 3) + ' s';
+}
+function lapTime(seconds) {
+  if (!Number.isFinite(seconds)) return '—';
+  const ms = Math.round(seconds * 1000);
+  return Math.floor(ms / 60000) + ':' + ((ms % 60000) / 1000).toFixed(3).padStart(6, '0');
+}
+const australianDateTime = new Intl.DateTimeFormat('en-AU', {
+  day:'2-digit', month:'2-digit', year:'numeric',
+  hour:'numeric', minute:'2-digit', second:'2-digit'
+});
+const australianDate = new Intl.DateTimeFormat('en-AU', {day:'2-digit', month:'2-digit', year:'numeric'});
+function recordingDate(value) {
+  const text = value ?? '';
+  const timestamp = text.match(/\d{4}-\d{2}-\d{2}T\d{2}_\d{2}_\d{2}Z(?=\.duckdb$|$)/i)?.[0] ?? text;
+  return new Date(timestamp.replace(/T(\d\d)_(\d\d)_(\d\d)Z$/i, 'T$1:$2:$3Z'));
+}
+function dateLabel(value, formatter = australianDateTime) {
+  const parsed = recordingDate(value);
+  return Number.isNaN(+parsed) ? value : formatter.format(parsed);
+}
+function weekdayPeriod(date) {
+  const weekday = date.toLocaleDateString('en-AU', {weekday:'long'});
+  const hour = date.getHours();
+  if (hour < 5 || hour >= 21) return weekday + ' night';
+  if (hour < 12) return weekday + ' morning';
+  if (hour < 17) return weekday + ' afternoon';
+  return weekday + ' evening';
+}
+function lapLabel(l) {
+  return (l.number === null ? 'Recording' : 'Lap ' + l.number) + ' · ' +
+    (l.time ? lapTime(l.time) + (l.validity === 'unconfirmed' ? ' · validity unconfirmed' : '')
+      : l.kind === 'complete' ? l.validity === 'no official time' ? 'No official time' : 'No recorded time' : l.kind);
+}
+function addLoadedReferenceLabel(cell, sessionPath, lapId) {
+  if (!sessionPath) return;
+  const label = node('small', 'Loaded Reference', 'loaded-reference-label reference-color');
+  label.dataset.referencePath = sessionPath;
+  if (lapId != null) label.dataset.referenceLap = String(lapId);
+  cell.append(label);
+  updateLoadedReferenceLabel(label);
+}
+function updateLoadedReferenceLabel(label) {
+  label.hidden = !(secondary && reference?.session.path === label.dataset.referencePath &&
+    (label.dataset.referenceLap == null || String(reference.lap.id) === label.dataset.referenceLap));
+}
+function referenceLapCells(driver, track, layout, car, time, version) {
+  return [node('td', driver || 'Unknown Driver'), node('td', track || 'Unknown'),
+    node('td', layout || 'Unknown'), node('td', car || 'Unknown'),
+    node('td', lapTime(time), 'numeric-cell'), node('td', version || 'Unknown')];
+}
+function renderLoadedSessions() {
+  const show = (id, session, currentLap, empty) => {
+    const output = $(id);
+    if (!session) {
+      output.textContent = empty;
+      return;
+    }
+    const time = currentLap?.time ? lapTime(currentLap.time) : '';
+    const details = [session.driver, session.trackLayout !== session.track ? session.trackLayout : '',
+      session.car, session.recorded && dateLabel(session.recorded),
+      currentLap?.number != null ? 'Lap ' + currentLap.number : '', time];
+    output.replaceChildren(node('strong', session.track || session.filename), details.filter(Boolean).join(' · '));
+  };
+  show('loaded-session', selected, lap, 'No session loaded');
+  const pending = !selected && referenceSessionPath
+    ? (settings.comparisonLaps ?? []).find(session => session.path === referenceSessionPath)
+      ?? sessions.find(session => session.path === referenceSessionPath)
+    : undefined;
+  const comparisonSession = secondary ? reference?.session : pending;
+  const comparisonLap = secondary ? reference?.lap
+    : pending?.lap ?? pending?.laps?.find(item => referenceSessionLapId == null
+      ? item.time > 0 && item.time === pending.best : item.id === referenceSessionLapId);
+  show('loaded-comparison', comparisonSession, comparisonLap, 'No comparison loaded');
+  document.querySelectorAll('.loaded-reference-label').forEach(updateLoadedReferenceLabel);
+}
+function setView(name) {
+  view = name;
+  $('library').hidden = name !== 'library';
+  $('viewer').hidden = name !== 'viewer';
+  $('records').hidden = name !== 'records';
+  $('export-best-lap').hidden = name !== 'viewer';
+  $('library-tab').classList.toggle('active', name === 'library');
+  $('viewer-tab').classList.toggle('active', name === 'viewer');
+  $('records-tab').classList.toggle('active', name === 'records');
+  if (name !== 'viewer') stop();
+  if (name === 'library') renderLoadedSessions();
+  if (name === 'records') renderRecords();
+  if (name === 'viewer') scheduleRender();
+}
+const carClasses = ['GTE', 'GT3', 'LMP3', 'LMP2', 'Hypercar'];
+const temperatureThresholds = [
+  ['tyres', 'Tyres', 90], ['brakes', 'Brakes', 700],
+  ['oil', 'Engine oil', 110], ['water', 'Engine water', 100]
+];
+const classOptimalTemperatureMax = {
+  GTE: {tyres: 90, brakes: 650},
+  GT3: {tyres: 90, brakes: 650},
+  LMP3: {tyres: 92, brakes: 800},
+  LMP2: {tyres: 92, brakes: 800},
+  Hypercar: {tyres: 94, brakes: 800}
+};
+function hotTemperature(carClass, key) {
+  const category = carClasses.includes(carClass) ? carClass : 'other';
+  const overrides = settings.hotTemperaturesByClass?.[category] ?? {};
+  if (Object.hasOwn(overrides, key)) return overrides[key];
+  if (Object.hasOwn(settings.hotTemperatures ?? {}, key)) return settings.hotTemperatures[key];
+  const fallback = temperatureThresholds.find(([channel]) => channel === key)?.[2];
+  if (category === 'other' || fallback === undefined) return fallback;
+  return (classOptimalTemperatureMax[category][key] ?? fallback) + 1;
+}
+const orangeInterfaceColour = '#f59e42';
+const greenInterfaceColour = '#2a6204';
+const defaultInterfaceBackgroundColour = '#101513';
+const defaultGraphBackgroundColour = '#171e1a';
+function backgroundColour(value, fallback) {
+  return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+function isLightBackground(colour) {
+  const [red, green, blue] = colour.slice(1).match(/../g).map(hex => {
+    const channel = parseInt(hex, 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  });
+  return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.179;
+}
+let lightGraphBackground = false;
+function textScale() { return (settings.textScalePercent ?? 100) / 100; }
+function interfaceColourMode() {
+  const mode = settings.interfaceColourMode;
+  if (mode === 'orange' || mode === 'green' || mode === 'custom') return mode;
+  const colour = backgroundColour(settings.interfaceColour, greenInterfaceColour).toLowerCase();
+  if (colour === orangeInterfaceColour) return 'orange';
+  return colour === greenInterfaceColour ? 'green' : 'custom';
+}
+function activeInterfaceColour() {
+  const mode = interfaceColourMode();
+  if (mode === 'orange') return orangeInterfaceColour;
+  if (mode === 'green') return greenInterfaceColour;
+  return backgroundColour(settings.interfaceColour, greenInterfaceColour);
+}
+function interfaceColourFields() {
+  const mode = interfaceColourMode();
+  $('interface-colour-mode').value = mode;
+  $('custom-interface-colour').hidden = mode !== 'custom';
+  $('interface-colour').value = backgroundColour(settings.interfaceColour, greenInterfaceColour);
+}
+function applyAppearance() {
+  const root = document.documentElement;
+  const interfaceColour = activeInterfaceColour();
+  root.style.setProperty('--interface-colour', interfaceColour);
+  const buttonFill = interfaceColour.toLowerCase() === orangeInterfaceColour ? '#ba5600' : interfaceColour;
+  root.style.setProperty('--button-fill', buttonFill);
+  const lightButton = isLightBackground(buttonFill);
+  root.style.setProperty('--button-ink', lightButton ? '#000' : '#fff');
+  root.style.setProperty('--button-shade', lightButton ? '#fff' : '#000');
+  const background = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
+  const graphBackground = backgroundColour(settings.graphBackgroundColour, '');
+  lightGraphBackground = !!graphBackground && isLightBackground(graphBackground);
+  root.style.setProperty('--bg', background);
+  root.style.setProperty('--background-text', isLightBackground(background) ? '#000' : '#fff');
+  root.style.setProperty('--graph-bg', graphBackground);
+  root.style.setProperty('--graph-text', lightGraphBackground ? '#171e1a' : '');
+  root.style.setProperty('--text-scale', String(textScale()));
+  fitHeaderStatus();
+  for (const popup of popoutWindows.values()) {
+    if (!popup.closed) popup.document.documentElement.style.cssText = root.style.cssText;
+  }
+  $('text-scale-value').value = (settings.textScalePercent ?? 100) + '%';
+  for (const chart of chartRows) chart.cache = null;
+  if (selected) paintLapHistory();
+  scheduleRender();
+}
+function settingsFields() {
+  const server = settings.communityServer;
+  $('community-host').value = server?.host ?? '';
+  $('community-port').value = server?.port ?? 8787;
+  $('community-https').checked = server?.https ?? false;
+  $('community-key').placeholder = settings.communityUsesBundledKey ? 'Bundled shared key in use' :
+    settings.communityConfigured ? 'Saved shared key' : '';
+  $('community-settings-status').textContent = settings.communityOwnerConfigured ? 'Shared key and owner password saved.' : settings.communityConfigured ? 'Shared access key saved.' : '';
+
+  updateDiscordSettings();
+  interfaceColourFields();
+  $('interface-background-colour').value = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
+  $('graph-background-colour').value = backgroundColour(settings.graphBackgroundColour, defaultGraphBackgroundColour);
+  $('text-scale').value = settings.textScalePercent ?? 100;
+  $('settings-channels').disabled = !ready;
+  $('settings-channel-note').hidden = ready;
+  for (const type of ['telemetry', 'results']) $(type + '-path').textContent = settings[type] || 'Folder not set';
+  for (const input of document.querySelectorAll('[data-hot-temperature]')) {
+    input.value = hotTemperature(input.dataset.carClass, input.dataset.hotTemperature) ?? '';
+  }
+}
+let distanceReport, distanceRequest;
+const distanceNumber = new Intl.NumberFormat(undefined, {minimumFractionDigits:1, maximumFractionDigits:1});
+function renderResultsDistance() {
+  $('results-distance').hidden = !settings.results;
+  const totals = distanceReport?.data?.drivers ?? [];
+  const known = new Set(sessions.map(session => session.driver?.trim().toLowerCase().replace(/\s+/g, ' ')).filter(Boolean));
+  const identified = totals.filter(total => known.has(total.id));
+  const preferred = totals.find(total => total.id === settings.distanceDriver) ??
+    (identified.length === 1 ? identified[0] : totals.length === 1 ? totals[0] : undefined);
+  const picker = $('distance-driver');
+  picker.replaceChildren();
+  option(picker, 'Choose your driver', '');
+  for (const total of totals) option(picker, total.name, total.id);
+  picker.value = preferred?.id ?? '';
+  $('distance-driver-label').hidden = totals.length <= 1;
+  $('distance-total').textContent = preferred ? distanceNumber.format(preferred.km) + ' km' : '';
+  $('track-hours').hidden = !preferred;
+  const minutes = Math.round((preferred?.trackSeconds ?? 0) / 60);
+  $('track-hours-total').textContent = Number.isFinite(preferred?.trackSeconds)
+    ? Math.floor(minutes / 60).toLocaleString() + ' h ' + minutes % 60 + ' min' : '—';
+  $('favourite-cars').hidden = !preferred;
+  const classDistance = preferred?.classDistanceKm ?? {};
+  const rankedClasses = [...carClasses].sort((a, b) => (classDistance[b] ?? 0) - (classDistance[a] ?? 0));
+  $('favourite-car-classes').replaceChildren(...rankedClasses.flatMap(category => {
+    const favourites = preferred?.favouriteCars?.[category] ?? [];
+    const value = node('dd', favourites.length ? undefined : '—');
+    if (favourites.length) {
+      const list = node('ol');
+      for (const favourite of favourites) {
+        const item = node('li', favourite.car);
+        item.append(node('small', distanceNumber.format(favourite.km) + ' km'));
+        list.append(item);
+      }
+      value.append(list);
+    }
+    return [node('dt', category), value];
+  }));
+  const tracks = preferred?.favouriteTracks ?? [];
+  $('favourite-tracks').hidden = !tracks.length;
+  $('favourite-track-list').replaceChildren(...tracks.map(({track, km}) => {
+    const item = node('li', track);
+    item.append(node('small', distanceNumber.format(km) + ' km'));
+    return item;
+  }));
+  const problem = distanceReport?.data?.errors;
+  $('distance-status').textContent = distanceReport?.error
+    ?? (!distanceReport ? 'Calculating distance from results files…'
+      : !totals.length ? 'No driver distance available in the results files.'
+      : preferred ? 'Estimated from ' + preferred.laps.toLocaleString() + ' laps in the results folder.'
+      : 'Choose your driver to see their distance.') + (problem ? ' ' + problem + ' results files could not be counted.' : '');
+}
+function refreshResultsDistance() {
+  const folder = settings.results;
+  if (distanceReport?.folder !== folder) distanceReport = undefined;
+  if (!folder || distanceRequest?.folder === folder) return;
+  const request = {folder};
+  distanceRequest = request;
+  if (!distanceReport) renderResultsDistance();
+  lmu.resultsDistance().then(data => {
+    if (settings.results !== folder || distanceRequest !== request) return;
+    if (JSON.stringify(data) === JSON.stringify(distanceReport?.data)) return;
+    distanceReport = {folder, data};
+    renderResultsDistance();
+  }).catch(() => {
+    if (settings.results !== folder || distanceRequest !== request) return;
+    distanceReport = {folder, error:'Could not calculate distance from the results folder.'};
+    renderResultsDistance();
+  }).finally(() => {
+    if (distanceRequest === request) distanceRequest = undefined;
+  });
+}
+$('distance-driver').onchange = event => {
+  save({distanceDriver:event.target.value});
+  renderResultsDistance();
+};
+function bindTabs(listId, onChange) {
+  const tabs = [...$(listId).querySelectorAll('[role=tab]')];
+  function select(activeTab) {
+    if (activeTab.getAttribute('aria-selected') === 'true') return;
+    for (const tab of tabs) {
+      const active = tab === activeTab;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+      $(tab.getAttribute('aria-controls')).hidden = !active;
+    }
+    onChange?.();
+  }
+  tabs.forEach((tab, index) => {
+    tab.onclick = () => select(tab);
+    tab.onkeydown = event => {
+      const target = {ArrowLeft:(index + tabs.length - 1) % tabs.length,
+        ArrowRight:(index + 1) % tabs.length, Home:0, End:tabs.length - 1}[event.key];
+      if (target === undefined) return;
+      event.preventDefault();
+      select(tabs[target]);
+      tabs[target].focus();
+    };
+  });
+  return tabs;
+}
+bindTabs('library-tabs', () => { $('library').scrollTop = 0; });
+bindTabs('settings-tabs');
+
+function filterLibraryEntries(id, entries) {
+  const controls = $(id);
+  const fields = id === 'imported-lap-filters'
+    ? [...recordFields, ['driver', 'All Drivers', entry => entry.driver]] : recordFields;
+  const filters = fields.map(([key, label, read]) => {
+    const select = controls.querySelector('[name="' + key + '"]');
+    const valueOf = entry => read(entry)?.trim() || 'Unknown';
+    const track = controls.querySelector('[name="track"]').value;
+    const available = key === 'layout' && track
+      ? entries.filter(entry => (recordFields[0][2](entry)?.trim() || 'Unknown') === track) : entries;
+    const values = [...new Set(available.map(valueOf))].sort((a, b) => a.localeCompare(b));
+    if (select.options.length !== values.length + 1 ||
+        values.some((value, index) => select.options[index + 1]?.value !== value)) {
+      const prior = select.value;
+      select.replaceChildren();
+      option(select, label, '');
+      for (const value of values) option(select, value, value);
+      if (values.includes(prior)) select.value = prior;
+    }
+    return {key, value:select.value, valueOf};
+  });
+  const matches = entries.filter(entry => filters.every(({value, valueOf}) => !value || value === valueOf(entry)));
+  const sortKey = controls.querySelector('[name="sort"]').value;
+  const sort = filters.find(({key}) => key === sortKey);
+  if (sort) matches.sort((a, b) => sort.valueOf(a).localeCompare(sort.valueOf(b)));
+  return matches;
+}
+
+function renderComparisonLaps() {
+  const imported = [...(settings.comparisonLaps ?? [])].reverse();
+  const entries = filterLibraryEntries('imported-lap-filters', imported);
+  $('imported-laps-empty').textContent = imported.length ? 'No imported laps match these filters.' : 'No reference laps imported yet.';
+  $('imported-laps-table').hidden = !entries.length;
+  $('imported-laps-empty').hidden = Boolean(entries.length);
+  $('comparison-lap-list').replaceChildren(...entries.map(entry => {
+    const row = node('tr');
+    const actions = node('td');
+    const add = node('button', 'Use as Reference');
+    add.type = 'button';
+    add.setAttribute('aria-pressed', String(referenceSessionPath === entry.path));
+    add.onclick = () => selectReferenceSession(entry.path);
+    const remove = node('button', 'Remove');
+    remove.type = 'button';
+    remove.setAttribute('aria-label', 'Remove comparison lap: ' + entry.car + ' at ' + entry.track);
+    remove.onclick = async () => {
+      remove.disabled = true;
+      const status = $('comparison-import-status');
+      try {
+        settings.comparisonLaps = await lmu.removeComparisonLap(entry.path);
+        status.textContent = '';
+        if (referenceSessionPath === entry.path) selectReferenceSession(undefined);
+        else renderLibrary();
+      } catch (error) {
+        status.textContent = error.message;
+        remove.disabled = false;
+      }
+    };
+    actions.append(add, remove);
+    addLoadedReferenceLabel(actions, entry.path, entry.lap.id);
+    row.append(...referenceLapCells(entry.driver, entry.trackName || entry.track, entry.trackLayout || entry.track,
+      entry.car, entry.lap.time, entry.gameVersion), actions);
+    return row;
+  }));
+}
+
+function showLapTransfer(progress, status, stage, received, total) {
+  if (status.textContent !== stage) status.textContent = stage;
+  progress.hidden = false;
+  if (Number.isFinite(total) && total > 0) {
+    progress.max = total;
+    progress.value = received;
+  } else {
+    progress.removeAttribute('value');
+  }
+}
+const communityDialog = $('community-laps-dialog');
+const communityStatus = $('community-laps-status');
+const communityProgressBar = $('community-laps-progress');
+const closeCommunityLaps = $('close-community-laps');
+let communityOperation;
+communityDialog.oncancel = event => {
+  if (communityOperation) event.preventDefault();
+};
+lmu.onCommunityProgress?.(({operation, stage, received, total}) => {
+  if (operation === 'upload' && exportingBestLap) {
+    showLapTransfer(bestLapExportProgress, bestLapExportStatus, stage, received, total);
+  } else if (operation === communityOperation) {
+    showLapTransfer(communityProgressBar, communityStatus, stage, received, total);
+  }
+});
+const communityFilters = $('community-filter-form');
+const communityList = $('community-laps-list');
+const communityTable = $('community-laps-table');
+const communityPager = $('community-page');
+const communityPrevious = $('community-prev');
+const communityNext = $('community-next');
+let communityQuery = {};
+let communityPage = 1;
+let communityPageCount = 1;
+
+function beginCommunityOperation(operation) {
+  communityOperation = operation;
+  for (const control of communityFilters.elements) control.disabled = true;
+  closeCommunityLaps.disabled = communityPrevious.disabled = communityNext.disabled = true;
+  for (const button of communityList.querySelectorAll('button')) button.disabled = true;
+  showLapTransfer(communityProgressBar, communityStatus, 'Connecting to the community server…');
+}
+function endCommunityOperation() {
+  communityOperation = undefined;
+  for (const control of communityFilters.elements) control.disabled = false;
+  for (const button of communityList.querySelectorAll('button')) button.disabled = button.textContent === 'Imported';
+  communityProgressBar.hidden = true;
+  closeCommunityLaps.disabled = false;
+  communityPrevious.disabled = communityPage <= 1;
+  communityNext.disabled = communityPage >= communityPageCount;
+}
+
+function communityLapRow(lap, ownerActions) {
+  const row = node('tr');
+  const action = node('td');
+  const server = settings.communityServer;
+  const source = server ? new URL('/v1/laps/' + lap.id,
+    (server.https ? 'https://' : 'http://') + server.host + ':' + server.port).href : undefined;
+  const imported = (settings.comparisonLaps ?? []).some(entry => entry.path === source);
+  const add = node('button', imported ? 'Imported' : 'Import Lap');
+  add.type = 'button';
+  add.onclick = async () => {
+    if (communityOperation) return;
+    beginCommunityOperation('download');
+    try {
+      settings.comparisonLaps = await lmu.importCommunityLap(lap.id);
+      renderLibrary();
+      add.textContent = 'Imported';
+      communityStatus.textContent = 'Lap saved to Imported Laps.';
+    } catch (error) {
+      communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+    } finally {
+      endCommunityOperation();
+    }
+  };
+  action.append(add);
+  if (ownerActions && settings.communityOwnerConfigured) {
+    const remove = node('button', 'Remove from Server', 'community-remove');
+    remove.type = 'button';
+    remove.onclick = async () => {
+      if (communityOperation || !window.confirm('Remove this lap from the community server for everyone?')) return;
+      beginCommunityOperation('remove');
+      showLapTransfer(communityProgressBar, communityStatus, 'Removing lap from the server…');
+      try {
+        await lmu.removeCommunityLap(lap.id);
+      } catch (error) {
+        communityStatus.textContent = error.message;
+        return;
+      } finally {
+        endCommunityOperation();
+      }
+      await loadCommunityPage(communityPage, 'Lap removed from the community server.');
+    };
+    action.append(remove);
+  }
+  addLoadedReferenceLabel(action, source);
+  row.append(...referenceLapCells(lap.driver, lap.track, lap.layout, lap.car, lap.time, lap.gameVersion), action);
+  return row;
+}
+
+function updateCommunityFilterChoices(choices) {
+  const labels = {track:'All Tracks', layout:'All Layouts', driver:'All Drivers', gameVersion:'All Versions'};
+  let reset = false;
+  for (const [key, label] of Object.entries(labels)) {
+    const select = communityFilters.elements.namedItem(key);
+    const selected = select.value;
+    select.replaceChildren();
+    option(select, label, '');
+    for (const value of choices[key] ?? []) option(select, value, value);
+    if ([...select.options].some(entry => entry.value === selected)) select.value = selected;
+    if (communityQuery[key] && !choices[key]?.includes(communityQuery[key])) {
+      delete communityQuery[key];
+      reset = true;
+    }
+  }
+  return reset;
+}
+
+async function loadCommunityPage(page, message = '') {
+  if (communityOperation) return;
+  const retry = $('retry-community-load');
+  retry.hidden = true;
+  communityList.replaceChildren();
+  communityTable.hidden = communityPager.hidden = true;
+  beginCommunityOperation('list');
+  let reset = false;
+  try {
+    const result = await lmu.listCommunityLaps({...communityQuery, page});
+    const {laps, page:current, pageCount, total, limited, ownerActions} = result;
+    reset = updateCommunityFilterChoices(result.filterOptions);
+    if (reset) return;
+    communityPage = current;
+    communityPageCount = pageCount;
+    communityStatus.textContent = message || (!laps.length ? 'No community laps match these filters.' :
+      limited ? 'This server version shows up to 1,000 recent uploads. Update the server to search older laps.' : '');
+    communityTable.hidden = communityPager.hidden = !laps.length;
+    $('community-page-info').textContent = 'Page ' + current + ' of ' + pageCount + ' · ' + total + (total === 1 ? ' lap' : ' laps');
+    communityList.replaceChildren(...laps.map(lap => communityLapRow(lap, ownerActions)));
+  } catch (error) {
+    communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+    retry.onclick = () => void loadCommunityPage(page, message);
+    retry.hidden = false;
+  } finally {
+    endCommunityOperation();
+    if (reset) void loadCommunityPage(1, message);
+  }
+}
+$('browse-community-laps').onclick = () => {
+  communityDialog.showModal();
+  void loadCommunityPage(1);
+};
+communityFilters.onsubmit = event => event.preventDefault();
+communityFilters.onchange = event => {
+  if (communityOperation) return;
+  if (event.target.name === 'track') communityFilters.elements.namedItem('layout').value = '';
+  communityQuery = Object.fromEntries(new FormData(communityFilters));
+  void loadCommunityPage(1);
+};
+$('clear-community-filters').onclick = () => {
+  communityFilters.reset();
+  communityQuery = {};
+  void loadCommunityPage(1);
+};
+communityPrevious.onclick = () => void loadCommunityPage(communityPage - 1);
+communityNext.onclick = () => void loadCommunityPage(communityPage + 1);
+
+$('community-server-form').onsubmit = async event => {
+  event.preventDefault();
+  const key = $('community-key');
+  const owner = $('community-owner-password');
+  const status = $('community-settings-status');
+  const button = event.currentTarget.querySelector('button');
+  button.disabled = true;
+  try {
+    const updated = await lmu.setCommunityServer({
+      host:$('community-host').value, port:$('community-port').valueAsNumber,
+      https:$('community-https').checked, key:key.value, ownerPassword:owner.value
+    });
+    Object.assign(settings, updated);
+    settingsFields();
+    key.value = owner.value = '';
+    status.textContent = 'Community server settings saved.';
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+};
+$('folders').addEventListener('close', () => { $('community-key').value = $('community-owner-password').value = ''; });
+
+const importComparisonButton = $('import-comparison-laps');
+importComparisonButton.onclick = async () => {
+  importComparisonButton.disabled = true;
+  const status = $('comparison-import-status');
+  try {
+    const result = await lmu.importComparisonLaps();
+    settings.comparisonLaps = result.laps;
+    status.textContent = result.errors.join(' · ');
+    renderLibrary();
+    if (selected && referenceSessionPath) {
+      fillReferences();
+      void readReference();
+    }
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    importComparisonButton.disabled = false;
+  }
+};
+const recordFields = [
+  ['track', 'All Tracks', session => session.trackName || session.track],
+  ['layout', 'All Layouts', session => session.trackLayout || session.track],
+  ['class', 'All Classes', session => session.carClass],
+  ['car', 'All Cars', session => session.model || session.car]
+];
+
+function recordDimensions(session) {
+  return recordFields.map(([, , read]) => read(session) || 'Unknown');
+}
+
+function recordedGameVersion(raw) {
+  const trimmed = (raw || '').trim();
+  const packed = /^(\d+)\.(\d)(\d{3})$/.exec(trimmed);
+  if (packed) {
+    const [, major, minor, patch] = packed;
+    return [major, minor, ...patch.replace(/0+$/, '')].join('.');
+  }
+  return /^\d+(\.\d+)*$/.test(trimmed) ? trimmed : '';
+}
+
+function compareVersions(actual, expected) {
+  const actualParts = actual.split('.').map(Number);
+  const expectedParts = expected.split('.').map(Number);
+  for (let index = 0; index < Math.max(actualParts.length, expectedParts.length); index++) {
+    const difference = (actualParts[index] ?? 0) - (expectedParts[index] ?? 0);
+    if (difference) return difference;
+  }
+  return 0;
+}
+
+function eligibleRecordLap(item) {
+  return item.kind === 'complete' && Number.isFinite(item.time) && item.time > 0 &&
+    (item.validity === 'official' || item.validity === 'unconfirmed');
+}
+
+const recordsFilters = $('records-filters');
+let recordsRefreshPending = false;
+function updateRecordsLoading() {
+  const loading = $('records-loading');
+  const initial = scanBusy && scanKey === undefined;
+  loading.hidden = !initial;
+  loading.textContent = initial ? 'Loading session recordings…' : '';
+  recordsFilters.setAttribute('aria-busy', String(initial));
+  for (const control of recordsFilters.querySelectorAll('select,button')) control.disabled = initial;
+  $('records-status').hidden = initial;
+}
+function refreshRecordsFromScan() {
+  if (view !== 'records') return;
+  if (recordsFilters.contains(document.activeElement) && document.activeElement.tagName === 'SELECT') {
+    recordsRefreshPending = true;
+    return;
+  }
+  renderRecords();
+}
+recordsFilters.addEventListener('focusout', () => {
+  queueMicrotask(() => {
+    if (recordsRefreshPending) refreshRecordsFromScan();
+  });
+});
+
+function setRecordOptions(select, label, values, current) {
+  const existing = [...select.options];
+  if (existing.length !== values.length + 1 || values.some((value, index) => existing[index + 1].value !== value)) {
+    select.replaceChildren();
+    option(select, label, '');
+    for (const value of values) option(select, value, value);
+  }
+  const value = values.includes(current) ? current : '';
+  if (select.value !== value) select.value = value;
+}
+
+function renderRecords(lastSession) {
+  recordsRefreshPending = false;
+  const lastDimensions = lastSession && recordDimensions(lastSession);
+  const candidates = sessions.flatMap(session => {
+    const bestLap = session.laps.reduce((best, item) =>
+      eligibleRecordLap(item) && (!best || item.time < best.time) ? item : best, null);
+    return bestLap ? [{session, bestLap, dimensions: recordDimensions(session)}] : [];
+  });
+  const filters = recordFields.map(([key, label], index) => {
+    const select = $('record-' + key);
+    const current = lastDimensions ? (key === 'car' ? '' : lastDimensions[index]) : select.value;
+    const selectedTrack = $('record-track').value;
+    const available = key === 'layout' && selectedTrack
+      ? candidates.filter(row => row.dimensions[0] === selectedTrack) : candidates;
+    const values = new Set(available.map(row => row.dimensions[index]));
+    if (lastDimensions && current) values.add(current);
+    setRecordOptions(select, label, [...values].sort((a, b) => a.localeCompare(b)), current);
+    return select.value;
+  });
+
+  const versionSelect = $('record-version');
+  const currentVersion = lastSession ? recordedGameVersion(lastSession.gameVersion) : versionSelect.value;
+  const versions = new Set([...resultGameVersions, ...sessions.map(session => session.gameVersion)]
+    .map(recordedGameVersion).filter(Boolean));
+  setRecordOptions(versionSelect, 'All Versions', [...versions].sort((a, b) => compareVersions(b, a)), currentVersion);
+
+  const minimum = versionSelect.value;
+  $('record-last-session').disabled = !sessions.length;
+  const fastest = new Map();
+  for (const row of candidates) {
+    if (filters.some((value, index) => value && value !== row.dimensions[index])) continue;
+    const version = recordedGameVersion(row.session.gameVersion);
+    if (minimum && (!version || compareVersions(version, minimum) < 0)) continue;
+    const key = JSON.stringify(row.dimensions);
+    if (!fastest.has(key) || row.bestLap.time < fastest.get(key).bestLap.time) {
+      fastest.set(key, {...row, version});
+    }
+  }
+
+  const filtered = Boolean(minimum) || filters.some(Boolean);
+  const records = [...fastest.values()].sort((a, b) => {
+    if (filtered && a.bestLap.time !== b.bestLap.time) return a.bestLap.time - b.bestLap.time;
+    for (let index = 0; index < recordFields.length; index++) {
+      const order = a.dimensions[index].localeCompare(b.dimensions[index]);
+      if (order) return order;
+    }
+    return 0;
+  });
+  const rows = [];
+  let previousTrack;
+  for (const {session, bestLap, dimensions, version} of records) {
+    const [track, layout, carClass, car] = dimensions;
+    const trackKey = JSON.stringify([track, layout]);
+    if (previousTrack !== trackKey) {
+      const group = node('tr', undefined, 'records-track-group');
+      const title = node('th', track === layout ? track : track + ' · ' + layout);
+      title.colSpan = 10;
+      group.append(title);
+      rows.push(group);
+      previousTrack = trackKey;
+    }
+
+    const row = node('tr', undefined, 'record-result');
+    const time = node('td', undefined, 'numeric-cell');
+    const button = node('button', lapTime(bestLap.time));
+    button.type = 'button';
+    row.onclick = () => openSession(session, bestLap);
+    time.append(button);
+    if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
+    const referenceCell = node('td', undefined, 'session-comparison');
+    const addReference = node('button', '+ Add as a Reference Lap', 'reference-add');
+    addReference.type = 'button';
+    addReference.setAttribute('aria-label', addReference.textContent + ': ' + car + ' at ' + track + ' · ' + lapTime(bestLap.time));
+    addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path && referenceSessionLapId === bestLap.id));
+    addReference.onclick = event => {
+      event.stopPropagation();
+      selectReferenceSession(session.path, bestLap.id);
+    };
+    referenceCell.append(addReference);
+    addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
+    const sessionLaps = session.laps.filter(eligibleRecordLap);
+    const bestSectors = [0, 1, 2].map(index => Math.min(Infinity,
+      ...sessionLaps.map(item => item.sectors?.[index]).filter(value => Number.isFinite(value) && value > 0)));
+    const optimalTime = bestSectors.reduce((total, sector) => total + sector, 0);
+    const optimal = node('td', lapTime(optimalTime), 'numeric-cell');
+    if (Number.isFinite(optimalTime)) {
+      const difference = Math.round((optimalTime - bestLap.time) * 1000) / 1000;
+      optimal.append(node('small', '(' + timeGapLabel(difference) + ')'));
+    }
+    const carCell = node('td', car);
+    carCell.append(node('small', session.driver || 'Unknown Driver'));
+    row.append(node('td', carClass), carCell, time,
+      ...[0, 1, 2].map(index => node('td', Number.isFinite(bestLap.sectors?.[index])
+        ? number(bestLap.sectors[index], 3) + ' s' : '—', 'numeric-cell')),
+      optimal, node('td', dateLabel(session.recorded, australianDate)),
+      node('td', version || 'Unknown'), referenceCell);
+    rows.push(row);
+  }
+  $('record-rows').replaceChildren(...rows);
+  $('records-table').hidden = !rows.length;
+  $('records-status').textContent = records.length ? records.length + (records.length === 1 ? ' record' : ' records')
+    : 'No matching records.';
+}
+
+for (const [key] of recordFields) {
+  $('record-' + key).onchange = () => {
+    if (key === 'track') $('record-layout').value = '';
+    renderRecords();
+  };
+}
+$('record-version').onchange = () => renderRecords();
+$('record-last-session').onclick = () => {
+  const lastSession = sessions[0];
+  if (!lastSession) return;
+  renderRecords(lastSession);
+};
+$('record-clear').onclick = () => {
+  for (const [key] of recordFields) $('record-' + key).value = '';
+  $('record-version').value = '';
+  renderRecords();
+};
+
+function renderLibrary() {
+  refreshRecordsFromScan();
+  renderResultsDistance();
+  renderComparisonLaps();
+  const limit = Number($('limit').value);
+  const timedSessions = sessions.filter(session => session.timed > 0);
+  const matches = filterLibraryEntries('recent-session-filters', timedSessions);
+  const rows = matches.slice(0, limit);
+  $('recent-sessions-no-matches').hidden = !$('library-loading').hidden || !timedSessions.length || !!matches.length;
+  $('empty').hidden = !$('library-loading').hidden || timedSessions.length > 0;
+  $('session-wrap').hidden = !rows.length;
+  $('empty-title').textContent = settings.telemetry ? 'Waiting for timed laps' : 'Choose your telemetry folder';
+  $('empty-text').textContent = settings.telemetry ? settings.telemetry
+    : 'Choose the LMU installation or set the telemetry and results folders separately.';
+  const tableRows = rows.map(session => {
+    const row = node('tr', undefined, 'session-row');
+    const timestamp = node('td', undefined, 'session-date');
+    const date = recordingDate(session.recorded);
+    if (Number.isNaN(+date)) {
+      timestamp.textContent = session.recorded;
+    } else {
+      timestamp.append(node('strong', weekdayPeriod(date)), node('small', australianDateTime.format(date)));
+    }
+    const track = node('td');
+    const button = node('button', session.track || session.filename, 'session-track-name');
+    button.type = 'button';
+    const addReference = node('button', '+ Add this Session as a Reference Session', 'reference-add');
+    addReference.type = 'button';
+    addReference.setAttribute('aria-label', addReference.textContent + ': ' + (session.track || session.filename) + ' · ' + dateLabel(session.recorded));
+    addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path));
+    addReference.onclick = event => {
+      event.stopPropagation();
+      selectReferenceSession(session.path);
+    };
+    row.onclick = () => openSession(session);
+    const layout = session.trackLayout;
+    track.append(button, node('small', [
+      layout && layout !== session.track ? layout : '', session.car, session.driver, session.session
+    ].filter(Boolean).join(' · ')));
+    const comparison = node('td', undefined, 'session-comparison');
+    comparison.append(addReference);
+    addLoadedReferenceLabel(comparison, session.path);
+    const measure = (value, unit) => Number.isFinite(value) ? number(value, 1) + ' ' + unit : '—';
+    row.append(
+      timestamp,
+      track,
+      node('td', lapTime(session.best), 'session-metric session-best numeric-cell'),
+      node('td', session.timed, 'session-metric numeric-cell'),
+      node('td', measure(session.distanceKm, 'km'), 'session-metric numeric-cell'),
+      comparison
+    );
+    return row;
+  });
+  $('sessions').replaceChildren(...tableRows);
+}
+function showLibraryLoading(loading) {
+  $('library-loading').hidden = !loading;
+  if (loading) $('empty').hidden = $('recent-sessions-no-matches').hidden = true;
+}
+async function scan() {
+  refreshResultsDistance();
+  if (scanBusy) { runningScanAgain = true; return; }
+  if (!settings.telemetry && !settings.results) { renderLibrary(); return; }
+  scanBusy = true;
+  updateRecordsLoading();
+  const initialScan = scanKey === undefined;
+  if (initialScan) showLibraryLoading(true);
+  try {
+    const response = await lmu.scan();
+    if (response.stale) { runningScanAgain = true; return; }
+    scanFailed = false;
+    if (initialScan) showLibraryLoading(false);
+    const nextKey = JSON.stringify(response);
+    if (scanKey === nextKey) return;
+    scanKey = nextKey;
+    sessions = response.sessions;
+    resultGameVersions = response.resultGameVersions || [];
+    $('issues').hidden = !response.errors.length;
+    $('issue-list').replaceChildren(...response.errors.map(error => node('li', error)));
+    renderLibrary();
+    if (selected) {
+      const updated = sessions.find(item => item.path === selected.path);
+      if (updated) {
+        const oldKey = referenceKey(reference);
+        selected = updated;
+        lap = updated.laps.find(item => item.id === lap.id) || lap;
+        renderSessionSummary();
+        fillLaps();
+        fillReferences();
+        if (oldKey !== referenceKey(reference)) await readReference();
+        updateContext();
+      }
+    }
+  } catch (error) {
+    if (initialScan) {
+      showLibraryLoading(false);
+      renderLibrary();
+    }
+    if (!scanFailed) setStatus($('status'), 'Folder scan failed', {error:true});
+    scanFailed = true;
+    $('issues').hidden = false;
+    $('issue-list').replaceChildren(node('li', error.message));
+  } finally {
+    scanBusy = false;
+    updateRecordsLoading();
+    if (runningScanAgain) { runningScanAgain = false; void scan(); }
+  }
+}
+function save(change) {
+  Object.assign(settings, change);
+  void lmu.save(change).catch(error => { setStatus($('status'), error.message, {error:true}); });
+}
+function fitLapDropdown(select, labels) {
+  const style = getComputedStyle(select);
+  const fontSize = parseFloat(style.fontSize);
+  const context = document.createElement('canvas').getContext('2d');
+  context.font = style.fontWeight + ' ' + style.fontSize + ' ' + style.fontFamily;
+  const widest = labels.reduce((width, label) => Math.max(width, context.measureText(label).width), 0);
+  const padding = parseFloat(style.paddingInlineStart) + parseFloat(style.paddingInlineEnd);
+  const borders = parseFloat(style.borderInlineStartWidth) + parseFloat(style.borderInlineEndWidth);
+  // Native selects reserve their own arrow space in addition to CSS padding.
+  select.style.width = ((widest + padding + borders) / fontSize + 1.25) + 'em';
+}
+const lapHistoryPlot = $('lap-history-plot');
+let lapHistoryPoints = [];
+let lapHistoryFocus = -1;
+const lapHistoryInset = 9;
+function lapHistoryLabel(item) {
+  return item?.time ? (item.number == null ? '' : 'Lap ' + item.number + ' · ') + lapTime(item.time) : 'No timed laps';
+}
+function paintLapHistory() {
+  const display = canvasContext(lapHistoryPlot);
+  if (!display) return;
+  const {ctx, width, height} = display;
+  const active = lapHistoryPoints[lapHistoryFocus] ?? lap;
+  $('lap-history-reading').textContent = lapHistoryLabel(active);
+  ctx.clearRect(0, 0, width, height);
+  if (!lapHistoryPoints.length) return;
+
+  const times = lapHistoryPoints.map(point => point.time);
+  const lo = Math.min(...times), span = Math.max(...times) - lo;
+  const fastestIndex = times.indexOf(lo);
+  const x = index => lapHistoryPoints.length === 1 ? width / 2
+    : lapHistoryInset + index * Math.max(1, width - 2 * lapHistoryInset) / (lapHistoryPoints.length - 1);
+  const y = time => span ? height - lapHistoryInset - (time - lo) / span * (height - 2 * lapHistoryInset) : height / 2;
+  ctx.strokeStyle = palette[0];
+  ctx.lineWidth = 1.3;
+  ctx.beginPath();
+  lapHistoryPoints.forEach((point, index) => {
+    if (index === 0) ctx.moveTo(x(index), y(point.time));
+    else ctx.lineTo(x(index), y(point.time));
+  });
+  ctx.stroke();
+  ctx.strokeStyle = '#c6a4ff';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(x(fastestIndex), y(lo), 7.5, 0, Math.PI * 2);
+  ctx.stroke();
+  lapHistoryPoints.forEach((point, index) => {
+    const selectedPoint = point.id === lap?.id;
+    ctx.fillStyle = selectedPoint ? activeInterfaceColour() : palette[0];
+    ctx.beginPath();
+    ctx.arc(x(index), y(point.time), selectedPoint || index === lapHistoryFocus ? 4 : 2, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+function lapHistoryIndex(event) {
+  if (!lapHistoryPoints.length) return -1;
+  const fraction = (event.offsetX - lapHistoryInset) / Math.max(1, lapHistoryPlot.clientWidth - 2 * lapHistoryInset);
+  return Math.max(0, Math.min(lapHistoryPoints.length - 1, Math.round(fraction * (lapHistoryPoints.length - 1))));
+}
+new ResizeObserver(paintLapHistory).observe(lapHistoryPlot);
+lapHistoryPlot.onpointermove = event => {
+  lapHistoryFocus = lapHistoryIndex(event);
+  paintLapHistory();
+};
+lapHistoryPlot.onpointerleave = lapHistoryPlot.onblur = () => {
+  lapHistoryFocus = -1;
+  paintLapHistory();
+};
+lapHistoryPlot.onclick = event => {
+  lapHistoryFocus = lapHistoryIndex(event);
+  selectLap(lapHistoryPoints[lapHistoryFocus]);
+};
+lapHistoryPlot.onkeydown = event => {
+  if (!lapHistoryPoints.length || !['ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  if (lapHistoryFocus < 0) lapHistoryFocus = Math.max(0, lapHistoryPoints.findIndex(point => point.id === lap?.id));
+  if (event.key === 'Enter' || event.key === ' ') {
+    selectLap(lapHistoryPoints[lapHistoryFocus]);
+  } else {
+    lapHistoryFocus = Math.max(0, Math.min(lapHistoryPoints.length - 1,
+      lapHistoryFocus + (event.key === 'ArrowLeft' ? -1 : 1)));
+    paintLapHistory();
+  }
+};
+function selectLap(nextLap) {
+  if (!nextLap || nextLap.id === lap?.id) return;
+  lap = nextLap;
+  $('lap-select').value = lap.id;
+  paintLapHistory();
+  fillReferences();
+  void readPrimary();
+}
+function fillLaps() {
+  const select = $('lap-select');
+  select.replaceChildren();
+  for (const item of selected.laps) option(select, lapLabel(item), item.id);
+  select.value = lap.id;
+  fitLapDropdown(select, [...select.options].map(option=>option.text));
+  lapHistoryPoints = selected.laps.filter(item => Number.isFinite(item.time) && item.time > 0);
+  const labelWidth = lapHistoryPoints.reduce((longest, item) =>
+    Math.max(longest, lapHistoryLabel(item).length), 'No timed laps'.length);
+  $('lap-history-reading').style.inlineSize = labelWidth + 'ch';
+  lapHistoryFocus = -1;
+  paintLapHistory();
+}
+function referenceKey(value) { return value ? JSON.stringify([value.session.path, value.lap.id]) : ''; }
+function savedReferenceLapKey() {
+  return referenceSessionLapId == null ? undefined : JSON.stringify([referenceSessionPath, referenceSessionLapId]);
+}
+function selectReferenceSession(path, lapId) {
+  referenceSessionPath = path;
+  referenceSessionLapId = lapId;
+  manualReference = savedReferenceLapKey();
+  renderLibrary();
+  if (!selected) {
+    renderLoadedSessions();
+    return;
+  }
+  if (path) setView('viewer');
+  fillReferences();
+  void readReference();
+}
+function fillReferences() {
+  const carSelect = $('car-select'), refSelect = $('reference-select');
+  const currentCar = carSelect.value;
+  const pool = (lap.kind === 'complete' ? sessions : []).filter(s =>
+    s.track.toLowerCase() === selected.track.toLowerCase() &&
+    (s.path === selected.path || (selected.carClass && s.carClass === selected.carClass)))
+    .flatMap(session => session.laps.filter(item => item.kind === 'complete' &&
+      (session.path !== selected.path || item.id !== lap.id)).map(lap => ({session, lap})))
+    .sort((a,b) => Number(b.lap.validity === 'official') - Number(a.lap.validity === 'official') ||
+      (a.lap.time ?? Infinity) - (b.lap.time ?? Infinity));
+  const imported = (settings.comparisonLaps ?? []).find(entry => entry.path === referenceSessionPath);
+  const compatible = imported && lap.kind === 'complete' &&
+    imported.track.trim().toLowerCase() === selected.track.trim().toLowerCase() &&
+    (!imported.carClass || !selected.carClass || imported.carClass === selected.carClass);
+  const target = imported ?? sessions.find(session => session.path === referenceSessionPath);
+  $('reference-car-control').hidden = !!referenceSessionPath;
+  $('reference-session-control').hidden = !referenceSessionPath;
+  const ownModel = selected.model || selected.car;
+  carSelect.replaceChildren();
+  option(carSelect, 'Same car · automatic', '');
+  for (const car of [...new Set(pool.map(x => x.session.model || x.session.car))].sort()) option(carSelect, car, car);
+  if ([...carSelect.options].some(x => x.value === currentCar)) carSelect.value = currentCar;
+  const candidates = imported ? (compatible ? [{session:imported, lap:imported.lap, imported:true}] : []) : pool.filter(x => referenceSessionPath
+    ? x.session.path === referenceSessionPath
+    : (x.session.model || x.session.car) === (carSelect.value || ownModel));
+  $('reference-session-name').textContent = target
+    ? [target.car, imported ? (imported.driver || 'Imported lap') : dateLabel(target.recorded),
+       candidates.length ? '' : 'No compatible laps'].filter(Boolean).join(' · ')
+    : 'Reference session unavailable';
+  const automatic = candidates.find(x => x.lap.time) || null;
+  refSelect.replaceChildren();
+  option(refSelect, automatic ? 'Automatic · ' + lapTime(automatic.lap.time) : 'Automatic · no timed lap', 'auto');
+  option(refSelect, 'No comparison', '');
+  const referenceLabel = value => lapLabel(value.lap) + ' · ' + (value.imported ? (value.session.driver || 'Imported lap') : dateLabel(value.session.recorded));
+  const lapsInOrder = [...candidates].sort((a, b) => (a.lap.number ?? Infinity) - (b.lap.number ?? Infinity));
+  for (const value of lapsInOrder) {
+    option(refSelect, referenceLabel(value), referenceKey(value));
+  }
+  fitLapDropdown(refSelect, ['Automatic · no timed lap', 'Automatic · 00:00.000', 'No comparison', ...pool.map(referenceLabel), ...candidates.filter(value => value.imported).map(referenceLabel)]);
+  if (manualReference !== undefined && [...refSelect.options].some(x => x.value === manualReference)) {
+    refSelect.value = manualReference;
+    reference = candidates.find(x => referenceKey(x) === manualReference) || null;
+  } else if (manualReference !== undefined && manualReference === savedReferenceLapKey()) {
+    refSelect.value = '';
+    reference = null;
+  } else {
+    refSelect.value = 'auto';
+    reference = automatic;
+  }
+}
+async function openSession(value, initialLap, comparison) {
+  if (!value.laps.length) return;
+  selected = value;
+  practiceComparison = comparison;
+  restoreTrackCamera();
+  trackCameraOverride = undefined;
+  fitTrack();
+  lap = initialLap || value.laps.find(item => item.time === value.best && item.time) || value.laps[0];
+  manualReference = savedReferenceLapKey();
+  $('car-select').replaceChildren();
+  fillLaps();
+  fillReferences();
+  $('track').textContent = value.track;
+  $('car').textContent = value.car;
+  $('viewer-tab').disabled = false;
+  setView('viewer');
+  await readPrimary();
+}
+function message(text = '') {
+  $('viewer-message').textContent = text;
+  $('viewer-message').hidden = !text;
+}
+const exportBestLapButton = $('export-best-lap');
+let exportingBestLap = false;
+function updateBestLapExport() {
+  exportBestLapButton.disabled = exportingBestLap || !(selected?.best > 0);
+}
+const discordWebhookInput = $('discord-webhook');
+const discordWebhookStatus = $('discord-webhook-status');
+const saveDiscordWebhook = $('save-discord-webhook');
+const removeDiscordWebhook = $('remove-discord-webhook');
+function updateDiscordSettings() {
+  removeDiscordWebhook.disabled = !settings.discordWebhookConfigured;
+  discordWebhookStatus.textContent = settings.discordWebhookConfigured ? 'Webhook saved.' : 'No webhook saved.';
+}
+async function changeDiscordWebhook(value) {
+  saveDiscordWebhook.disabled = removeDiscordWebhook.disabled = discordWebhookInput.disabled = true;
+  try {
+    settings.discordWebhookConfigured = await lmu.setDiscordWebhook(value);
+    discordWebhookInput.value = '';
+    updateDiscordSettings();
+  } catch (error) {
+    discordWebhookStatus.textContent = error.message;
+  } finally {
+    saveDiscordWebhook.disabled = discordWebhookInput.disabled = false;
+    removeDiscordWebhook.disabled = !settings.discordWebhookConfigured;
+  }
+}
+$('discord-webhook-form').onsubmit = event => {
+  event.preventDefault();
+  if (!saveDiscordWebhook.disabled) void changeDiscordWebhook(discordWebhookInput.value.trim());
+};
+removeDiscordWebhook.onclick = () => changeDiscordWebhook(null);
+$('folders').addEventListener('close', () => { discordWebhookInput.value = ''; });
+
+const bestLapExportDialog = $('best-lap-export-dialog');
+const bestLapExportStatus = $('best-lap-export-status');
+const bestLapExportProgress = $('best-lap-export-progress');
+const bestLapExportLocal = $('best-lap-export-local');
+const bestLapExportDiscord = $('best-lap-export-discord');
+const bestLapExportCommunity = $('best-lap-export-community');
+const bestLapExportCancel = $('best-lap-export-cancel');
+let exportSessionPath;
+exportBestLapButton.onclick = () => {
+  if (exportBestLapButton.disabled) return;
+  exportSessionPath = selected.path;
+  $('best-lap-export-lap').textContent = [selected.driver, selected.track, lapTime(selected.best)].filter(Boolean).join(' · ');
+  bestLapExportDiscord.disabled = !settings.discordWebhookConfigured;
+  bestLapExportCommunity.disabled = !settings.communityConfigured;
+  setStatus(bestLapExportStatus,
+    settings.discordWebhookConfigured ? '' : 'Add a Discord webhook in Settings to export to Discord.',
+    {temporary:false});
+  bestLapExportDialog.showModal();
+};
+bestLapExportCancel.onclick = () => bestLapExportDialog.close();
+bestLapExportDialog.oncancel = event => {
+  if (bestLapExportLocal.disabled) event.preventDefault();
+};
+async function exportBestLap(target) {
+  exportingBestLap = true;
+  updateBestLapExport();
+  bestLapExportLocal.disabled = bestLapExportDiscord.disabled = bestLapExportCommunity.disabled = bestLapExportCancel.disabled = true;
+  setStatus(bestLapExportStatus, '', {temporary:false});
+  if (target !== 'local') showLapTransfer(bestLapExportProgress, bestLapExportStatus,
+    target === 'community' ? 'Preparing best lap…' : 'Uploading best lap…');
+  try {
+    const filename = await lmu.exportBestLap(exportSessionPath, target);
+    if (!filename) return;
+    bestLapExportDialog.close();
+    setStatus($('status'), (target === 'discord' ? 'Sent to Discord · ' : target === 'community' ? 'Uploaded to Community Server · ' : 'Exported ') + filename);
+  } catch (error) {
+    setStatus(bestLapExportStatus, error.message, {error:true});
+  } finally {
+    bestLapExportProgress.hidden = true;
+    exportingBestLap = false;
+    updateBestLapExport();
+    bestLapExportLocal.disabled = bestLapExportCancel.disabled = false;
+    bestLapExportDiscord.disabled = !settings.discordWebhookConfigured;
+    bestLapExportCommunity.disabled = !settings.communityConfigured;
+  }
+}
+bestLapExportLocal.onclick = () => exportBestLap('local');
+bestLapExportDiscord.onclick = () => exportBestLap('discord');
+bestLapExportCommunity.onclick = () => exportBestLap('community');
+async function readPrimary() {
+  const token = ++loadGeneration;
+  const currentLap = lap;
+  ready = false;
+  stop();
+  primary = secondary = null;
+  referenceLoading = false;
+  updateActiveLapComparison();
+  renderSessionSummary();
+  renderLoadedSessions();
+  updateSectorZoom();
+  trackProjection = undefined;
+  pinned = false;
+  updatePin();
+  $('charts').replaceChildren();
+  $('channel-list').replaceChildren();
+  $('position').textContent = '';
+  $('map-status').textContent = '';
+  for (const canvas of [$('map'), racingMap]) {
+    const map = canvasContext(canvas);
+    map?.ctx.clearRect(0, 0, map.width, map.height);
+  }
+  message('Loading lap telemetry…');
+  try {
+    const channels = await lmu.lap(selected.path, currentLap.id);
+    if (token !== loadGeneration) return;
+    primary = prepare(currentLap, channels);
+    renderInCarSettings();
+    updateSectorZoom(primary);
+    playTime = currentLap.start;
+    cursor = primary.distanceAt(playTime);
+    ready = true;
+    resetZoom();
+    await readReference();
+  } catch (error) {
+    if (token === loadGeneration) message(error.message);
+  }
+}
+async function readReference() {
+  if (!ready) return;
+  const token = ++loadGeneration;
+  const chosen = reference;
+  referenceLoading = Boolean(chosen);
+  secondary = null;
+  renderLoadedSessions();
+  buildCharts();
+  buildChannels();
+  updateContext();
+  message();
+  if (!chosen) return;
+  try {
+    const channels = chosen.imported ? await lmu.comparisonLap(chosen.session.path) : await lmu.lap(chosen.session.path, chosen.lap.id);
+    if (token !== loadGeneration) return;
+    const prepared = prepare(chosen.lap, channels);
+    if (!prepared.useDistance || !primary.useDistance) {
+      message('Distance alignment is unavailable for these laps.');
+      return;
+    }
+    secondary = prepared;
+    renderLoadedSessions();
+    buildCharts();
+    buildChannels();
+    message();
+  } catch (error) {
+    if (token === loadGeneration) message(error.message);
+  } finally {
+    if (token === loadGeneration) {
+      referenceLoading = false;
+      updateActiveLapComparison();
+    }
+  }
+}
+
+function lowerBound(values, x) {
+  let low = 0, high = values.length;
+  while (low < high) {
+    const mid = (low + high) >>> 1;
+    if (values[mid] < x) low = mid + 1; else high = mid;
+  }
+  return low;
+}
+function interpolate(xs, ys, x) {
+  const i = lowerBound(xs, x);
+  if (!xs.length) return NaN;
+  if (i === 0) return ys[0];
+  if (i === xs.length) return ys.at(-1);
+  const fraction = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
+  return ys[i - 1] + fraction * (ys[i] - ys[i - 1]);
+}
+function prepare(l, channels) {
+  for (const channel of Object.values(channels)) {
+    channel.times = channel.rate
+      ? channel.rows.map((_, i) => channel.origin + i / channel.rate)
+      : channel.rows.map(row => row[0]);
+  }
+  const distanceChannel = channels['Lap Dist'];
+  const boundaryWrapped = l.kind === 'complete' || l.kind === 'in-lap';
+  const times = [], distances = [];
+  for (let i = 0; i < (distanceChannel?.rows.length || 0); i++) {
+    const t = distanceChannel.times[i], value = distanceChannel.rows[i][0];
+    if (t < l.start - 1e-6 || t >= l.end - 1e-6 || value === null) continue;
+    if (boundaryWrapped && t - l.start < .4 && value > 1000) continue;
+    if (boundaryWrapped && l.end - t < .4 && value < 100 && distances.at(-1) > 1000) continue;
+    times.push(t);
+    distances.push(Math.max(value, distances.at(-1) ?? value));
+  }
+  const useDistance = distances.length > 1 && distances.at(-1) - distances[0] > 10;
+  if (useDistance && l.kind === 'complete') {
+    if (times[0] > l.start + 1e-6) { times.unshift(l.start); distances.unshift(0); }
+    else distances[0] = 0;
+    const length = distances.at(-1) + Math.max(0, l.end - times.at(-1)) * Math.max(0, (sample(channels['Ground Speed'], l.end)?.[0] || 0) / 3.6);
+    times.push(l.end);
+    distances.push(length);
+  }
+  const distanceAt = t => useDistance ? interpolate(times, distances, t) : t - l.start;
+  const timeAt = x => useDistance ? interpolate(distances, times, x) : l.start + x;
+  const extent = useDistance ? [distances[0], distances.at(-1)] : [0, l.end - l.start];
+  return {lap:l, channels, extent, distanceAt, timeAt, useDistance};
+}
+function sample(channel, time) {
+  if (!channel?.times.length || !Number.isFinite(time)) return null;
+  const i = lowerBound(channel.times, time);
+  if (!channel.rate) return (channel.rows[i]?.[0] === time ? channel.rows[i] : channel.rows[i - 1])?.slice(1) || null;
+  const index = i === 0 ? i : i === channel.times.length || time - channel.times[i-1] <= channel.times[i] - time ? i-1 : i;
+  return channel.rows[index];
+}
+function inExtent(data, x) { return x >= data.extent[0] && x <= data.extent[1]; }
+function tyreName() { return settings.tyres || 'TyresTempCentre'; }
+function displayUnit(name, unit) {
+  const normalized = unit?.toLowerCase();
+  if (name === 'Turbo Boost Pressure' && normalized === 'pa') return 'kPa';
+  if (name === 'TyresPressure' && (normalized === 'kpa' || normalized === 'pa')) return 'psi';
+  if (['km/h', 'kph', 'kmh'].includes(normalized)) return 'km/h';
+  if (unit === 'C') return '°C';
+  return unit || '';
+}
+function convert(name, value, unit) {
+  if (!Number.isFinite(value)) return value;
+  const normalized = unit?.toLowerCase();
+  if (name === 'Turbo Boost Pressure' && normalized === 'pa') return value / 1000;
+  if (name === 'TyresPressure' && normalized === 'kpa') return value / 6.894757293168;
+  if (name === 'TyresPressure' && normalized === 'pa') return value / 6894.757293168;
+  return value;
+}
+function telemetryDecimalPlaces(key, fallback = 1, overrides = settings.telemetryDecimals) {
+  if (key === 'Engine RPM' || key === 'Gear') return 0;
+  const places = overrides?.[key] ??
+    (Object.hasOwn(tyreChannels, key) ? overrides?.tyres : undefined);
+  if (Number.isInteger(places) && places >= 0 && places <= 6) return places;
+  return key === 'Throttle Pos' || key === 'Brake Pos' ? 0 : fallback;
+}
+function summaryDecimalDefault(key) {
+  return ['virtualEnergy', 'Fuel Level', 'absActiveTime', 'tcActiveTime'].includes(key) ? 2 : 1;
+}
+function valueLabel(name, value, sourceUnit) {
+  if (value === null || value === undefined) return '—';
+  if (name === 'Gear') return value === 0 ? 'N' : value === -1 ? 'R' : String(value);
+  if (typeof value === 'boolean') return value ? 'On' : 'Off';
+  const unit = displayUnit(name, sourceUnit);
+  const formatted = typeof value === 'number' ? number(convert(name, value, sourceUnit), telemetryDecimalPlaces(name)) : String(value);
+  return formatted + (unit ? ' ' + unit : '');
+}
+function readings(data, name, stacked = false, widths) {
+  const channel = data?.channels[name];
+  const values = data && inExtent(data, cursor) ? sample(channel, data.timeAt(cursor)) : null;
+  if (!values && !widths) return '—';
+  const components = widths ?? values;
+  const formatted = components.map((_, index) => {
+    const label = valueLabel(name, values?.[index], channel?.unit);
+    const reading = widths ? label.padStart(widths[index], '\u00a0') : label;
+    return components.length === 4 ? wheels[index] + ' ' + reading : reading;
+  });
+  return formatted.join(stacked ? '\n' : widths ? ' / ' : '  /  ');
+}
+function chartReadingLayout(data, name) {
+  const channel = data?.channels[name];
+  const offset = channel?.rate ? 0 : 1;
+  const count = Math.max(1, (channel?.rows[0]?.length ?? offset) - offset);
+  const widths = Array(count).fill(1);
+  for (const row of channel?.rows ?? []) {
+    for (let index = 0; index < count; index++) {
+      widths[index] = Math.max(widths[index], valueLabel(name, row[index + offset], channel.unit).length);
+    }
+  }
+  return {widths, length:widths.reduce((total, width) => total + width, 0)
+    + (count === 4 ? 4 * 3 : 0) + (count - 1) * 3};
+}
+function delta(x) {
+  if (!primary?.useDistance || !secondary?.useDistance || !inExtent(primary,x) || !inExtent(secondary,x)) return NaN;
+  return primary.timeAt(x) - primary.lap.start - (secondary.timeAt(x) - secondary.lap.start);
+}
+const inCarSettings = [
+  ['TCLevel', 'TC 1 · Level'], ['TCCut', 'TC 2 · Cut'], ['TCSlipAngle', 'TC 3 · Slip Angle'],
+  ['ABSLevel', 'ABS Level'], ['Brake Bias Rear', 'Brake Bias (F:R)'],
+  ['Brake Migration', 'Brake Migration'], ['FuelMixtureMap', 'Fuel Mixture Map']
+];
+const hypercarSetupOptions = [
+  ['VM_REGEN_LEVEL', 'Regen Level'],
+  ['VM_ELECTRIC_MOTOR_MAP', 'Electric Motor Map'],
+  ['VM_ENGINE_BRAKEMAP', 'Engine Braking Map']
+];
+const defaultTelemetryNames = new Map([
+  ...chartSpecs.map(([label, key]) => [key, label]),
+  ...Object.entries(tyreChannels),
+  ...inCarSettings, ...hypercarSetupOptions,
+  ['virtualEnergy', 'Virtual Energy per Lap']
+]);
+function telemetryName(key, fallback = defaultTelemetryNames.get(key) ?? key) {
+  return Object.hasOwn(settings.telemetryNames ?? {}, key) ? settings.telemetryNames[key] : fallback;
+}
+const summaryChannelKeys = {
+  oil:'Engine Oil Temp', water:'Engine Water Temp',
+  air:'Ambient Temperature', track:'Track Temperature'
+};
+const defaultHiddenSummary = ['air', 'track'];
+function hiddenSummaryChannels() {
+  const hidden = new Set(settings.hiddenSummary ?? defaultHiddenSummary);
+  if (hidden.delete('brakes')) {
+    hidden.add('frontBrakes');
+    hidden.add('rearBrakes');
+  }
+  return hidden;
+}
+function orderSummaryOptions(options, keyOf) {
+  const ranks = new Map((settings.summaryChannelOrder ?? []).map((key, index) => [key, index]));
+  return options.sort((a, b) => (ranks.get(keyOf(a)) ?? Infinity) - (ranks.get(keyOf(b)) ?? Infinity));
+}
+const summaryTemperatureOptions = [
+  ['tyres', 'Hottest Tyre Temperature'], ['frontBrakes', 'Front Brake Temperature'],
+  ['rearBrakes', 'Rear Brake Temperature'], ['oil', 'Engine Oil Temperature'],
+  ['water', 'Engine Water Temperature'], ['air', 'Air temperature'], ['track', 'Track temperature']
+];
+const defaultSummaryChannels = new Set([
+  'TyresTempCentre', 'Brakes Temp', 'Engine Oil Temp', 'Engine Water Temp',
+  'Ambient Temperature', 'Track Temperature', 'Virtual Energy'
+]);
+const derivedSummaryChannels = new Map([
+  ['finishSpeed', ['Ground Speed', 'Speed at the Finish Line']],
+  ...wheels.map((wheel, index) => ['finishPressure' + wheel, ['TyresPressure', wheel + ' Peak Tyre Pressure', index]]),
+  ['absActiveTime', ['ABS', 'ABS Time Active']],
+  ['tcActiveTime', ['TC', 'TC Time Active']]
+]);
+function availableSummaryChannels(names) {
+  const channels = new Set(names);
+  for (const [key, [source]] of derivedSummaryChannels) {
+    if (channels.has(source)) channels.add(key);
+  }
+  return [...channels];
+}
+let extraSummary = {};
+
+function extraSummaryOptions(session) {
+  const chosen = new Set(settings.extraSummaryChannels);
+  const names = availableSummaryChannels(session?.summaryChannels ?? []).filter(name => chosen.has(name) && !defaultSummaryChannels.has(name));
+  const fetched = [...new Set(names.filter(name => name !== 'Ground Speed')
+    .map(name => derivedSummaryChannels.get(name)?.[0] ?? name))];
+  const key = fetched.length ? JSON.stringify([session.path, session.laps.at(-1)?.end, fetched]) : '';
+  if (!key) extraSummary = {};
+  else if (extraSummary.key !== key) {
+    const request = {key};
+    extraSummary = request;
+    lmu.summaryChannels(session.path, fetched).then(data => {
+      if (extraSummary !== request) return;
+      request.data = data;
+      renderSessionSummary();
+    }).catch(error => {
+      if (extraSummary !== request) return;
+      setStatus($('status'), error.message, {error:true});
+    });
+  }
+  return names.map(name => {
+    if (name === 'Ground Speed') {
+      const values = Object.fromEntries(session.laps.map(lap => [lap.id, lap.topSpeed]));
+      return [name, extraSummaryName(name), 'km/h', values];
+    }
+    const derived = derivedSummaryChannels.get(name);
+    if (derived) {
+      const [source, label, wheel] = derived;
+      const channel = extraSummary.data?.[source];
+      const isActivation = source === 'ABS' || source === 'TC';
+      const readings = isActivation ? channel?.activeSeconds : wheel === undefined ? channel?.values : channel?.wheelValues?.[wheel];
+      const unit = isActivation ? 's' : displayUnit(source, channel?.unit);
+      const values = Object.fromEntries(Object.entries(readings ?? {}).map(([id, value]) =>
+        [id, convert(source, value, channel.unit)]));
+      return [name, label, unit, values];
+    }
+    const channel = extraSummary.data?.[name];
+    const values = Object.fromEntries(Object.entries(channel?.values ?? {}).map(([id, value]) =>
+      [id, convert(name, value, channel.unit)]));
+    return [name, extraSummaryName(name), displayUnit(name, channel?.unit), values];
+  });
+}
+
+function extraSummaryName(name) {
+  if (name === 'TyresPressure') return telemetryName(name, 'Peak Tyre Pressure');
+  if (name === 'Engine RPM') return telemetryName(name, 'PRM peak');
+  if (name === 'Ground Speed') return telemetryName(name, 'Top Speed');
+  if (derivedSummaryChannels.has(name)) return derivedSummaryChannels.get(name)[1];
+  return name === 'Fuel Level' ? telemetryName(name, 'Fuel Used per Lap') : telemetryName(name);
+}
+
+const summaryChartColours = {
+  tyres: '#f7d27a',
+  frontBrakes: '#ffac76',
+  rearBrakes: '#f5bd9a',
+  oil: '#eaa8ed',
+  water: '#8dbdff',
+  air: '#9adac9',
+  track: '#c6b7ff',
+  virtualEnergy: '#c6f36c'
+};
+function attachChartResize(handle, getHeight, setHeight, persist, reset) {
+  handle.title = "Double-click to restore default size";
+  handle.addEventListener('dblclick', reset);
+  let drag;
+  handle.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    drag = {pointerId:event.pointerId, y:event.clientY, height:getHeight()};
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener('pointermove', event => {
+    if (drag?.pointerId === event.pointerId) setHeight(drag.height + event.clientY - drag.y);
+  });
+  handle.addEventListener('lostpointercapture', event => {
+    if (drag?.pointerId !== event.pointerId) return;
+    if (getHeight() !== drag.height) persist?.();
+    drag = null;
+  });
+  handle.addEventListener('keydown', event => {
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    event.preventDefault();
+    setHeight(getHeight() + (event.key === 'ArrowDown' ? 15 : -15));
+    persist?.();
+  });
+}
+
+const summaryPlots = new Map();
+let summaryPlotObserver;
+function observeSummaryPlots() {
+  summaryPlotObserver?.disconnect();
+  const owner = $('session-charts').ownerDocument.defaultView;
+  summaryPlotObserver = new owner.ResizeObserver(entries => {
+    for (const {target} of entries) summaryPlots.get(target)?.();
+  });
+  for (const canvas of summaryPlots.keys()) summaryPlotObserver.observe(canvas);
+}
+function redrawSummaryPlots() {
+  for (const redraw of summaryPlots.values()) redraw();
+}
+
+function summaryChart(key, label, unit, readings, endpoints) {
+  const section = node('div', null, 'summary-chart');
+  const isUsage = key === 'virtualEnergy' || key === 'Fuel Level';
+  const colour = summaryChartColours[key] ?? graphColor(key);
+  section.style.setProperty('--summary-chart-colour', colour);
+  const format = value => Number.isFinite(value) ? number(value, telemetryDecimalPlaces(summaryChannelKeys[key] ?? key, summaryDecimalDefault(key))) + (unit ? ' ' + unit : '') : '—';
+  const heading = node('strong', label);
+  const readout = node('span', '', 'summary-chart-readout');
+  const plot = node('div', null, 'summary-chart-body');
+  section.append(node('div', null, 'summary-chart-header'), plot);
+  section.firstElementChild.append(heading);
+
+
+  let points = (selected?.laps ?? []).map(lap => ({
+    lapNumber: lap.number,
+    label: lap.number == null ? 'Opening segment' : 'Lap ' + lap.number,
+    value: readings?.[lap.id]
+  }));
+  if (isUsage) {
+    points = points.filter(point => Number.isFinite(point.value)).sort((a, b) => a.lapNumber - b.lapNumber);
+  }
+  const readoutWidth = points.reduce((width, point) => Math.max(width, point.label.length + 3 + format(point.value).length), 0);
+  readout.style.width = 'calc(' + readoutWidth + 'ch + 12px)';
+  const thresholdKey = key === 'frontBrakes' || key === 'rearBrakes' ? 'brakes' : key;
+  const threshold = hotTemperature(selected?.carClass, thresholdKey);
+  const isHot = value => Number.isFinite(threshold) && Number.isFinite(value) && value >= threshold;
+  const values = points.map(point => point.value).filter(Number.isFinite);
+  const hasWarnings = values.some(isHot);
+  heading.classList.toggle('temperature-hot', hasWarnings);
+
+  if (values.length) {
+    const canvas = node('canvas', null, 'summary-chart-plot');
+    canvas.tabIndex = 0;
+    canvas.setAttribute('aria-label', label + ' by lap. Use arrow keys to inspect.');
+    plot.append(canvas);
+    const ctx = canvas.getContext('2d');
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const peakIndex = points.findIndex(point => point.value === max);
+    const span = max - min;
+    const warningRadius = 4;
+    const peakRingRadius = warningRadius + 2;
+    const inset = peakRingRadius + 2;
+    let width = 0, height = 0;
+    const x = index => points.length === 1 ? width / 2 : inset + index * (width - 2 * inset) / (points.length - 1);
+    const y = value => span ? height - inset - (value - min) * (height - 2 * inset) / span
+      : Math.max(inset, (height - 20 * textScale()) / 2);
+    let active = -1;
+    function draw(index) {
+      active = index;
+      const point = points[index];
+      readout.textContent = point ? point.label + ' · ' + format(point.value) : '';
+      readout.classList.toggle('temperature-hot', isHot(point?.value));
+      const ratio = canvas.ownerDocument.defaultView.devicePixelRatio || 1;
+      const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
+      if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+      if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      if (point) {
+        const px = x(index);
+        const py = Number.isFinite(point.value) ? y(point.value) : height / 2;
+        const left = px + readout.offsetWidth + 8 <= width ? px + 8 : px - readout.offsetWidth - 8;
+        readout.style.left = Math.max(0, Math.min(width - readout.offsetWidth, left)) + 'px';
+        readout.style.top = Math.max(0, Math.min(height - readout.offsetHeight, py - readout.offsetHeight / 2)) + 'px';
+        ctx.strokeStyle = '#a4b3a766';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(px, 0);
+        ctx.lineTo(px, height);
+        ctx.stroke();
+      }
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let connected = false;
+      points.forEach(({value}, i) => {
+        if (!Number.isFinite(value)) {
+          connected = false;
+          return;
+        }
+        if (connected) ctx.lineTo(x(i), y(value));
+        else ctx.moveTo(x(i), y(value));
+        connected = true;
+      });
+      ctx.stroke();
+      points.forEach(({value}, i) => {
+        if (!Number.isFinite(value)) return;
+        const hot = isHot(value);
+        ctx.fillStyle = hot ? '#ff8787' : colour;
+        ctx.beginPath();
+        ctx.arc(x(i), y(value), hot ? warningRadius : i === index ? 3.5 : 1.75, 0, Math.PI * 2);
+        ctx.fill();
+        if (hot && i === index) {
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+      const lowestIndex = isUsage ? points.findIndex(point => point.value === min) : -1;
+      ctx.lineWidth = 1.5;
+      if (peakIndex !== lowestIndex) {
+        ctx.strokeStyle = '#ff4545';
+        ctx.beginPath();
+        ctx.arc(x(peakIndex), y(max), peakRingRadius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      const minimumColour = lightGraphBackground ? '#7425a3' : '#c084fc';
+      if (lowestIndex >= 0) {
+        ctx.strokeStyle = minimumColour;
+        ctx.beginPath();
+        ctx.arc(x(lowestIndex), y(min), peakRingRadius, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      const bounds = canvas.getBoundingClientRect();
+      const occupied = [...plot.querySelectorAll('.summary-chart-endpoints span')]
+        .map(label => label.getBoundingClientRect())
+        .map(rect => ({left:rect.left - bounds.left, right:rect.right - bounds.left,
+          top:rect.top - bounds.top, bottom:rect.bottom - bounds.top}));
+      function drawValueLabel(pointIndex, value, color) {
+        const label = format(value);
+        const below = y(value) + peakRingRadius + 2;
+        const above = y(value) - peakRingRadius - 2;
+        const preferredSize = 12 * textScale();
+        const drawBelow = height - below - 1 >= preferredSize || height - below >= above;
+        const labelSize = Math.min(preferredSize, drawBelow ? height - below - 1 : above - 1);
+        if (labelSize <= 0 || width <= 4) return;
+        const labelTop = drawBelow ? below : above - labelSize;
+        ctx.font = '700 ' + labelSize + 'px "Segoe UI", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        const halfWidth = Math.min(ctx.measureText(label).width / 2, (width - 4) / 2);
+        const minX = halfWidth + 2;
+        const maxX = width - halfWidth - 2;
+        const centre = Math.max(minX, Math.min(maxX, x(pointIndex)));
+        const blocked = occupied
+          .filter(rect => rect.top < labelTop + labelSize && rect.bottom > labelTop)
+          .map(rect => [rect.left - halfWidth - 3, rect.right + halfWidth + 3]);
+        const candidates = [centre, ...blocked.flat()]
+          .filter(px => px >= minX && px <= maxX && blocked.every(([left, right]) => px <= left || px >= right))
+          .sort((a, b) => Math.abs(a - centre) - Math.abs(b - centre));
+        const labelX = candidates[0] ?? centre;
+        ctx.strokeStyle = backgroundColour(settings.graphBackgroundColour, '#1d2721');
+        ctx.lineWidth = 3;
+        ctx.strokeText(label, labelX, labelTop, width - 4);
+        ctx.fillStyle = color;
+        ctx.fillText(label, labelX, labelTop, width - 4);
+        occupied.push({left:labelX - halfWidth, right:labelX + halfWidth, top:labelTop, bottom:labelTop + labelSize});
+      }
+      if (peakIndex !== lowestIndex) drawValueLabel(peakIndex, max, lightGraphBackground ? '#ad1919' : '#ff6565');
+      if (lowestIndex >= 0) drawValueLabel(lowestIndex, min, minimumColour);
+    }
+    canvas.addEventListener('pointermove', event => {
+      const rect = canvas.getBoundingClientRect();
+      const fraction = (event.clientX - rect.left - inset) / Math.max(1, width - 2 * inset);
+      draw(Math.min(points.length - 1, Math.max(0, Math.round(fraction * (points.length - 1)))));
+    });
+    canvas.addEventListener('pointerleave', () => draw(-1));
+    canvas.addEventListener('focus', () => draw(0));
+    canvas.addEventListener('blur', () => draw(-1));
+    canvas.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      draw(Math.min(points.length - 1, Math.max(0, active + (event.key === 'ArrowRight' ? 1 : -1))));
+    });
+    const handle = node('button', null, 'resize');
+    handle.type = 'button';
+    handle.setAttribute('aria-label', 'Resize ' + label + ' chart. Use arrow keys.');
+    const getHeight = () => canvas.getBoundingClientRect().height;
+    const setHeight = value => { canvas.style.height = Math.round(Math.min(650, Math.max(24, value))) + 'px'; };
+    const savedHeight = settings.summaryChartHeights?.[key];
+    if (Number.isFinite(savedHeight)) setHeight(savedHeight);
+    attachChartResize(handle, getHeight, setHeight,
+      () => save({summaryChartHeights:{...settings.summaryChartHeights, [key]:getHeight()}}),
+      () => {
+        canvas.style.removeProperty('height');
+        const heights = {...settings.summaryChartHeights};
+        delete heights[key];
+        save({summaryChartHeights:heights});
+      });
+    section.append(handle);
+    summaryPlots.set(canvas, () => {
+      const rect = canvas.getBoundingClientRect();
+      width = rect.width;
+      height = rect.height;
+      if (width && height) draw(active);
+    });
+  } else {
+    plot.append(node('div', 'No recorded data', 'summary-chart-empty'));
+  }
+  const labels = isUsage ? ['Least', 'Most'] : ['Start', 'Finish'];
+  const edgeValues = isUsage ? [Math.min(...values), Math.max(...values)] : endpoints;
+  if (edgeValues) {
+    const ends = node('div', null, 'summary-chart-endpoints');
+    ends.append(...edgeValues.map((value, index) => node('span',
+      labels[index] + ' ' + format(value), isHot(value) ? 'temperature-hot' : undefined)));
+    plot.append(ends);
+  }
+  plot.append(readout);
+  return section;
+}
+function renderMapSectorTimes() {
+  const timed = (selected?.laps ?? []).filter(lap => lap.time > 0);
+  const fastest = timed.find(lap => lap.time === selected.best);
+  $('map-current-lap').textContent = lap?.number == null ? 'Current Lap' : 'Current · Lap ' + lap.number;
+  $('map-fastest-lap').textContent = fastest?.number == null ? 'Fastest Lap' : 'Fastest · Lap ' + fastest.number;
+
+  const bestSectors = [0, 1, 2].map(index => {
+    const candidates = timed.filter(lap => lap.sectors?.[index] > 0);
+    return candidates.reduce((best, lap) => !best || lap.sectors[index] < best.sectors[index] ? lap : best, null);
+  });
+  const optimal = bestSectors.every(Boolean)
+    ? bestSectors.reduce((total, lap, index) => total + lap.sectors[index], 0) : null;
+  $('map-sector-note').hidden = ![lap, fastest, ...bestSectors].some(item => item?.validity === 'unconfirmed');
+  const rows = bestSectors.map((best, index) => {
+    const value = node('td', number(best?.sectors[index], 3));
+    if (best?.number != null) value.title = 'Lap ' + best.number;
+    return ['S' + (index + 1), node('td', number(lap?.sectors?.[index], 3)), node('td', number(fastest?.sectors?.[index], 3)), value];
+  });
+  rows.push(['Total', node('td', lapTime(lap?.time)), node('td', lapTime(fastest?.time)), node('td', lapTime(optimal))]);
+  $('map-sector-rows').replaceChildren(...rows.map(([label, ...values]) => {
+    const row = node('tr');
+    const heading = node('th', label);
+    heading.scope = 'row';
+    row.append(heading, ...values);
+    return row;
+  }));
+}
+function sessionLength(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor(total / 60) % 60;
+  const remainder = String(total % 60).padStart(2, '0');
+  return hours ? hours + ':' + String(minutes).padStart(2, '0') + ':' + remainder : minutes + ':' + remainder;
+}
+let summaryCategory = 'vehicle';
+let practiceRequest;
+let practiceComparison;
+
+function selectSummaryCategory(category) {
+  summaryCategory = category;
+  const driver = category === 'driver';
+  $('show-driver-performance').setAttribute('aria-pressed', String(driver));
+  $('show-vehicle-performance').setAttribute('aria-pressed', String(!driver));
+  $('driver-performance').hidden = !driver;
+  $('session-highlights').inert = driver;
+  $('choose-summary-channels').style.visibility = driver ? 'hidden' : '';
+  $('driver-performance').parentElement.scrollTop = 0;
+  if (driver) void updatePracticeReview();
+  else redrawSummaryPlots();
+}
+$('show-driver-performance').onclick = () => selectSummaryCategory('driver');
+$('show-vehicle-performance').onclick = () => selectSummaryCategory('vehicle');
+
+const practiceTabs = bindTabs('practice-tabs', () => { $('practice-content').scrollTop = 0; });
+function clearPracticePanels() {
+  practiceLapLabels.disconnect();
+  for (const tab of practiceTabs) $(tab.getAttribute('aria-controls')).replaceChildren();
+}
+
+
+function timingStats(values) {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (!sorted.length) return {count:0};
+  return {
+    count:sorted.length,
+    median:sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2,
+    spread:sorted.at(-1) - sorted[0]
+  };
+}
+
+const practiceLapLabels = new ResizeObserver(([{target:plot, contentRect}]) => {
+  if (!contentRect.width) return;
+  const labels = [...plot.querySelectorAll('.practice-lap-label')];
+  const labelWidth = labels.reduce((widest, label) => Math.max(widest, label.getBoundingClientRect().width), 0);
+  const step = Math.max(1, Math.ceil((labelWidth + 4) * labels.length / contentRect.width));
+  const intervals = Math.floor((labels.length - 1) / step);
+  const visible = new Set([0]);
+  for (let i = 1; i <= intervals; i++) visible.add(Math.round(i * (labels.length - 1) / intervals));
+  labels.forEach((label, index) => label.classList.toggle('visible', visible.has(index)));
+});
+
+function practiceInterfaceTips(...tips) {
+  const list = node('ul', undefined, 'practice-interface-tips');
+  list.append(...tips.map(tip => node('li', tip)));
+  return list;
+}
+
+function renderLapConsistency(measured, stats) {
+  const section = node('section', undefined, 'practice-lap-consistency');
+  section.append(node('h4', 'Lap Consistency'));
+  if (stats.count < 2) {
+    section.append(node('p', 'Two laps are needed to compare lap times.'));
+    return section;
+  }
+
+  const tolerance = stats.median * .005;
+  const deviations = measured.map(({lap}) => lap.time - stats.median);
+  const close = deviations.filter(delta => Math.abs(delta) <= tolerance).length;
+  const metrics = node('div', undefined, 'practice-overview-metrics');
+  const range = node('div', undefined, 'practice-spread-card');
+  range.append(node('strong', number(stats.spread, 3) + ' s'),
+    node('p', 'Fastest to slowest lap'));
+  const consistency = node('div', undefined, 'practice-spread-card');
+  const bar = node('progress');
+  bar.max = stats.count;
+  bar.value = close;
+  bar.setAttribute('aria-label', 'Laps within 0.5% of the median');
+  consistency.append(node('strong', close + ' of ' + stats.count + ' laps'),
+    node('p', 'Within 0.5% of the median'), bar);
+  metrics.append(range, consistency);
+  section.append(metrics);
+  const scale = Math.max(.001, ...deviations.map(Math.abs));
+  const plot = node('ol', undefined, 'practice-lap-plot');
+  plot.setAttribute('aria-label', 'Lap times in order, compared with the median');
+  measured.forEach(({lap}, index) => {
+    const delta = deviations[index];
+    const label = lap.number == null ? 'Recording' : 'Lap ' + lap.number;
+    const difference = Math.round(delta * 1000) / 1000;
+    const reading = label + ' in ' + lapTime(lap.time) + '. ' + (difference === 0 ? 'Matches the median.' :
+      number(Math.abs(difference), 3) + ' s ' + (difference < 0 ? 'faster' : 'slower') + ' than the median.');
+    const column = node('li');
+    column.title = reading;
+    column.setAttribute('aria-label', reading);
+    const track = node('span', undefined, 'practice-lap-track');
+    const bar = node('span', undefined, 'practice-lap-bar');
+    bar.style.setProperty('--magnitude', (50 * Math.abs(delta) / scale) + '%');
+    bar.classList.toggle('faster', delta < 0);
+    bar.classList.toggle('median', delta === 0);
+    track.append(bar);
+    column.append(track, node('span', lap.number == null ? 'Rec.' : String(lap.number), 'practice-lap-label'));
+    plot.append(column);
+  });
+  practiceLapLabels.observe(plot);
+  section.append(plot);
+  return section;
+}
+
+function renderConsistencySpreads(measured) {
+  const section = node('section', undefined, 'practice-section practice-spreads');
+  section.append(node('h3', 'Lap and Sector Consistency'));
+  const timings = [
+    ['Lap', measured.map(({lap}) => lap.time), lapTime],
+    ...[0, 1, 2].map(index => ['Sector ' + (index + 1),
+      measured.map(({lap}) => lap.sectors?.[index]).filter(time => time > 0),
+      time => number(time, 3) + ' s'])
+  ].map(([label, values, format]) => {
+    const valid = values.filter(Number.isFinite);
+    return {label, format, shortest:Math.min(...valid), longest:Math.max(...valid), ...timingStats(valid)};
+  });
+  const scale = Math.max(.001, ...timings.filter(item => item.count > 1)
+    .map(({shortest, longest, median}) => Math.max(median - shortest, longest - median)));
+  const cards = node('div', undefined, 'practice-spread-grid');
+  for (const {label, format, shortest, longest, count, spread, median} of timings) {
+    const card = node('div', undefined, 'practice-spread-card');
+    card.append(node('h4', label));
+    if (count < 2) {
+      card.append(node('p', count ? 'Only one recorded time (' + format(median) + '). Two are needed to show a spread.' : 'No times available.'));
+    } else {
+      const track = node('div', undefined, 'practice-spread-track');
+      track.setAttribute('aria-hidden', 'true');
+      const faster = node('span', undefined, 'practice-spread-faster');
+      faster.style.width = (50 * (median - shortest) / scale) + '%';
+      const slower = node('span', undefined, 'practice-spread-slower');
+      slower.style.width = (50 * (longest - median) / scale) + '%';
+      const marker = node('span', undefined, 'practice-spread-marker');
+      track.append(faster, slower, marker);
+      const directions = node('div', undefined, 'practice-spread-directions');
+      directions.append(node('span', '← Faster'), node('span', 'Slower →'));
+      card.append(node('strong', number(spread, 3) + ' s spread'), track, directions,
+        node('p', 'Fastest ' + format(shortest) + ' · Slowest ' + format(longest)),
+        node('p', 'Median ' + format(median) + ' across ' + count + ' laps'));
+    }
+    cards.append(card);
+  }
+  section.append(cards);
+  return section;
+}
+
+const practiceConditionLabels = new Map([
+  ['dry', 'Dry'], ['damp', 'Damp Off-Line'], ['wet', 'Wet'],
+  ['changing', 'Changing'], ['unknown', 'Unknown']
+]);
+function practiceStints(laps) {
+  const stints = new Map();
+  let stint = 0, needsStart = true;
+  for (const lap of laps) {
+    if (lap.kind === 'in-lap' || lap.kind === 'out-lap') needsStart = true;
+    if (lap.kind !== 'complete') continue;
+    if (needsStart) stint++;
+    needsStart = false;
+    stints.set(lap.id, stint);
+  }
+  return stints;
+}
+function practiceFilter(select, label, options) {
+  const previous = select.value;
+  select.replaceChildren();
+  option(select, label, '');
+  for (const [value, text] of options) option(select, text, String(value));
+  if (Array.from(select.options).some(item => item.value === previous)) select.value = previous;
+  return select.value;
+}
+for (const id of ['practice-stint', 'practice-condition']) {
+  $(id).onchange = () => {
+    if (practiceRequest?.samples) renderPracticeReview(practiceRequest);
+  };
+}
+
+$('reset-practice-filters').onclick = () => {
+  $('practice-stint').value = '';
+  $('practice-condition').value = '';
+  if (practiceRequest?.samples) renderPracticeReview(practiceRequest);
+};
+
+function practiceTyreLaps(laps, samples, stints) {
+  const plateauTolerance = 2;
+  const rows = laps.map(lap => {
+    const sample = samples.get(lap.id);
+    const tyres = sample?.tyres ?? [];
+    const measured = tyres.length === 2 && tyres.every(values => values?.length === 4 && values.every(Number.isFinite));
+    return {lap, stint:stints.get(lap.id), condition:sample?.condition ?? 'unknown',
+      times:sample?.times ?? [], postCornerSpeeds:sample?.postCornerSpeeds ?? [], tyres, temperature:measured ? 'unsettled' : 'unknown'};
+  });
+  let previous;
+  for (const row of rows) {
+    if (row.temperature === 'unknown') { previous = undefined; continue; }
+    const consecutive = previous && previous.stint === row.stint && Number.isFinite(row.lap.number) && row.lap.number === previous.lap.number + 1;
+    if (consecutive && row.tyres[0].every((_, wheel) => {
+      const values = [...previous.tyres, ...row.tyres].map(sample => sample[wheel]);
+      return Math.max(...values) - Math.min(...values) <= plateauTolerance;
+    })) {
+      previous.temperature = row.temperature = 'in-range';
+    }
+    previous = row;
+  }
+  return rows;
+}
+
+function renderPracticeReview(request) {
+  const {session, laps, corners, samples} = request;
+  const status = $('practice-status');
+  clearPracticePanels();
+  const allRows = practiceTyreLaps(laps, samples, practiceStints(session.laps));
+  const stints = [...new Set(allRows.map(row => row.stint))];
+  const conditions = new Set(allRows.map(row => row.condition));
+  $('practice-filters').hidden = false;
+  const stint = practiceFilter($('practice-stint'), 'All Stints', stints.map(id => [id, 'Stint ' + id]));
+  const condition = practiceFilter($('practice-condition'), 'All Conditions',
+    [...practiceConditionLabels].filter(([key]) => conditions.has(key)));
+  const rows = allRows.filter(row => (!stint || String(row.stint) === stint) && (!condition || row.condition === condition));
+  const known = rows.some(row => row.temperature !== 'unknown');
+  const measured = known ? rows.filter(row => row.temperature === 'in-range') : rows;
+  status.textContent = rows.length ? '' : 'No timed laps match the selected stint and track condition.';
+  if (!rows.length) return;
+
+  const lapStats = timingStats(measured.map(({lap}) => lap.time));
+  const mostInconsistent = corners.map(({index}, offset) => {
+    const runs = measured.filter(row => Number.isFinite(row.times[offset]))
+      .map(row => ({lap:row.lap, time:row.times[offset]}))
+      .sort((a, b) => a.time - b.time);
+    return {index, runs, ...timingStats(runs.map(run => run.time))};
+  }).filter(row => row.count > 1)
+    .sort((a, b) => b.spread - a.spread || b.count - a.count || a.index - b.index).slice(0, 3);
+
+  const overview = node('section', undefined, 'practice-section practice-overview');
+  overview.append(node('h3', 'Driver Overview'), renderLapConsistency(measured, lapStats));
+  const cornersHeading = node('h4', 'Most Inconsistent Corners');
+  overview.append(cornersHeading);
+  if (mostInconsistent.length) {
+    const list = node('ol', undefined, 'practice-consistent-corners');
+    list.setAttribute('aria-label', cornersHeading.textContent);
+    const scale = Math.max(.001, mostInconsistent[0].spread);
+    for (const {index, runs, spread, count} of mostInconsistent) {
+      const best = runs[0];
+      const slower = runs.at(-1).lap;
+      const action = node('button', 'Corner ' + (index + 1));
+      action.type = 'button';
+      action.onclick = () => void openPracticeCorner(request, slower, best.lap, index, best);
+      const item = node('li');
+      const reading = node('span', number(spread, 3) + ' s · ' + count + ' laps', 'practice-corner-reading');
+      const track = node('span', undefined, 'practice-spread-track');
+      const band = node('span');
+      band.style.width = (100 * spread / scale) + '%';
+      track.setAttribute('aria-hidden', 'true');
+      track.append(band);
+      item.append(action, reading, track);
+      list.append(item);
+    }
+    overview.append(list, practiceInterfaceTips('Select a corner to compare its fastest and slowest runs.'));
+  } else {
+    overview.append(node('p', 'Corner comparisons need at least two laps with recorded corner times.'));
+  }
+
+  const speedHeading = node('h4', 'Largest Post-Corner Top Speed Spread');
+  overview.append(speedHeading);
+  const speedSpreads = corners.map(({index}, offset) => {
+    const runs = measured.map(row => ({lap:row.lap, speed:row.postCornerSpeeds[offset]}))
+      .filter(run => Number.isFinite(run.speed)).sort((a, b) => a.speed - b.speed);
+    return {index, runs, ...timingStats(runs.map(run => run.speed))};
+  }).filter(row => row.count > 1)
+    .sort((a, b) => b.spread - a.spread || b.count - a.count || a.index - b.index).slice(0, 3);
+  if (speedSpreads.length) {
+    const list = node('ol', undefined, 'practice-consistent-corners');
+    list.setAttribute('aria-label', speedHeading.textContent);
+    const scale = Math.max(.001, speedSpreads[0].spread);
+    const digits = telemetryDecimalPlaces('Ground Speed');
+    for (const {index, runs, spread, count} of speedSpreads) {
+      const [low, high] = [runs[0], runs.at(-1)];
+      const action = node('button', 'Corner ' + (index + 1));
+      action.type = 'button';
+      action.onclick = () => void openPracticeCorner(request, low.lap, high.lap, index, undefined, true);
+      const item = node('li');
+      const track = node('span', undefined, 'practice-spread-track');
+      track.setAttribute('aria-hidden', 'true');
+      const band = node('span');
+      band.style.width = (100 * spread / scale) + '%';
+      track.append(band);
+      const reading = number(spread, digits) + ' km/h spread (' + number(low.speed, digits) + '–' +
+        number(high.speed, digits) + ' km/h) · ' + count + ' laps';
+      item.append(action, track, node('span', reading, 'practice-corner-reading'));
+      list.append(item);
+    }
+    overview.append(list);
+  } else {
+    overview.append(node('p', 'Speed spreads need at least two laps with recorded speeds through the next braking point.'));
+  }
+
+  const tyreNote = known
+    ? 'Laps only count towards consistency once tyre temperatures have stabilised.'
+    : 'Tyre temperatures are unavailable for these laps, so warm-up could not be checked.';
+  overview.append(practiceInterfaceTips(tyreNote));
+  const consistency = renderConsistencySpreads(measured);
+  consistency.append(practiceInterfaceTips(tyreNote));
+  $('practice-overview').append(overview);
+  $('practice-consistency').append(consistency);
+}
+
+async function updatePracticeReview() {
+  if (summaryCategory !== 'driver') return;
+  const session = selected;
+  const status = $('practice-status');
+  status.removeAttribute('title');
+  const eligible = session?.laps.filter(item => !item.pitLaneAtBoundary && eligibleRecordLap(item)) ?? [];
+  const official = eligible.filter(lap => lap.validity === 'official');
+  const laps = (official.length >= 2 ? official : eligible).sort((a, b) => a.start - b.start);
+  if (!session || !laps.length) {
+    practiceRequest = undefined;
+    $('practice-filters').hidden = true;
+    clearPracticePanels();
+    status.textContent = 'Open a session with timed laps to see your driving feedback.';
+    return;
+  }
+  const key = JSON.stringify([session.path, laps.map(lap => [lap.id, lap.start, lap.end, lap.time, lap.validity, lap.sectors])]);
+  if (practiceRequest?.key === key) {
+    if (practiceRequest.samples) renderPracticeReview(practiceRequest);
+    return;
+  }
+  const request = {key, session, laps};
+  if (practiceRequest?.session.path !== session.path) {
+    $('practice-stint').value = '';
+    $('practice-condition').value = '';
+  }
+  practiceRequest = request;
+  $('practice-filters').hidden = true;
+  clearPracticePanels();
+  status.textContent = 'Checking your lap times and tyre temperatures…';
+  const anchor = laps.reduce((best, lap) => lap.time < best.time ? lap : best);
+  try {
+    let geometry;
+    try {
+      geometry = prepare(anchor, await lmu.lap(session.path, anchor.id));
+    } catch {
+      // Timings and tyre readiness can still be reviewed without a GPS route.
+    }
+    const gps = geometry?.useDistance ? route(geometry) : [];
+    const corners = gps.length ? routeCorners(geometry, Math.cos(gps[0][1] * Math.PI / 180))
+      .map((corner, index) => ({index, from:geometry.distanceAt(corner.start), to:geometry.distanceAt(corner.end)}))
+      .filter(({from, to}) => from >= 0 && to > from).slice(0, 200) : [];
+    if (practiceRequest !== request || selected?.path !== session.path) return;
+    const samples = await lmu.practiceReview(session.path, laps.map(lap => lap.id),
+      corners.map(({from, to}) => [from, to]));
+    if (practiceRequest !== request || selected?.path !== session.path) return;
+    Object.assign(request, {corners, samples:new Map(samples.map(sample => [sample.id, sample]))});
+    if (summaryCategory === 'driver') renderPracticeReview(request);
+  } catch (error) {
+    if (practiceRequest !== request) return;
+    practiceRequest = undefined;
+    status.textContent = 'Could not load driver feedback for this session.';
+    status.title = error.message;
+  }
+}
+
+async function openPracticeCorner(request, representative, benchmark, index, best, includePostCorner = false) {
+  if (practiceRequest !== request || selected?.path !== request.session.path) return;
+  await openCornerComparison(selected, request, representative, benchmark, index, best, includePostCorner);
+}
+
+async function openCornerComparison(session, request, representative, benchmark, index, best, includePostCorner = false) {
+  const overview = reviewingPracticeCorner() && practiceComparison.request === request
+    ? practiceComparison.overview : {
+      fullScreen:summaryDialog.open,
+      stint:$('practice-stint').value,
+      condition:$('practice-condition').value,
+      scrollTop:$('practice-content').scrollTop
+    };
+  const comparison = {request, path:session.path, lapId:representative.id, benchmarkId:benchmark.id,
+    corners:request.corners, index, best, includePostCorner, overview};
+  referenceSessionPath = session.path;
+  referenceSessionLapId = benchmark.id;
+  if (summaryDialog.open) summaryDialog.close();
+  await openSession(session, representative, comparison);
+  if (practiceComparison !== comparison || !reviewingPracticeCorner() || !secondary) return;
+  const corner = $('corner-time-loss')?.querySelector('[data-corner-index="' + index + '"]');
+  if (!corner) return;
+  if (!cornerTimeLossOpen) chartRows.find(row => row.key === 'delta')?.cornerAnalysis?.toggle.click();
+  corner.click();
+  corner.scrollIntoView({block:'nearest'});
+  window.focus();
+}
+
+function returnToDriverOverview({fullScreen, stint, condition, scrollTop}) {
+  $('practice-stint').value = stint;
+  $('practice-condition').value = condition;
+  selectSummaryCategory('driver');
+  $('practice-tab-overview').click();
+  if (fullScreen && !summaryDialog.open && !summaryToggle.hidden) summaryToggle.click();
+  const panel = $('practice-overview');
+  panel.scrollIntoView({block:'nearest'});
+  $('practice-content').scrollTop = scrollTop;
+  $('practice-tab-overview').focus({preventScroll:true});
+}
+
+function renderSessionSummary() {
+  void updatePracticeReview();
+  updateBestLapExport();
+  renderMapSectorTimes();
+  const summary = selected?.sessionSummary;
+  $('map-session-length').textContent = sessionLength(selected?.durationSeconds);
+  const [weatherStart, weatherFinish] = summary?.weatherEndpoints ?? [];
+  $('map-weather').textContent = weatherStart && weatherFinish && weatherStart !== weatherFinish
+    ? weatherStart + ' through to ' + weatherFinish
+    : (weatherStart || weatherFinish || '—');
+  for (const channel of ['track','air']) {
+    const readings = summary?.temperatureEndpoints?.[channel];
+    for (const [index, bound] of ['start','finish'].entries()) {
+      const value = readings?.[index];
+      $('map-' + channel + '-' + bound).textContent = Number.isFinite(value) ? number(value, telemetryDecimalPlaces(summaryChannelKeys[channel])) + ' °C' : '—';
+    }
+  }
+  const hidden = hiddenSummaryChannels();
+  const chartOptions = [
+    ...summaryTemperatureOptions.map(([key, label]) => [key, telemetryName(summaryChannelKeys[key] ?? key, label), '°C', summary?.peakTemperaturesByLap?.[key], summary?.chartEndpoints?.[key] ?? summary?.temperatureEndpoints?.[key]]),
+    ['virtualEnergy', telemetryName('virtualEnergy'), '%', summary?.energyUsedByLap]
+  ].filter(([key]) => !hidden.has(key));
+  chartOptions.push(...extraSummaryOptions(selected));
+  orderSummaryOptions(chartOptions, ([key]) => key);
+  $('session-highlights').hidden = !chartOptions.length;
+  summaryPlots.clear();
+  $('session-charts').replaceChildren(...chartOptions.map(option => summaryChart(...option)));
+  observeSummaryPlots();
+
+  renderInCarSettings();
+}
+function lapSetting(channel, currentLap) {
+  if (!channel || !currentLap) return {};
+  let initial, current;
+  let changes = 0;
+  for (let index = 0; index < channel.times.length; index++) {
+    const time = channel.times[index];
+    if (time >= currentLap.end) break;
+    const value = channel.rows[index][channel.rate ? 0 : 1];
+    if (!Number.isFinite(value)) continue;
+    if (time <= currentLap.start) initial = value;
+    else if (current !== undefined && current !== value) changes++;
+    current = value;
+  }
+  return {initial, final:current, changes};
+}
+function renderInCarSettings() {
+  const summary = selected?.sessionSummary;
+  const hidden = hiddenSummaryChannels();
+  const isHypercar = selected?.carClass === 'Hypercar';
+  const visibleSettings = inCarSettings.filter(([key]) =>
+    key !== 'FuelMixtureMap' && !hidden.has(key) && (key !== 'Brake Migration' || isHypercar));
+  const visibleHypercarSettings = isHypercar
+    ? hypercarSetupOptions.filter(([key]) => !hidden.has(key) && summary?.hypercarSetup?.[key])
+    : [];
+  $('session-settings-group').hidden = !(visibleSettings.length || visibleHypercarSettings.length);
+  const settingsList = $('session-settings');
+  settingsList.replaceChildren(...visibleSettings.flatMap(([channel, label]) => {
+    const event = lapSetting(primary?.channels[channel], primary?.lap);
+    function format(value) {
+      if (channel !== 'Brake Bias Rear') {
+        const places = telemetryDecimalPlaces(channel, null);
+        return places === null ? Number(value.toFixed(2)).toString() : number(value, places);
+      }
+      // Observed LMU recordings store rear brake bias as a fraction.
+      const rear = value >= 0 && value <= 1 ? value * 100 : value;
+      const places = telemetryDecimalPlaces(channel);
+      return number(100 - rear, places) + ':' + number(rear, places);
+    }
+    const value = node('dd', event.initial === undefined ? '—' : format(event.initial));
+    if (event?.changes) {
+      value.title = 'Start ' + (event.initial === undefined ? '—' : format(event.initial)) + ' · Finish ' + format(event.final);
+      value.append(' ', node('small', '(' + event.changes + (event.changes === 1 ? ' change)' : ' changes)')));
+    }
+    return [node('dt', telemetryName(channel, label)), value];
+  }));
+  for (const [key, label] of visibleHypercarSettings) {
+    const value = node('dd', summary.hypercarSetup[key] + ' (setup)');
+    value.title = 'Value from the recorded car setup.';
+    settingsList.append(node('dt', telemetryName(key, label)), value);
+  }
+}
+function updateContext() {
+  if (!ready) return;
+  $('map-status').textContent = lap.validity === 'official' ? ''
+    : lap.time ? '' : lap.kind === 'complete'
+      ? lap.validity === 'no official time' ? 'No official time' : 'No recorded time' : lap.kind;
+}
+const sectorZoomButtons = [...document.querySelectorAll('[data-zoom-sector]')];
+function updateSectorZoom(data) {
+  const bounds = new Map();
+  const channel = data?.channels['Current Sector'];
+  if (channel) {
+    const {start, end} = data.lap;
+    const firstSample = Math.min(start + .03, end);
+    let from = start;
+    let state = sample(channel, firstSample)?.[0];
+    const addInterval = until => {
+      // LMU uses 0 for the third sector.
+      const sector = state === 0 ? 3 : state;
+      if (![1, 2, 3].includes(sector) || until - from < .1) return;
+      const left = data.distanceAt(from), right = data.distanceAt(until);
+      if (right - left <= .01) return;
+      const previous = bounds.get(sector);
+      if (!previous || right - left > previous[1] - previous[0]) bounds.set(sector, [left, right]);
+    };
+    for (const [time, next] of channel.rows) {
+      if (time <= firstSample || time >= end || next === state) continue;
+      addInterval(time);
+      from = time;
+      state = next;
+    }
+    addInterval(end);
+  }
+  for (const button of sectorZoomButtons) {
+    const sectorRange = bounds.get(Number(button.dataset.zoomSector));
+    button.disabled = !sectorRange;
+    button.onclick = sectorRange ? () => {
+      stop();
+      selection = null;
+      pinned = false;
+      setTelemetryZoom([...sectorRange]);
+      updatePin();
+      seek(range[0], false);
+    } : null;
+  }
+}
+function resetZoom() {
+  if (!primary) return;
+  range = [primary.extent[0], Math.max(primary.extent[1], primary.extent[0]+.01)];
+  restoreTrackCamera();
+  scheduleRender();
+}
+function setTelemetryZoom(next) {
+  range = next;
+  if (next[0] <= primary.extent[0] + .01 && next[1] >= primary.extent[1] - .01) {
+    restoreTrackCamera();
+    return;
+  }
+  previousTrackCamera ??= {mode:trackCameraMode.value, camera:{...trackCamera}, override:trackCameraOverride};
+  selectedSectionOption.disabled = false;
+  trackCameraMode.value = 'section';
+  trackCameraOverride = undefined;
+}
+function availableChannels() {
+  if (!ready) return [];
+  return [...new Set([...Object.keys(primary.channels), ...Object.keys(secondary?.channels || {})])]
+    .sort((a, b) => a.localeCompare(b));
+}
+function orderedChannels() {
+  const available = new Set(availableChannels());
+  return [...enabled].filter(name => available.has(name));
+}
+function buildChannels(updateSelector = true) {
+  if (!ready) return;
+  readoutRows = [];
+  const rows = orderedChannels().map(name => {
+    const row = node('div', undefined, 'channel');
+    const read = node('div', undefined, 'reading');
+    const a = node('span', '—', 'selected-color');
+    const b = node('span', '—', 'reference-color');
+    read.append(a);
+    if (secondary) read.append(b);
+    row.append(node('h3', telemetryName(name), 'channel-title'), read);
+    readoutRows.push({name, a, b});
+    return row;
+  });
+  $('channel-list').replaceChildren(...rows);
+  if (!rows.length) $('channel-list').append(node('p', 'Use Select Channels to show their values here.'));
+  if (updateSelector && $('channel-dialog').open) {
+    if ($('channel-order-pane').hidden) buildChannelSelector(); else buildChannelOrder();
+  }
+  scheduleRender();
+}
+function shownChannels() {
+  const filter = $('channel-search').value.trim().toLowerCase();
+  return availableChannels().filter(name => name.toLowerCase().includes(filter) || telemetryName(name).toLowerCase().includes(filter));
+}
+function updateChannelCount() {
+  const available = availableChannels();
+  $('channel-count').textContent = available.filter(name => enabled.has(name)).length + ' of ' + available.length + ' enabled';
+}
+function buildChannelSelector() {
+  const options = shownChannels().map(name => {
+    const label = node('label');
+    const box = node('input');
+    box.type = 'checkbox';
+    box.checked = enabled.has(name);
+    box.addEventListener('change', () => {
+      if (box.checked) enabled.add(name); else enabled.delete(name);
+      save({enabled:[...enabled]});
+      buildChannels(false);
+      updateChannelCount();
+    });
+    label.append(box, telemetryName(name));
+    return label;
+  });
+  $('channel-options').replaceChildren(...options);
+  if (!options.length) $('channel-options').append(node('p', 'No channels found.'));
+  updateChannelCount();
+}
+
+function buildChannelOrder(movedName, direction) {
+  const names = orderedChannels();
+  let focusButton;
+  const rows = names.map((name, index) => {
+    const row = node('li');
+    row.append(node('span', telemetryName(name)));
+    for (const [offset, symbol, action] of [[-1, '↑', 'up'], [1, '↓', 'down']]) {
+      const button = node('button', symbol);
+      button.setAttribute('aria-label', 'Move ' + telemetryName(name) + ' ' + action);
+      const neighbor = names[index+offset];
+      button.disabled = neighbor === undefined;
+      button.onclick=()=>{
+        const order = [...enabled];
+        const from = order.indexOf(name);
+        const to = order.indexOf(neighbor);
+        [order[from], order[to]] = [order[to], order[from]];
+        enabled = new Set(order);
+        save({enabled:order});
+        buildChannels(false);
+        buildChannelOrder(name, offset);
+      };
+      if (name === movedName && !button.disabled && (!focusButton || offset === direction)) focusButton = button;
+      row.append(button);
+    }
+    return row;
+  });
+  $('channel-order-options').replaceChildren(...rows);
+  $('channel-order-empty').hidden = names.length > 0;
+  focusButton?.focus();
+}
+function showChannelMode(order) {
+  $('channel-select-tab').setAttribute('aria-pressed', String(!order));
+  $('channel-order-tab').setAttribute('aria-pressed', String(order));
+  $('channel-select-pane').hidden = order;
+  $('channel-order-pane').hidden = !order;
+  if (order) buildChannelOrder(); else buildChannelSelector();
+}
+
+function updateMergePicker() {
+  const filter = $('merge-search').value.trim().toLowerCase();
+  const names = availableChannels().filter(name => (name.toLowerCase().includes(filter) || telemetryName(name).toLowerCase().includes(filter)) &&
+    [primary, secondary].some(data => data?.channels[name]?.rows.some(row => {
+      const channel = data.channels[name];
+      return (channel.rate ? row : row.slice(1)).some(Number.isFinite);
+    })));
+  $('merge-options').replaceChildren(...names.map(name => {
+    const label = node('label');
+    const box = node('input');
+    box.type = 'checkbox';
+    box.checked = mergeChoices.has(name);
+    box.addEventListener('change', () => {
+      if (box.checked) mergeChoices.add(name); else mergeChoices.delete(name);
+      updateMergeCount();
+    });
+    const unit = displayUnit(name,(primary.channels[name] || secondary?.channels[name])?.unit);
+    label.append(box, telemetryName(name) + (unit ? ' · ' + unit : ''));
+    return label;
+  }));
+  if (!names.length) $('merge-options').append(node('p','No numeric channels found.'));
+  updateMergeCount();
+}
+function updateMergeCount() {
+  $('merge-count').textContent = mergeChoices.size + ' selected';
+}
+function openMerge() {
+  if (!ready) return;
+  mergeChoices = new Set(settings.deltaChannels || []);
+  $('merge-search').value = '';
+  $('merge-dialog').showModal();
+  updateMergePicker();
+  $('merge-search').focus();
+}
+$('merge-search').oninput = updateMergePicker;
+$('cancel-merge').onclick = () => $('merge-dialog').close();
+$('merge-form').onsubmit = event => {
+  event.preventDefault();
+  save({deltaChannels:[...mergeChoices]});
+  $('merge-dialog').close();
+  buildCharts();
+};
+function colorControl(label, key, fallback, onChange) {
+  const input = node('input',undefined,'chart-color');
+  input.type = 'color';
+  input.value = graphColor(key,fallback);
+  input.title = label + ' colour';
+  input.setAttribute('aria-label', input.title);
+  input.addEventListener('input', () => {
+    settings.colors = {...settings.colors,[key]:input.value};
+    onChange();
+  });
+  input.addEventListener('change', () => save({colors:settings.colors}));
+  return input;
+}
+
+function canvasFont() { return 14 * textScale() + 'px Consolas, monospace'; }
+function xBounds(width) {
+  const left = 72 * textScale();
+  return [left, Math.max(left + 3, width - 30 * textScale())];
+}
+let displayPicker;
+function openDisplayPicker(title, key, options, apply) {
+  if ($('graph-dialog').open) return;
+  displayPicker = {key, apply};
+  const isSummary = key === 'hiddenSummary';
+  const list = $('graph-options');
+  list.classList.toggle('summary-channel-options', isSummary);
+  $('graph-dialog-title').textContent = title;
+  $('summary-channel-note').hidden = key !== 'hiddenSummary';
+  $('graph-options-search').value = '';
+  $('graph-options-empty').hidden = true;
+  const hidden = key === 'hiddenSummary' ? hiddenSummaryChannels() : new Set(settings[key] ?? defaultHiddenGraphs);
+  list.replaceChildren(...options.map(([title, value, checked]) => {
+    const label = node('label');
+    const checkbox = node('input');
+    checkbox.type = 'checkbox';
+    checkbox.value = value;
+    checkbox.checked = checked ?? !hidden.has(value);
+    if (checked !== undefined) checkbox.dataset.extraChannel = '';
+    label.append(checkbox, title);
+    if (!isSummary) return label;
+    const row = node('div', undefined, 'summary-channel-option');
+    row.append(label);
+    for (const [direction, symbol] of [['up', '↑'], ['down', '↓']]) {
+      const button = node('button', symbol);
+      button.type = 'button';
+      button.dataset.move = direction;
+      button.setAttribute('aria-label', 'Move ' + title + ' ' + direction);
+      button.onclick = () => {
+        const visible = [...list.children].filter(item => !item.hidden);
+        const target = visible[visible.indexOf(row) + (direction === 'up' ? -1 : 1)];
+        if (!target) return;
+        list.insertBefore(row, direction === 'up' ? target : target.nextElementSibling);
+        displayPicker.reordered = true;
+        updateSummaryMoveButtons();
+        (button.disabled ? checkbox : button).focus();
+      };
+      row.append(button);
+    }
+    return row;
+  }));
+  if (isSummary) updateSummaryMoveButtons();
+  $('graph-dialog').showModal();
+  $('graph-options-search').focus();
+}
+function updateSummaryMoveButtons() {
+  const visible = [...$('graph-options').children].filter(row => !row.hidden);
+  visible.forEach((row, index) => {
+    row.querySelector('[data-move="up"]').disabled = index === 0;
+    row.querySelector('[data-move="down"]').disabled = index === visible.length - 1;
+  });
+}
+$('graph-options-search').oninput = event => {
+  const query = event.target.value.trim().toLowerCase();
+  let matches = 0;
+  for (const row of $('graph-options').children) {
+    const input = row.querySelector('input');
+    row.hidden = !input.closest('label').textContent.toLowerCase().includes(query) && !input.value.toLowerCase().includes(query);
+    if (!row.hidden) matches++;
+  }
+  if (displayPicker.key === 'hiddenSummary') updateSummaryMoveButtons();
+  $('graph-options-empty').hidden = matches > 0;
+};
+function openGraphPicker() {
+  const chosen = new Set(settings.extraGraphChannels);
+  const names = new Set([...chosen, ...availableChannels(), ...sessions.flatMap(session => session.summaryChannels ?? [])]);
+  const extra = [...names].filter(name => !builtInGraphKeys.has(name)).sort((a, b) => a.localeCompare(b))
+    .map(name => [telemetryName(name), name, chosen.has(name)]);
+  openDisplayPicker('Select Active Telemetry Graphs', 'hiddenGraphs', [deltaGraph, ...chartSpecs.map(([label, key]) => [telemetryName(key, label), key]), ...extra], () => {
+    if (ready) buildCharts();
+  });
+}
+$('choose-graphs').onclick=openGraphPicker;
+$('settings-graphs').onclick=openGraphPicker;
+const telemetryNamesDialog = $('telemetry-names-dialog');
+const telemetryNameFields = $('telemetry-name-fields');
+$('settings-telemetry-names').onclick = () => {
+  const names = new Set([
+    ...defaultTelemetryNames.keys(), ...Object.keys(settings.telemetryNames ?? {}),
+    ...Object.keys(settings.telemetryDecimals ?? {}), ...Object.values(builtIn).flat(),
+    ...summaryTemperatureOptions.map(([key]) => summaryChannelKeys[key] ?? key),
+    ...derivedSummaryChannels.keys(),
+    ...availableChannels(), ...sessions.flatMap(session => session.summaryChannels ?? [])
+  ]);
+  telemetryNameFields.replaceChildren(...[...names].sort((a, b) => a.localeCompare(b)).map(key => {
+    const row = node('div', undefined, 'telemetry-display-row');
+    const source = summaryTemperatureOptions.find(([name]) => name === key)?.[1] ??
+      derivedSummaryChannels.get(key)?.[1] ?? (key === 'virtualEnergy' ? 'Virtual Energy summary' : key);
+    const input = node('input');
+    input.type = 'text';
+    input.dataset.channel = key;
+    input.maxLength = 80;
+    input.placeholder = defaultTelemetryNames.get(key) ?? key;
+    input.value = telemetryName(key);
+    input.setAttribute('aria-label', source + ' display name');
+    const decimals = node('input');
+    decimals.type = 'number';
+    decimals.min = '0';
+    decimals.max = '6';
+    decimals.step = '1';
+    decimals.setAttribute('aria-label', source + ' decimal places');
+    decimals.disabled = key === 'Engine RPM' || key === 'Gear';
+    const fallback = summaryDecimalDefault(key);
+    decimals.defaultValue = String(telemetryDecimalPlaces(key, fallback));
+    decimals.placeholder = String(telemetryDecimalPlaces(key, fallback, null));
+    row.append(node('span', source), input, decimals);
+    return row;
+  }));
+  $('telemetry-names-search').value = '';
+  telemetryNamesDialog.showModal();
+  $('telemetry-names-search').focus();
+};
+$('telemetry-names-search').oninput = event => {
+  const query = event.target.value.trim().toLowerCase();
+  for (const input of telemetryNameFields.querySelectorAll('input[type=text]')) {
+    input.parentElement.hidden = ![input.dataset.channel, input.value, input.placeholder, input.parentElement.firstElementChild.textContent]
+      .some(text => text.toLowerCase().includes(query));
+  }
+};
+$('cancel-telemetry-names').onclick = () => telemetryNamesDialog.close();
+$('telemetry-names-form').onsubmit = event => {
+  event.preventDefault();
+  const entries = [...telemetryNameFields.querySelectorAll('input[type=text]')]
+    .map(input => [input.dataset.channel, input.value.trim()])
+    .filter(([key, value]) => value && value !== (defaultTelemetryNames.get(key) ?? key));
+  const telemetryDecimals = {...settings.telemetryDecimals};
+  for (const row of telemetryNameFields.children) {
+    const key = row.querySelector('input[type=text]').dataset.channel;
+    const decimals = row.querySelector('input[type=number]');
+    if (decimals.disabled || decimals.value === '') delete telemetryDecimals[key];
+    else if (decimals.value !== decimals.defaultValue) telemetryDecimals[key] = decimals.valueAsNumber;
+  }
+  save({telemetryNames:Object.fromEntries(entries), telemetryDecimals});
+  if (view === 'records') renderRecords();
+  telemetryNamesDialog.close();
+  renderSessionSummary();
+  if (ready) {
+    buildChannels();
+    buildCharts();
+  }
+};
+function openSummaryChannelPicker(event) {
+  const dialog = $('graph-dialog');
+  const owner = event?.currentTarget?.ownerDocument;
+  if (dialog.open) return;
+  if (owner && owner !== document) owner.body.append(dialog);
+  const options = [
+    ...summaryTemperatureOptions, ['virtualEnergy', 'Virtual Energy per Lap']
+  ].map(([key, label]) => [telemetryName(summaryChannelKeys[key] ?? key, label), key]);
+  const chosen = new Set(settings.extraSummaryChannels);
+  const names = availableSummaryChannels(selected?.summaryChannels ?? sessions.flatMap(session => session.summaryChannels ?? []));
+  for (const name of [...names].filter(name => !defaultSummaryChannels.has(name)).sort((a, b) => a.localeCompare(b))) {
+    options.push([extraSummaryName(name), name, chosen.has(name)]);
+  }
+  openDisplayPicker('Choose Session Summary channels', 'hiddenSummary', orderSummaryOptions(options, ([, key]) => key), renderSessionSummary);
+}
+$('settings-summary').onclick = openSummaryChannelPicker;
+$('choose-summary-channels').onclick = openSummaryChannelPicker;
+$('cancel-graphs').onclick=()=>$('graph-dialog').close();
+$('graph-form').onsubmit=event=>{
+  event.preventDefault();
+  const isSummary = displayPicker.key === 'hiddenSummary';
+  const hidden = isSummary ? hiddenSummaryChannels() : new Set();
+  const selectionKey = isSummary ? 'extraSummaryChannels' : 'extraGraphChannels';
+  const chosen = new Set(isSummary ? settings[selectionKey] : []);
+  for (const input of $('graph-options').querySelectorAll('input')) {
+    const list = input.hasAttribute('data-extra-channel') ? chosen : hidden;
+    const include = list === chosen ? input.checked : !input.checked;
+    if (include) list.add(input.value);
+    else list.delete(input.value);
+  }
+  const changes = {[displayPicker.key]:[...hidden], [selectionKey]:[...chosen]};
+  if (isSummary && displayPicker.reordered) {
+    const shown = [...$('graph-options').querySelectorAll('input')].map(input => input.value);
+    const shownKeys = new Set(shown);
+    changes.summaryChannelOrder = [...shown, ...(settings.summaryChannelOrder ?? []).filter(key => !shownKeys.has(key))];
+  }
+  save(changes);
+  $('graph-dialog').close();
+  displayPicker.apply();
+};
+
+function hasActivationData(channel) {
+  return [primary, secondary].some(data => data?.channels[channel]?.rows.length);
+}
+
+function speedActivationControls(controls, track = false) {
+  return speedActivations.map(([channel, colour]) => {
+    const label = node('label', undefined, 'speed-activation');
+    const checkbox = node('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !!settings.speedActivations?.[channel];
+    checkbox.disabled = !hasActivationData(channel);
+    controls.get(channel).push(checkbox);
+    label.title = checkbox.disabled ? channel + ' activation was not recorded'
+      : track ? channel + ' activation on each lap’s racing line.'
+      : channel + ' activation on each lap’s speed trace.';
+    const swatch = node('span', undefined, 'speed-activation-swatch');
+    swatch.style.backgroundColor = colour;
+    label.append(checkbox, swatch, channel);
+    checkbox.onchange = () => {
+      save({speedActivations: {...settings.speedActivations, [channel]: checkbox.checked}});
+      for (const control of controls.get(channel)) control.checked = checkbox.checked;
+      for (const chartRow of chartRows) if (chartRow.hasSpeedTrace) chartRow.cache = null;
+      scheduleRender();
+    };
+    return label;
+  });
+}
+
+let cornerTimeLossOpen = true;
+let cornerTimeLossHeight;
+
+function cornerComparisonLabel(currentLap, comparison) {
+  const current = currentLap.number == null ? 'Selected Lap' : 'Lap ' + currentLap.number;
+  const [, driver] = chartDriverLabels(selected?.driver, comparison.session.driver);
+  const referenceLap = comparison.lap;
+  const referenceLabel = referenceLap.number == null ? 'Reference Lap' : 'Lap ' + referenceLap.number;
+  if (!comparison.imported && comparison.session.path === referenceSessionPath) {
+    return current + ' vs ' + (referenceLap.number == null ? 'a lap' : referenceLabel) + ' of the Reference Session';
+  }
+  const time = referenceLap.time > 0 ? lapTime(referenceLap.time) : '';
+  const target = driver === 'Reference' ? referenceLabel : driver + ' ' + (time || referenceLabel);
+  return current + ' vs ' + target;
+}
+
+let cornerEventMarkers = [];
+let selectedCorner;
+const cornerHighlightColour = '#f5cc68';
+
+function cornerPedalCrossings(data, channelName, from, to, threshold, rising) {
+  const channel = data.channels[channelName];
+  if (!channel?.times.length) return [];
+  const offset = channel.rate ? 0 : 1;
+  const first = Math.max(1, lowerBound(channel.times, data.timeAt(from)));
+  const end = Math.min(channel.times.length - 1, lowerBound(channel.times, data.timeAt(to)));
+  const crossings = [];
+  for (let i = first; i <= end; i++) {
+    const before = channel.rows[i - 1][offset], after = channel.rows[i][offset];
+    const span = channel.times[i] - channel.times[i - 1];
+    if (!Number.isFinite(before) || !Number.isFinite(after) || span <= 0 || span > .5) continue;
+    if (!(rising ? before < threshold && after >= threshold : before >= threshold && after < threshold)) continue;
+    const time = channel.times[i - 1] + span * (threshold - before) / (after - before);
+    const distance = data.distanceAt(time);
+    if (distance >= from && distance <= to) crossings.push({channelName, distance, value:threshold});
+  }
+  return crossings;
+}
+
+function mainCornerBraking(data, approach, apex, exit) {
+  const channelName = 'Brake Pos';
+  const threshold = 5;
+  const onsets = cornerPedalCrossings(data, channelName, approach, exit, threshold, true);
+  const releases = cornerPedalCrossings(data, channelName, approach, exit, threshold, false);
+  const approachTime = data.timeAt(approach);
+  const channel = data.channels[channelName];
+  const alreadyBraking = approachTime >= channel?.times[0] && approachTime <= channel.times.at(-1) &&
+    sample(channel, approachTime)?.[0] >= threshold;
+  if (alreadyBraking) onsets.unshift(null);
+
+  // Compare applications by duration so a late tap cannot replace the main braking zone.
+  let longest = 0;
+  let main = {};
+  for (const [index, on] of onsets.entries()) {
+    const start = on?.distance ?? approach;
+    if (start > apex) break;
+    const nextStart = onsets[index + 1]?.distance ?? Infinity;
+    const off = releases.find(event => event.distance > start && event.distance < nextStart);
+    if (!off && nextStart !== Infinity) continue;
+    const duration = data.timeAt(off?.distance ?? exit) - data.timeAt(start);
+    if (duration > longest) {
+      longest = duration;
+      main = {brakeOn:on, brakeOff:off};
+    }
+  }
+  return main;
+}
+
+function nextBrakeAfterCorner(data, exit) {
+  return cornerPedalCrossings(data, 'Brake Pos', exit, data.extent[1], 5, true)
+    .find(event => event.distance > exit);
+}
+
+function postCornerMaxSpeed(data, points, exit) {
+  const braking = nextBrakeAfterCorner(data, exit);
+  const speed = data.channels['Ground Speed'];
+  if (!braking || !speed?.times.length) return undefined;
+  const from = data.timeAt(exit), to = data.timeAt(braking.distance);
+  if (from < speed.times[0] || to > speed.times.at(-1)) return undefined;
+  let max = -Infinity;
+  for (const time of [from, to]) {
+    const value = convert('Ground Speed', sample(speed, time)?.[0], speed.unit);
+    if (Number.isFinite(value)) max = Math.max(max, value);
+  }
+  for (const [distance, [value]] of points) {
+    if (distance > exit && distance < braking.distance && Number.isFinite(value)) max = Math.max(max, value);
+  }
+  return max;
+}
+
+function cornerStraightComparison(laps, exit, nextCorner, gapAt) {
+  if (!nextCorner) return null;
+  const onsets = laps.map(data => mainCornerBraking(data, exit, nextCorner.apex, nextCorner.to).brakeOn?.distance);
+  if (!onsets.every(Number.isFinite)) return null;
+  const point = Math.min(...onsets);
+  if (point <= exit) return null;
+  const atExit = gapAt(exit), atBraking = gapAt(point);
+  if (!Number.isFinite(atExit) || !Number.isFinite(atBraking)) return null;
+  return {atExit, atBraking, straight:atBraking - atExit};
+}
+
+function expandedCorner(from, apex, to, approach, selectedDriver, referenceDriver, nextCorner, minimums, maxima) {
+  const detail = node('div', undefined, 'corner-detail');
+  const heading = node('div', undefined, 'corner-detail-heading');
+  heading.append(node('h3', 'Where the Gap Changed'), node('span', 'Positive = time lost'));
+  detail.append(heading);
+  // Use the same phase boundaries for both laps, centred on the estimated apex.
+  const startGap = delta(from);
+  const boundaries = [from, (from + apex) / 2, (apex + to) / 2, to]
+    .map(distance => Math.round((delta(distance) - startGap) * 1000));
+  const phases = ['Entry', 'Mid-corner', 'Exit'].map((label, index) =>
+    [label, (boundaries[index + 1] - boundaries[index]) / 1000]);
+  const largestLoss = phases.reduce((largest, [label, gap]) =>
+    gap > largest[1] ? [label, gap] : largest, ['', 0]);
+  const phaseBar = node('div', undefined, 'corner-detail-phases');
+  for (const [label, gap] of phases) {
+    const phase = node('div');
+    if (label === largestLoss[0]) phase.classList.add('largest-loss');
+    phase.append(node('span', label), node('strong', (gap > 0 ? '+' : '') + number(gap, 3) + ' s',
+      gap > 0 ? 'corner-loss' : gap < 0 ? 'corner-gain' : undefined));
+    phaseBar.append(phase);
+  }
+  detail.append(phaseBar);
+
+  const laps = [primary, secondary];
+  const events = laps.map(data => {
+    const throttle = 'Throttle Pos';
+    const {brakeOn, brakeOff} = mainCornerBraking(data, approach, apex, to);
+    const throttleStart = Math.max((from + apex) / 2, brakeOff?.distance ?? apex);
+    const throttleOn = cornerPedalCrossings(data, throttle, throttleStart, to, 20, true)[0];
+    const fullThrottle = cornerPedalCrossings(data, throttle, throttleOn?.distance ?? throttleStart, to, 95, true)[0];
+    const speed = data.channels['Ground Speed'];
+    const time = data.timeAt(to);
+    const exitSpeed = time >= speed?.times[0] && time <= speed.times.at(-1)
+      ? sample(speed, time)?.[0] : undefined;
+    return {pedals:[brakeOn, brakeOff, throttleOn, fullThrottle], exitSpeed};
+  });
+
+  const table = node('table');
+  const head = node('thead');
+  const header = node('tr');
+  header.append(node('th', 'Telemetry Event'), node('th', selectedDriver, 'corner-selected-speed'),
+    node('th', referenceDriver, 'reference-color'), node('th', 'Difference'));
+  header.children[1].style.color = graphColor('Ground Speed');
+  head.append(header);
+  const body = node('tbody');
+  table.append(head, body);
+  const addRow = (label, readings, difference) => {
+    const row = node('tr');
+    const title = node('th', label);
+    title.scope = 'row';
+    row.append(title, ...readings.map(value => node('td', value)), node('td', difference));
+    body.append(row);
+  };
+  for (const [index, label] of ['Brake On', 'Brake Off', 'Throttle On', 'Full Throttle'].entries()) {
+    const [own, other] = events.map(event => event.pedals[index]?.distance);
+    const readings = [own, other].map(distance => {
+      if (!Number.isFinite(distance)) return '—';
+      const offset = Math.round(distance - apex);
+      return offset ? Math.abs(offset) + ' m ' + (offset < 0 ? 'before apex' : 'after apex') : 'At apex';
+    });
+    const difference = Math.round(own - apex) - Math.round(other - apex);
+    addRow(label, readings, !Number.isFinite(difference) ? '—' : difference === 0 ? 'Within 1 m'
+      : selectedDriver + ' ' + Math.abs(difference) + ' m ' + (difference < 0 ? 'earlier' : 'later'));
+  }
+  const speeds = events.map(event => event.exitSpeed);
+  const digits = telemetryDecimalPlaces('Ground Speed');
+  for (const [label, values] of [
+    ['Minimum Speed', minimums], ['Speed at Corner Exit', speeds], ['Post Corner Max Speed', maxima]
+  ]) {
+    const difference = values[0] - values[1];
+    addRow(label, values.map(value => Number.isFinite(value) ? number(value, digits) + ' km/h' : '—'),
+      !Number.isFinite(difference) ? '—' : Number(number(difference, digits)) === 0 ? 'Same speed'
+        : selectedDriver + ' ' + number(Math.abs(difference), digits) + ' km/h ' + (difference < 0 ? 'slower' : 'faster'));
+  }
+  const scroll = node('div', undefined, 'corner-detail-table');
+  scroll.append(table);
+  const trace = {Entry:'the brake trace', 'Mid-corner':'the speed and brake traces', Exit:'the throttle trace'}[largestLoss[0]];
+  detail.append(scroll);
+  const straight = cornerStraightComparison(laps, to, nextCorner, distance => delta(distance) - startGap);
+  const straightSection = node('section', undefined, 'corner-straight');
+  straightSection.append(node('h3', 'Exit to Next Braking Point'));
+  if (straight) {
+    const metrics = node('div', undefined, 'corner-detail-phases');
+    for (const [label, value] of [['At Corner Exit', straight.atExit], ['At Next Braking', straight.atBraking], ['Change on Straight', straight.straight]]) {
+      const gap = Math.round(value * 1000) / 1000;
+      const cell = node('div');
+      cell.append(node('span', label), node('strong', (gap > 0 ? '+' : '') + number(gap, 3) + ' s',
+        gap > 0 ? 'corner-loss' : gap < 0 ? 'corner-gain' : undefined));
+      metrics.append(cell);
+    }
+    straightSection.append(metrics, node('p', 'Both laps are compared at the same point, where the first driver starts braking for Corner ' + (nextCorner.index + 1) + '.'));
+  } else {
+    straightSection.append(node('p', 'No comparable next braking point in the recorded section.'));
+  }
+  detail.append(straightSection);
+  if (trace) detail.append(node('p', largestLoss[0] + ' has the largest time loss. Compare ' + trace + '.'));
+  detail.append(node('p', 'Estimated apex · Brake 5% · Throttle 20% · Full throttle 95%'));
+  return {detail, markers:events.flatMap(({pedals}, index) => pedals.filter(Boolean).map(event => ({...event, reference:index === 1})))};
+}
+
+function reviewingPracticeCorner() {
+  return practiceComparison && selected?.path === practiceComparison.path && lap?.id === practiceComparison.lapId &&
+    reference?.session.path === practiceComparison.path && reference.lap.id === practiceComparison.benchmarkId;
+}
+function cornerTimeLossPanel() {
+  const panel = node('section', undefined, 'corner-time-loss');
+  panel.id = 'corner-time-loss';
+  panel.setAttribute('aria-label', 'Corner Time Loss');
+  const comparisonLabel = cornerComparisonLabel(lap, reference);
+  panel.append(node('p', comparisonLabel));
+
+  const gps = route(primary);
+  const correction = gps.length ? Math.cos(gps[0][1] * Math.PI / 180) : 1;
+  const start = Math.max(primary.extent[0], secondary.extent[0]);
+  const finish = Math.min(primary.extent[1], secondary.extent[1]);
+  const speeds = [primary, secondary].map(data => trace(data, 'Ground Speed'));
+  const geometry = reviewingPracticeCorner() ? practiceComparison.corners : routeCorners(primary, correction)
+    .map((corner, index) => ({index, from:primary.distanceAt(corner.start), to:primary.distanceAt(corner.end)}));
+  const corners = geometry.map(({index, from, to}) => {
+    if (from < start || to > finish || to <= from) return null;
+    const change = delta(to) - delta(from);
+    if (!Number.isFinite(change)) return null;
+    const minimums = speeds.map(points => points.reduce((minimum, point) =>
+      point[0] >= from && point[0] <= to && Number.isFinite(point[1][0]) && point[1][0] < (minimum?.[1][0] ?? Infinity)
+        ? point : minimum, null));
+    const minimumAt = minimums[0]?.[0];
+    const apex = minimumAt > from && minimumAt < to ? minimumAt : (from + to) / 2;
+    return {index, from, apex, to, change, minimums:minimums.map(point => point?.[1][0])};
+  }).filter(Boolean).sort((a, b) => b.change - a.change);
+
+  const cornersByDistance = [...corners].sort((a, b) => a.from - b.from);
+  let expandedButton, expandedDetail;
+  let expandedMarkers = [];
+  const toggle = node('button', undefined, 'chart-edit');
+  const chevron = node('span', '›', 'corner-toggle-chevron');
+  chevron.setAttribute('aria-hidden', 'true');
+  const toggleLabel = node('span');
+  toggle.append(chevron, toggleLabel);
+  toggle.type = 'button';
+  toggle.setAttribute('aria-controls', panel.id);
+  const updateVisibility = () => {
+    panel.hidden = !cornerTimeLossOpen;
+    toggleLabel.textContent = cornerTimeLossOpen ? 'Hide Corner Time Loss' : 'Show Corner Time Loss';
+    toggle.setAttribute('aria-expanded', String(cornerTimeLossOpen));
+  };
+  updateVisibility();
+  toggle.onclick = () => {
+    cornerTimeLossOpen = !cornerTimeLossOpen;
+    if (cornerTimeLossOpen) resetHeight();
+    cornerEventMarkers = cornerTimeLossOpen ? expandedMarkers : [];
+    updateVisibility();
+    scheduleRender();
+  };
+
+  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference.session.driver);
+  const comparedDriver = referenceDriver === 'Reference' ? 'Reference Lap' : referenceDriver;
+  const speedDigits = telemetryDecimalPlaces('Ground Speed');
+  const note = corners.length ? 'Estimated corners · Largest time loss first'
+    : 'No comparable corners were detected in the recorded GPS route.';
+  panel.append(node('p', note));
+  const speedText = value => Number.isFinite(value) ? number(value, speedDigits) + ' km/h' : '—';
+  const cornerRows = corners.map(({index, from, apex, to, change, minimums}) => {
+    const displayed = Math.round(change * 1000) / 1000;
+    const maxima = [primary, secondary].map((data, i) => postCornerMaxSpeed(data, speeds[i], to));
+    return {index, from, apex, to, change:displayed, minimums, maxima, labels:[
+      'Corner ' + (index + 1),
+      selectedDriver + ' ' + number(minimums[0], speedDigits) + ' km/h',
+      comparedDriver + ' ' + number(minimums[1], speedDigits) + ' km/h',
+      timeGapLabel(displayed),
+      selectedDriver + ' ' + speedText(maxima[0]),
+      comparedDriver + ' ' + speedText(maxima[1])
+    ]};
+  });
+  const list = node('ol');
+  const resetHeight = () => {
+    cornerTimeLossHeight = undefined;
+    list.style.removeProperty('max-height');
+  };
+  if (cornerRows.length) panel.append(list);
+  for (const {index, from, apex, to, change, minimums, maxima, labels} of cornerRows) {
+    const button = node('button');
+    button.type = 'button';
+    const selectedSpeed = node('span', labels[1], 'corner-selected-speed');
+    selectedSpeed.style.color = graphColor('Ground Speed');
+    const referenceSpeed = node('span', labels[2], 'reference-color');
+    const speedComparison = node('span', undefined, 'corner-speed-comparison');
+    speedComparison.append(selectedSpeed, ' ', node('span', 'Minimum Speed vs'), ' ', referenceSpeed);
+    const selectedMax = node('span', labels[4], 'corner-selected-speed');
+    selectedMax.style.color = selectedSpeed.style.color;
+    const maxComparison = node('span', undefined, 'corner-max-comparison');
+    maxComparison.append(node('span', 'Post Corner Max Speed '), selectedMax, ' ', node('span', 'vs'), ' ',
+      node('span', labels[5], 'reference-color'));
+    const separator = node('span', '|', 'corner-speed-separator');
+    separator.setAttribute('aria-hidden', 'true');
+    button.append(node('strong', labels[0]), speedComparison, separator, maxComparison,
+      node('strong', labels[3], change > 0 ? 'corner-loss' : change < 0 ? 'corner-gain' : undefined));
+    const item = node('li');
+    button.setAttribute('aria-expanded', 'false');
+    button.dataset.cornerIndex = index;
+    button.onclick = () => {
+      const wasExpanded = expandedButton === button;
+      expandedButton?.setAttribute('aria-expanded', 'false');
+      expandedDetail?.remove();
+      expandedButton = expandedDetail = undefined;
+      cornerEventMarkers = expandedMarkers = [];
+      selectedCorner = undefined;
+      if (wasExpanded) {
+        scheduleRender();
+        return;
+      }
+      const approach = Math.max(start, from - 150);
+      const nextCorner = cornersByDistance.find(corner => corner.from >= to);
+      const {detail, markers} = expandedCorner(from, apex, to, approach, selectedDriver, comparedDriver, nextCorner, minimums, maxima);
+      if (reviewingPracticeCorner() && practiceComparison.index === index && practiceComparison.best) {
+        const {request, best} = practiceComparison;
+        const actions = node('div', undefined, 'corner-best');
+        const label = 'Best Through This Corner · ' + lapLabel(best.lap) + ' · ' + number(best.time, 3) + ' s';
+        actions.append(node('strong', label));
+        if (best.lap.id === reference.lap.id) {
+          actions.append(node('span', 'Comparing With Best'));
+        } else if (best.lap.id === lap.id) {
+          actions.append(node('span', 'Selected Lap Is Best'));
+        } else {
+          const representative = lap;
+          const compare = node('button', 'Compare With Best');
+          compare.type = 'button';
+          compare.onclick = () => void openPracticeCorner(request, representative, best.lap, index, best);
+          actions.append(compare);
+        }
+        detail.prepend(actions);
+      }
+      const navigation = node('div', undefined, 'corner-navigation');
+      navigation.append(node('strong', labels[0]));
+      const position = cornersByDistance.findIndex(corner => corner.index === index);
+      for (const [label, offset] of [['‹ Previous Corner', -1], ['Next Corner ›', 1]]) {
+        const destination = cornersByDistance[position + offset];
+        const action = node('button', label, 'button-secondary');
+        action.type = 'button';
+        action.disabled = !destination;
+        action.onclick = () => {
+          const target = list.querySelector('[data-corner-index="' + destination.index + '"]');
+          target?.click();
+          target?.focus({preventScroll:true});
+          target?.scrollIntoView({block:'nearest', inline:'nearest'});
+        };
+        navigation.append(action);
+      }
+      if (reviewingPracticeCorner()) {
+        const back = node('button', '← Return to Driver Overview', 'corner-return button-secondary');
+        back.type = 'button';
+        const {overview} = practiceComparison;
+        back.onclick = () => returnToDriverOverview(overview);
+        navigation.append(back);
+      }
+      detail.prepend(navigation);
+      item.append(detail);
+      expandedButton = button;
+      expandedDetail = detail;
+      cornerEventMarkers = expandedMarkers = markers;
+      selectedCorner = {from, to, route:routeSection(primary, from, to)};
+      button.setAttribute('aria-expanded', 'true');
+      stop();
+      selection = null;
+      pinned = false;
+      updatePin();
+      const showPostCorner = reviewingPracticeCorner() &&
+        practiceComparison.index === index && practiceComparison.includePostCorner;
+      const zoomEnd = showPostCorner
+        ? Math.max(to, ...[primary, secondary].map(data => nextBrakeAfterCorner(data, to)?.distance ?? to))
+        : to;
+      setTelemetryZoom([Math.min(from, ...markers.map(event => event.distance)), zoomEnd]);
+      seek(from, false);
+    };
+    item.append(button);
+    list.append(item);
+  }
+  if (cornerRows.length) {
+    const handle = node('button', undefined, 'resize corner-time-loss-resize');
+    handle.type = 'button';
+    handle.setAttribute('aria-label', 'Resize Corner Time Loss. Use arrow keys.');
+    const setHeight = value => {
+      cornerTimeLossHeight = Math.round(Math.max(50, value));
+      list.style.maxHeight = cornerTimeLossHeight + 'px';
+    };
+    if (cornerTimeLossHeight !== undefined) setHeight(cornerTimeLossHeight);
+    attachChartResize(handle, () => list.getBoundingClientRect().height, setHeight, undefined, resetHeight);
+    panel.append(handle);
+  }
+  return {toggle, panel};
+}
+
+function updateActiveLapComparison() {
+  $('active-lap-comparison').hidden = !lap;
+  if (!lap) return;
+  const [driver] = chartDriverLabels(selected?.driver);
+  $('active-selected-lap').textContent = driver + ' · ' + lapLabel(lap);
+  const comparing = !!(reference && secondary);
+  $('active-comparison-vs').hidden = !comparing && !referenceLoading;
+  const referenceLabel = $('active-reference-lap');
+  referenceLabel.classList.toggle('reference-color', comparing);
+  referenceLabel.classList.toggle('reference-loading', referenceLoading && !comparing);
+  referenceLabel.textContent = comparing
+    ? (reference.session.driver?.trim().split(/\s+/)[0] || 'Reference') + ' · ' + lapLabel(reference.lap)
+    : referenceLoading ? 'Loading Reference…' : 'No Reference Lap';
+}
+$('change-active-reference').onclick = () => {
+  const picker = $('reference-select');
+  picker.focus();
+  try { picker.showPicker?.(); } catch {
+    // The focused native control remains available if the picker cannot open programmatically.
+  }
+};
+
+function buildCharts() {
+  updateActiveLapComparison();
+  cornerEventMarkers = [];
+  selectedCorner = undefined;
+  selection = null;
+  chartRows = [];
+  const overlays = settings.deltaChannels || [];
+  const hidden = new Set(settings.hiddenGraphs ?? defaultHiddenGraphs);
+  const chosen = new Set(settings.extraGraphChannels);
+  const extra = availableChannels().filter(name => chosen.has(name) && !builtInGraphKeys.has(name))
+    .map(name => [name, name]);
+  const specs = [...(secondary?.useDistance && primary.useDistance
+    ? [[...deltaGraph,overlays.length ? {channels:overlays} : null]] : []), ...chartSpecs, ...extra]
+    .filter(([,key])=>!hidden.has(key) || (key === 'delta' && reviewingPracticeCorner()));
+  const activationControls = new Map(speedActivations.map(([channel]) => [channel, []]));
+  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference?.session.driver);
+  const deltaWidth = number(Math.max(lap.end - lap.start, secondary ? secondary.lap.end - secondary.lap.start : 0), 3).length + 3;
+  const fragments = specs.map(([label, key, group]) => {
+    const title = key === 'delta' ? label : telemetryName(key, label);
+    const chart = node('section', undefined, 'chart');
+    const head = node('div', undefined, 'card-head');
+    const output = node('output', undefined, 'chart-reading');
+    const channelName = key === 'tyres' ? tyreName() : key;
+    const mainLayout = key === 'delta' ? null : chartReadingLayout(primary, channelName);
+    const referenceLayout = key !== 'delta' && secondary ? chartReadingLayout(secondary, channelName) : null;
+    const readingWidth = mainLayout
+      ? selectedDriver.length + 1 + mainLayout.length + (referenceLayout ? referenceDriver.length + 4 + referenceLayout.length : 0)
+      : deltaWidth;
+    output.style.inlineSize = readingWidth + 'ch';
+    head.append(node('h2', title));
+    head.append(colorControl(title,key,palette[0],()=>{
+      row.cache = null;
+      if (key === 'Ground Speed') {
+        for (const speed of document.querySelectorAll('.corner-selected-speed')) speed.style.color = graphColor(key);
+      }
+      scheduleRender();
+    }));
+    const cornerAnalysis = key === 'delta' ? cornerTimeLossPanel() : null;
+    if (cornerAnalysis) {
+      const edit = node('button',group ? 'Edit Overlays' : 'Add Channels','chart-edit button-secondary');
+      edit.onclick = openMerge;
+      head.append(edit);
+    }
+    const exportImage = node('button', undefined, 'chart-edit chart-export button-secondary');
+    const downloadIcon = node('span', '↓', 'chart-export-icon');
+    downloadIcon.setAttribute('aria-hidden', 'true');
+    exportImage.append(downloadIcon, 'Export Image');
+    exportImage.type = 'button';
+    exportImage.setAttribute('aria-label', 'Export Image for ' + title);
+    exportImage.onclick = async () => {
+      exportImage.disabled = true;
+      try {
+        const saved = await exportChartImage(row, title, exportImage);
+        if (saved) setStatus($('status'), 'Exported ' + saved);
+      } catch (error) {
+        setStatus($('status'), error.message, {error:true});
+      } finally {
+        exportImage.disabled = false;
+      }
+    };
+    if (key === 'tyres') {
+      const select = node('select');
+      select.setAttribute('aria-label', 'Tyre temperature measurement');
+      Object.entries(tyreChannels).forEach(([channel, label]) => option(select, telemetryName(channel, label), channel));
+      select.value = tyreName();
+      select.addEventListener('change', () => { save({tyres:select.value}); buildCharts(); });
+      head.append(select);
+    }
+    const source = primary.channels[key] || secondary?.channels[key];
+    const isWheelChannel = source?.rows[0]?.length === (source?.rate ? 4 : 5) && /tyres|brakes|wheels/i.test(key);
+    if (key === 'tyres' || isWheelChannel) head.append(node('span','FL / FR / RL / RR'));
+    const hasSpeedTrace = key === 'Ground Speed' || group?.channels.includes('Ground Speed');
+    if (hasSpeedTrace) {
+      head.append(...speedActivationControls(activationControls));
+    }
+    const headerEnd = node('div', undefined, 'chart-header-end');
+    if (key === 'Ground Speed') {
+      const readouts = node('span', undefined, 'speed-readouts');
+      readouts.append(speedPeaks(), output);
+      headerEnd.append(readouts);
+    } else {
+      headerEnd.append(output);
+    }
+    headerEnd.append(exportImage);
+    head.append(headerEnd);
+    const canvas = node('canvas');
+    canvas.setAttribute('aria-label', title);
+    const resizer = node('button', undefined, 'resize');
+    resizer.setAttribute('aria-label', 'Resize ' + title + ' chart. Use arrow keys.');
+    const row = {key, canvas, output, cache:null, group, hasSpeedTrace, cornerAnalysis, deltaWidth, mainLayout, referenceLayout, readings:[]};
+    const legend = node('div',undefined,'merge legend');
+    if (group) {
+        group.channels.forEach((name,index) => {
+        const channel = primary.channels[name] || secondary?.channels[name];
+        const unit = displayUnit(name,channel?.unit) || name;
+        const item = node('span');
+        const text = node('span', telemetryName(name) + (channel?.unit ? ' (' + unit + ')' : ''));
+        const read = node('span', undefined, 'chart-reading');
+        const main = chartReadingLayout(primary, name);
+        const ref = secondary ? chartReadingLayout(secondary, name) : null;
+        read.style.inlineSize = (main.length + (ref ? 3 + ref.length : 0)) + 'ch';
+        const fallback = mergeColors[(index + 1) % mergeColors.length], colorKey = key+'|'+name;
+        text.style.color = graphColor(colorKey,fallback);
+        const button = colorControl(telemetryName(name),colorKey,fallback,()=>{
+          text.style.color = graphColor(colorKey,fallback);
+          row.cache = null;
+          scheduleRender();
+        });
+        item.append(button,' ',text,' ',read);
+        row.readings.push({name,read,main,ref});
+        legend.append(item);
+      });
+      legend.prepend(node('span','Delta uses seconds · each other unit has its own scale'));
+    }
+    chartRows.push(row);
+    const setHeight = height => {
+      row.height = Math.min(650, Math.max(75, height));
+      canvas.style.height = row.height + 'px';
+      row.cache = null;
+      scheduleRender();
+    };
+    const persist = () => save({heights:{...settings.heights,[key]:row.height}});
+    const defaultHeight = key === 'delta' ? 285 : key === 'Ground Speed' ? 175 : 135;
+    setHeight(settings.heights?.[key] || defaultHeight);
+    attachChartResize(resizer, () => row.height, setHeight, persist, () => {
+      setHeight(defaultHeight);
+      const heights = {...settings.heights};
+      delete heights[key];
+      save({heights});
+    });
+    function position(event) {
+      const rect = canvas.getBoundingClientRect(), [left,right] = xBounds(rect.width);
+      const f = Math.max(0,Math.min(1,(event.clientX - rect.left - left)/(right-left)));
+      return range[0] + f*(range[1]-range[0]);
+    }
+    canvas.addEventListener('pointerenter', () => {
+      row.hovering = true;
+      scheduleRender();
+    });
+    canvas.addEventListener('pointerleave', () => {
+      row.hovering = false;
+      scheduleRender();
+    });
+    canvas.addEventListener('pointermove', e => {
+      const x = position(e);
+      if (selection?.row === row) { selection.x = x; scheduleRender(); }
+      else if (!pinned && !playing) seek(x, false);
+    });
+    canvas.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      selection = {row, initial:position(e), x:position(e), screen:e.clientX};
+      canvas.setPointerCapture(e.pointerId);
+    });
+    canvas.addEventListener('pointerup', e => {
+      if (selection?.row !== row) return;
+      const x = position(e);
+      if (Math.abs(e.clientX - selection.screen) > 7 && Math.abs(x-selection.initial) > .01) {
+        stop();
+        pinned = false;
+        updatePin();
+        setTelemetryZoom([Math.min(selection.initial,x), Math.max(selection.initial,x)]);
+        seek(range[0], false);
+      } else {
+        stop();
+        pinned = !pinned;
+        if (pinned) pinnedGraph = row.key;
+        seek(x, false);
+        updatePin();
+      }
+      selection = null;
+      scheduleRender();
+    });
+    for (const event of ['pointercancel', 'lostpointercapture']) canvas.addEventListener(event, () => {
+      if (selection?.row !== row) return;
+      selection = null;
+      scheduleRender();
+    });
+    chart.append(head);
+    if (group) chart.append(legend);
+    chart.append(canvas,resizer);
+    if (cornerAnalysis) {
+      const cornerBar = node('div', undefined, 'corner-toggle-bar');
+      cornerBar.append(cornerAnalysis.toggle);
+      chart.append(cornerBar, cornerAnalysis.panel);
+    }
+    return chart;
+  });
+  $('track-activations').replaceChildren(...speedActivationControls(activationControls, true));
+  $('charts').replaceChildren(...fragments);
+  if (!fragments.length) $('charts').append(node('p', 'Use Select Active Telemetry Graphs to show a chart.'));
+  scheduleRender();
+}
+function canvasContext(canvas) {
+  const width = canvas.clientWidth, height = canvas.clientHeight, ratio = canvas.ownerDocument.defaultView.devicePixelRatio || 1;
+  if (!width || !height) return null;
+  if (canvas.width !== Math.round(width*ratio) || canvas.height !== Math.round(height*ratio)) {
+    canvas.width = Math.round(width*ratio);
+    canvas.height = Math.round(height*ratio);
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+  return {ctx,width,height,ratio};
+}
+function trace(data, name) {
+  const channel = data.channels[name];
+  if (!channel?.rows.length) return [];
+  const plotValues = values => values.map(value =>
+    typeof value === 'boolean' ? Number(value) : convert(name, value, channel.unit));
+  if (!channel.rate) {
+    const points = [[data.extent[0],plotValues(sample(channel,data.lap.start) || [])]];
+    channel.rows.forEach(([t,...values]) => {
+      if (t > data.lap.start && t < data.lap.end) points.push([data.distanceAt(t),plotValues(values)]);
+    });
+    points.push([data.extent[1], plotValues(sample(channel,data.lap.end-1e-6) || [])]);
+    return points;
+  }
+  return channel.rows.map((values,i) => [channel.times[i],values])
+    .filter(([t]) => t >= data.lap.start - 1e-6 && t < data.lap.end)
+    .map(([t,values]) => [data.distanceAt(t),plotValues(values)]);
+}
+function deltaHeadingLimits(low, high, plotHeight) {
+  // Leave space on both sides of zero even when every sample has the same sign.
+  const share = Math.min(0.4, 28 * textScale() / Math.max(1, plotHeight));
+  const opposite = share / (1 - share);
+  return [Math.min(low, -high * opposite), Math.max(high, -low * opposite)];
+}
+function paintDeltaHeadings(ctx, left, right, top, bottom) {
+  const inset = 9 * textScale();
+  const maxWidth = Math.max(1, right - left - 2 * inset);
+  ctx.globalAlpha = 1;
+  ctx.font = '600 ' + 13 * textScale() + 'px "Segoe UI", sans-serif';
+  ctx.fillStyle = (lightGraphBackground ? '#253329' : '#b5c2b4');
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText('Losing time compared to the reference lap', left + inset, top + inset, maxWidth);
+  ctx.textBaseline = 'bottom';
+  ctx.fillText('Gaining time compared to the reference lap', left + inset, bottom - inset, maxWidth);
+}
+function* activationIntervals(data, name) {
+  const channel = data.channels[name];
+  if (!settings.speedActivations?.[name] || !channel?.rows.length) return;
+  for (let i = 0; i < channel.rows.length; i++) {
+    const value = channel.rows[i][channel.rate ? 0 : 1];
+    if (value !== true && value !== 1) continue;
+    const start = Math.max(channel.times[i], data.lap.start);
+    const end = Math.min(channel.times[i + 1] ?? data.lap.end, data.lap.end);
+    if (end > start) yield [start, end];
+  }
+}
+function paintSpeedActivations(ctx, x, y) {
+  for (const data of [primary, secondary]) {
+    const speed = data?.channels['Ground Speed'];
+    if (!speed?.rows.length) continue;
+    for (const [name, colour, lightColour] of speedActivations) {
+      ctx.strokeStyle = lightGraphBackground ? lightColour : colour;
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.setLineDash([]);
+      for (const [start, end] of activationIntervals(data, name)) {
+        const from = data.distanceAt(start), to = data.distanceAt(end);
+        if (to < range[0] || from > range[1]) continue;
+        const first = sample(speed, start)?.[0], last = sample(speed, end)?.[0];
+        if (!Number.isFinite(first) || !Number.isFinite(last)) continue;
+        const startX = x(from), endX = x(to);
+        ctx.beginPath();
+        ctx.moveTo(startX, y(first));
+        for (let j = lowerBound(speed.times, start); j < speed.times.length && speed.times[j] < end; j++) {
+          const point = speed.rows[j][speed.rate ? 0 : 1];
+          if (Number.isFinite(point)) ctx.lineTo(x(data.distanceAt(speed.times[j])), y(point));
+        }
+        ctx.lineTo(endX, y(last));
+        ctx.stroke();
+      }
+    }
+  }
+}
+function baseChart(row, width, height, ratio) {
+  const image = document.createElement('canvas');
+  image.width = Math.round(width*ratio); image.height = Math.round(height*ratio);
+  const ctx = image.getContext('2d');
+  ctx.scale(ratio,ratio);
+  const [left,right] = xBounds(width), top = 12 * textScale(), bottom = height - 30 * textScale();
+  const x = value => left + (value - range[0]) / (range[1] - range[0]) * (right-left);
+  const name = row.key === 'tyres' ? tyreName() : row.key;
+  if (row.group) return mergedBase(row, {image,ctx,width,height,ratio,left,right,top,bottom,x});
+  const a = name === 'delta'
+    ? Array.from({length:Math.max(150, Math.ceil(right-left))}, (_,i) => i)
+    : trace(primary,name);
+  let first = a;
+  if (name === 'delta') first = a.map(i => {
+    const at = range[0] + i/(a.length-1)*(range[1]-range[0]);
+    return [at,[delta(at)]];
+  });
+  const second = secondary && name !== 'delta' ? trace(secondary,name) : [];
+  let low = Infinity, high = -Infinity;
+  for (const points of [first,second]) for (const [at,values] of points) {
+    if (at < range[0] || at > range[1]) continue;
+    for (const value of values) if (Number.isFinite(value)) { low = Math.min(low,value); high = Math.max(high,value); }
+  }
+  if (['Throttle Pos','Brake Pos'].includes(name)) { low = 0; high = 100; }
+  else if (name === 'Gear') { low = Math.floor(Math.min(-1,low)); high = Math.ceil(Math.max(1,high)); }
+  else if (name === 'delta') { low = Math.min(0,low); high = Math.max(0,high); }
+  if (!Number.isFinite(low) || !Number.isFinite(high)) { low = 0; high = 1; }
+  const padding = (high-low)*.07 || 1;
+  if (!['Throttle Pos','Brake Pos','Gear'].includes(name)) { low -= padding; high += padding; }
+  if (name === 'delta') [low, high] = deltaHeadingLimits(low, high, bottom - top);
+  const y = value => bottom - (value-low)/(high-low)*(bottom-top);
+  ctx.font = canvasFont();
+  ctx.strokeStyle = lightGraphBackground ? '#59645d55' : '#2a382e';
+  ctx.fillStyle = lightGraphBackground ? '#253329' : '#a4b3a7';
+  ctx.textAlign = 'center';
+  for (let i = 0; i <= 4; i++) {
+    const xx = left + (right-left)*i/4;
+    ctx.beginPath();
+    ctx.moveTo(xx, top); ctx.lineTo(xx,bottom); ctx.stroke();
+    const tick = range[0] + (range[1]-range[0])*i/4;
+    ctx.fillText(number(tick,primary.useDistance ? (range[1]-range[0]<10 ? 1 : 0) : 1), xx,bottom+18*textScale());
+  }
+  ctx.textAlign = 'right';
+  const digits = telemetryDecimalPlaces(name, ['delta','TyresPressure'].includes(name) ? 2 : high-low<12 ? 1 : 0);
+  const tickCount = name === 'Gear' ? high - low : 4;
+  for (let i = 0; i <= tickCount; i++) {
+    const tick = high - (name === 'Gear' ? i : (high-low)*i/tickCount);
+    const yy = y(tick);
+    ctx.beginPath();
+    ctx.moveTo(left,yy); ctx.lineTo(right,yy); ctx.stroke();
+    ctx.fillText(name === 'Gear' && tick === -1 ? 'R' : number(tick,digits), left-8,yy+4*textScale());
+  }
+  ctx.textAlign = 'right';
+  ctx.fillText(primary.useDistance ? 'm' : 's', width-2, height-2);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(left,top,right-left,bottom-top); ctx.clip();
+  const sectors = primary.channels['Current Sector']?.rows || [];
+  for (const [t] of sectors) {
+    if (t <= lap.start+.1 || t >= lap.end-.1) continue;
+    const px = x(primary.distanceAt(t));
+    ctx.strokeStyle='#60715e'; ctx.setLineDash([3,4]); ctx.beginPath();
+    ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  const step = source => name === 'Gear' || (source?.channels[name] && !source.channels[name].rate);
+  for (const [points,colors,dashed,stepped] of [[first,[graphColor(row.key), ...palette.slice(1)],false,step(primary)],[second,comparison,true,step(secondary)]]) {
+    const count = points.find(([,values])=>values.length)?.[1].length || 0;
+    for (let i=0;i<count;i++) {
+      ctx.strokeStyle=colors[i%4];ctx.lineWidth=1.35;ctx.setLineDash(dashed?[5,3]:[]);
+      ctx.beginPath();
+      let previous;
+      for (const [at,values] of points) {
+        if (!Number.isFinite(values[i])) { previous=undefined; continue; }
+        const px=x(at), py=y(values[i]);
+        if (previous) { if(stepped)ctx.lineTo(px,previous);ctx.lineTo(px,py); }
+        else ctx.moveTo(px,py);
+        previous = py || Number.EPSILON;
+      }
+      ctx.stroke();
+    }
+  }
+  if (name === 'Ground Speed') paintSpeedActivations(ctx, x, y);
+  if (name === 'delta') {
+    ctx.setLineDash([3,3]);ctx.strokeStyle=(lightGraphBackground ? '#253329' : '#a4b3a7');ctx.beginPath();
+    ctx.moveTo(left,y(0));ctx.lineTo(right,y(0));ctx.stroke();
+    paintDeltaHeadings(ctx, left, right, top, bottom);
+  }
+  ctx.restore();
+  return {image,x,y,left,right,top,bottom,width,height,ratio,from:range[0],to:range[1]};
+}
+function mergedBase(row, box) {
+  const {image,ctx,width,height,ratio,left,right,top,bottom,x} = box;
+  const count = Math.max(150,Math.ceil(right-left));
+  const deltaPoints = Array.from({length:count},(_,i) => {
+    const at = range[0]+i/(count-1)*(range[1]-range[0]);
+    return [at,[delta(at)]];
+  });
+  const deltaLimit = [0,0];
+  for(const [, [value]] of deltaPoints) if(Number.isFinite(value)) {
+    deltaLimit[0]=Math.min(deltaLimit[0],value);deltaLimit[1]=Math.max(deltaLimit[1],value);
+  }
+  const series = [{name:'Time delta',points:deltaPoints,axis:'Time delta',dashed:false,chosen:graphColor('delta')}];
+  const scales = new Map([['Time delta',deltaLimit]]);
+  row.group.channels.forEach((name,index) => {
+    const channel = primary.channels[name] || secondary?.channels[name];
+    if (!channel) return;
+    const chosen = graphColor(row.key+'|'+name,mergeColors[(index+1)%mergeColors.length]);
+    const axis = displayUnit(name,channel.unit) || name;
+    if (!scales.has(axis)) scales.set(axis,[Infinity,-Infinity]);
+    const limits = scales.get(axis);
+    for (const [data,dashed] of [[primary,false],[secondary,true]]) {
+      if (!data) continue;
+      const points = trace(data,name);
+      for (const [at,values] of points) {
+        if (at<range[0] || at>range[1]) continue;
+        for (const value of values) if (Number.isFinite(value)) {
+          limits[0] = Math.min(limits[0],value);
+          limits[1] = Math.max(limits[1],value);
+        }
+      }
+      series.push({name,points,dashed,axis,chosen});
+    }
+  });
+  for (const limits of scales.values()) {
+    if (!Number.isFinite(limits[0])) { limits[0]=0; limits[1]=1; }
+    const padding = (limits[1]-limits[0])*.06 || .5;
+    limits[0]-=padding;
+    limits[1]+=padding;
+  }
+  scales.set('Time delta', deltaHeadingLimits(...deltaLimit, bottom - top));
+  ctx.font = canvasFont();
+  for (let i=0;i<=4;i++) {
+    const px=left+(right-left)*i/4, py=top+(bottom-top)*i/4;
+    ctx.strokeStyle=(lightGraphBackground ? '#59645d55' : '#2a382e');ctx.beginPath();
+    ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();
+    ctx.fillStyle=(lightGraphBackground ? '#253329' : '#a4b3a7');ctx.textAlign='center';
+    ctx.fillText(number(range[0]+(range[1]-range[0])*i/4,primary.useDistance?0:1),px,bottom+18*textScale());
+    {
+      const [lo,hi]=scales.get('Time delta');
+      ctx.textAlign='right';ctx.fillText(number(hi-(hi-lo)*i/4,1),left-8,py+4*textScale());
+    }
+  }
+  ctx.textAlign='right';ctx.fillText(primary.useDistance?'m':'s',width-2,height-2);
+  ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
+  const [deltaLow,deltaHigh] = scales.get('Time delta');
+  const zero=bottom+(deltaLow/(deltaHigh-deltaLow))*(bottom-top);
+  ctx.strokeStyle=(lightGraphBackground ? '#253329' : '#b5c2b4');ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(left,zero);ctx.lineTo(right,zero);ctx.stroke();
+  const sectors = primary.channels['Current Sector']?.rows || [];
+  for (const [t] of sectors) {
+    if (t <= lap.start+.1 || t >= lap.end-.1) continue;
+    const px=x(primary.distanceAt(t));
+    ctx.strokeStyle='#60715e';ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
+  }
+  for (const item of [...series.slice(1),series[0]]) {
+    const [lo,hi]=scales.get(item.axis);
+    const y=value=>bottom-(value-lo)/(hi-lo)*(bottom-top);
+    const count=item.points.find(([,values])=>values.length)?.[1].length || 0;
+    for(let i=0;i<count;i++){
+      ctx.strokeStyle=item.chosen;
+      ctx.globalAlpha=i===0?1:Math.max(.4,1-i*.2);
+      ctx.setLineDash(item.dashed?[5,3]:[]);
+      ctx.lineWidth=1.35;ctx.beginPath();
+      let previous;
+      for(const [at,values] of item.points){
+        if(!Number.isFinite(values[i])){previous=undefined;continue;}
+        const px=x(at),py=y(values[i]);
+        if(previous===undefined)ctx.moveTo(px,py);
+        else{if(item.name==='Gear')ctx.lineTo(px,previous);ctx.lineTo(px,py);}
+        previous=py;
+      }
+      ctx.stroke();
+    }
+  }
+  const speed = series.find(item => item.name === 'Ground Speed');
+  if (speed) {
+    const [lo, hi] = scales.get(speed.axis);
+    const y = value => bottom - (value - lo) / (hi - lo) * (bottom - top);
+    ctx.globalAlpha = 1;
+    paintSpeedActivations(ctx, x, y);
+  }
+  paintDeltaHeadings(ctx, left, right, top, bottom);
+  ctx.restore();
+  return {image,x,left,right,top,bottom,width,height,ratio,from:range[0],to:range[1],scales};
+}
+function paintCursorValues(ctx, row, name) {
+  const {x, y, left, right, top, bottom, scales} = row.cache;
+  const at = x(cursor);
+  const badges = [];
+  const add = (label, value, scale, colour, characters) => {
+    if (!Number.isFinite(value)) return;
+    const py = scale(value);
+    if (py < top || py > bottom) return;
+    badges.push({label, py, colour, characters});
+  };
+  const scaleFor = axis => {
+    const [lo, hi] = scales.get(axis);
+    return value => bottom - (value - lo) / (hi - lo) * (bottom - top);
+  };
+  if (name === 'delta') {
+    const gap = delta(cursor);
+    add(timeGapLabel(gap), gap, scales ? scaleFor('Time delta') : y, graphColor('delta'), row.deltaWidth);
+  }
+  const channels = row.group?.channels ?? (name === 'delta' ? [] : [name]);
+  channels.forEach((channelName, index) => {
+    const source = primary.channels[channelName] || secondary?.channels[channelName];
+    if (!source) return;
+    const scale = scales ? scaleFor(displayUnit(channelName, source.unit) || channelName) : y;
+    for (const [data, referenceLap] of [[primary, false], [secondary, true]]) {
+      if (!data || !inExtent(data, cursor)) continue;
+      const channel = data.channels[channelName];
+      const values = sample(channel, data.timeAt(cursor));
+      values?.forEach((value, component) => {
+        const shown = typeof value === 'boolean' ? Number(value) : convert(channelName, value, channel.unit);
+        const wheel = values.length === 4 ? wheels[component] + ' ' : '';
+        const prefix = row.group ? telemetryName(channelName) + (referenceLap ? ' (ref) ' : ' ') : '';
+        const normalColours = referenceLap ? comparison : [graphColor(row.key), ...palette.slice(1)];
+        const colour = row.group ? graphColor(row.key + '|' + channelName, mergeColors[(index + 1) % mergeColors.length])
+          : normalColours[component % normalColours.length];
+        const layout = row.group ? (referenceLap ? row.readings[index]?.ref : row.readings[index]?.main)
+          : referenceLap ? row.referenceLayout : row.mainLayout;
+        const label = valueLabel(channelName, value, channel.unit);
+        add(prefix + wheel + label, shown, scale, colour, prefix.length + wheel.length + (layout?.widths[component] ?? label.length));
+      });
+    }
+  });
+
+  ctx.save();
+  const maxLabels = Math.max(1, Math.floor((bottom - top) / (14 * textScale())));
+  const ordered = badges.slice(0, maxLabels).sort((a, b) => a.py - b.py);
+  const step = Math.min(22 * textScale(), (bottom - top) / Math.max(1, ordered.length));
+  const height = Math.max(1, step - 2);
+  const font = Math.min(13 * textScale(), height - 2);
+  badges.forEach(({py, colour}) => {
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.arc(at, py, 3, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  if (font >= 8) {
+    ctx.font = '600 ' + font + 'px Consolas, monospace';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    let next = top;
+    ordered.forEach(({label, py, colour, characters}, index) => {
+      const ribbonWidth = Math.min(ctx.measureText('0').width * characters + 12, right - left);
+      const px = at + ribbonWidth + 7 <= right ? at + 7 : Math.max(left, at - ribbonWidth - 7);
+      const pyLabel = Math.min(bottom - (ordered.length - index) * step, Math.max(next, py - height / 2));
+      next = pyLabel + step;
+      ctx.fillStyle = '#152019';
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(px, pyLabel, ribbonWidth, height, 4);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#f2f6ef';
+      ctx.fillText(label, px + 6, pyLabel + height / 2, Math.max(1, ribbonWidth - 12));
+    });
+  }
+  ctx.restore();
+}
+function captureChartElement(element, exportButton) {
+  const isCanvas = element instanceof HTMLCanvasElement;
+  const copy = isCanvas ? node('img') : element.cloneNode(false);
+  const style = getComputedStyle(element);
+  copy.style.cssText = '';
+  for (const property of style) copy.style.setProperty(property, style.getPropertyValue(property));
+  if (element === exportButton) {
+    copy.style.visibility = 'hidden';
+    return copy;
+  }
+  if (style.display === 'none') return copy;
+  if (isCanvas) {
+    copy.src = element.toDataURL();
+    return copy;
+  }
+  if (element instanceof HTMLInputElement) {
+    copy.setAttribute('value', element.value);
+    copy.toggleAttribute('checked', element.checked);
+  }
+  for (const child of element.childNodes) {
+    const rendered = child instanceof HTMLElement ? captureChartElement(child, exportButton) : child.cloneNode(true);
+    if (rendered instanceof HTMLElement && (element.scrollTop || element.scrollLeft)) {
+      rendered.style.translate = -element.scrollLeft + 'px ' + -element.scrollTop + 'px';
+    }
+    if (element instanceof HTMLSelectElement && child instanceof HTMLOptionElement) {
+      rendered.toggleAttribute('selected', child.selected);
+    }
+    copy.append(rendered);
+  }
+  const after = getComputedStyle(element, '::after');
+  if (after.content === '"▸"' || after.content === '"▾"') {
+    const arrow = node('span', after.content.slice(1, -1));
+    arrow.style.marginInlineStart = after.marginInlineStart;
+    arrow.style.color = after.color;
+    copy.append(arrow);
+  }
+  return copy;
+}
+
+async function exportChartImage(row, title, exportImage) {
+  const card = row.canvas.closest('.chart');
+  const rect = card.getBoundingClientRect();
+  if (!ready || !rect.width || !rect.height) throw new Error('Open a lap before exporting a graph.');
+  const width = Math.ceil(rect.width), height = Math.ceil(rect.height);
+  const copy = captureChartElement(card, exportImage);
+  copy.style.margin = '0';
+  copy.style.boxSizing = 'border-box';
+  copy.style.width = rect.width + 'px';
+  copy.style.height = rect.height + 'px';
+
+  const font = await lmu.graphExportFont();
+  const markup = new XMLSerializer().serializeToString(copy);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height +
+    '"><style>@font-face{font-family:Geist;src:url(data:font/woff2;base64,' + font +
+    ');font-weight:400 800}</style><foreignObject width="100%" height="100%">' + markup + '</foreignObject></svg>';
+  const snapshot = new Image();
+  snapshot.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  await snapshot.decode();
+
+  const ratio = Math.min(2, window.devicePixelRatio || 1);
+  const png = node('canvas');
+  png.width = Math.ceil(width * ratio);
+  png.height = Math.ceil(height * ratio);
+  png.getContext('2d').drawImage(snapshot, 0, 0, png.width, png.height);
+  const blob = await new Promise(resolve => png.toBlob(resolve, 'image/png'));
+  if (!blob) throw new Error('Could not export the graph as a PNG.');
+  const filename = [selected?.track, lap?.number == null ? '' : 'Lap ' + lap.number, title].filter(Boolean).join(' - ');
+  return lmu.exportGraphImage(filename, await blob.arrayBuffer());
+}
+function speedPeaks() {
+  const name = 'Ground Speed';
+  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference?.session.driver);
+  const peak = data => {
+    const max = trace(data, name).reduce((best, [, [speed]]) =>
+      Number.isFinite(speed) ? Math.max(best, speed) : best, -Infinity);
+    const unit = displayUnit(name, data.channels[name]?.unit) || 'km/h';
+    return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) + ' ' + unit : '—';
+  };
+  const peaks = node('span', 'Top Speed · ', 'chart-reading');
+  peaks.append(node('span', selectedDriver + ' ' + peak(primary), 'selected-color'));
+  if (secondary) peaks.append(' | ', node('span', referenceDriver + ' ' + peak(secondary), 'reference-color'));
+  return peaks;
+}
+function chartDriverLabels(selectedDriver, referenceDriver) {
+  const selectedNames = selectedDriver?.trim().split(/\s+/) ?? [];
+  const referenceNames = referenceDriver?.trim().split(/\s+/) ?? [];
+  const sameDriver = selectedNames.join(' ').toLowerCase() === referenceNames.join(' ').toLowerCase();
+  return [selectedNames[0] || 'Selected', sameDriver ? 'Reference' : referenceNames[0] || 'Reference'];
+}
+function paintChart(row, [selectedDriver, referenceDriver]) {
+  const display=canvasContext(row.canvas);
+  if(!display)return;
+  const {ctx,width,height,ratio}=display;
+  const cache=row.cache;
+  if(!cache || cache.width!==width || cache.height!==height || cache.ratio!==ratio ||
+    cache.from!==range[0] || cache.to!==range[1]) row.cache=baseChart(row,width,height,ratio);
+  const {image,x,left,right,top,bottom}=row.cache;
+  ctx.clearRect(0,0,width,height);
+  ctx.drawImage(image,0,0,width,height);
+  if (selectedCorner) {
+    const start = Math.max(selectedCorner.from, range[0]);
+    const finish = Math.min(selectedCorner.to, range[1]);
+    if (finish > start) {
+      ctx.save();
+      ctx.fillStyle = lightGraphBackground ? '#8e5800' : cornerHighlightColour;
+      ctx.globalAlpha = .16;
+      ctx.fillRect(x(start), top, x(finish) - x(start), bottom - top);
+      ctx.restore();
+    }
+  }
+  if (row.cache.y) {
+    for (const {channelName, distance, value, reference} of cornerEventMarkers) {
+      if (row.key !== channelName || distance < range[0] || distance > range[1]) continue;
+      ctx.fillStyle = reference ? comparison[0] : graphColor(channelName);
+      ctx.beginPath();
+      ctx.arc(x(distance), row.cache.y(value), 4 * textScale(), 0, 2 * Math.PI);
+      ctx.fill();
+    }
+  }
+  if(cursor>=range[0] && cursor<=range[1]) {
+    ctx.strokeStyle=(lightGraphBackground ? '#172119' : '#e8f0dd');ctx.beginPath();ctx.moveTo(x(cursor),top);ctx.lineTo(x(cursor),bottom);ctx.stroke();
+  }
+  if(selection?.row===row) {
+    const a=Math.max(left,Math.min(right,x(selection.initial))),b=Math.max(left,Math.min(right,x(selection.x)));
+    ctx.fillStyle='#c6f36c30';ctx.fillRect(Math.min(a,b),top,Math.abs(b-a),bottom-top);
+  }
+  const name=row.key==='tyres'?tyreName():row.key;
+  const showValues = row.hovering || (pinned && pinnedGraph === row.key);
+  if (showValues && !selection && cursor >= range[0] && cursor <= range[1]) paintCursorValues(ctx, row, name);
+  if(row.group) {
+    const timeGap = delta(cursor);
+    row.output.textContent = timeGapLabel(timeGap);
+    for(const entry of row.readings){
+      entry.read.textContent = readings(primary, entry.name, false, entry.main.widths)
+        + (entry.ref ? ' | ' + readings(secondary, entry.name, false, entry.ref.widths) : '');
+      const channel=primary.channels[entry.name] || secondary?.channels[entry.name];
+      const unit=displayUnit(entry.name,channel?.unit) || entry.name;
+      const limits=row.cache.scales.get(unit);
+      entry.read.title=limits?'Axis '+number(limits[0],2)+' to '+number(limits[1],2)+' '+unit:'';
+    }
+  } else if(name==='delta') {
+    const value=delta(cursor);
+    row.output.textContent=timeGapLabel(value);
+  } else {
+    row.output.replaceChildren(node('span', selectedDriver + ' ' + readings(primary, name, false, row.mainLayout.widths), 'selected-color'));
+    if (secondary) row.output.append('  |  ', node('span', referenceDriver + ' ' + readings(secondary, name, false, row.referenceLayout.widths), 'reference-color'));
+  }
+}
+function route(data) {
+  if (data.route) return data.route;
+  const lat = data.channels['GPS Latitude'], lon = data.channels['GPS Longitude'];
+  if (!lat || !lon) return [];
+  const points = [];
+  for (let i=0;i<lat.rows.length;i++) {
+    const t=lat.times[i], north=lat.rows[i][0], east=sample(lon,t)?.[0];
+    if(t>=data.lap.start && t<=data.lap.end && Number.isFinite(north) && Number.isFinite(east))points.push([east,north,t]);
+  }
+  data.route=points;
+  return points;
+}
+function routeSection(data, from, to) {
+  const points = route(data);
+  const start = data.timeAt(from), end = data.timeAt(to);
+  const section = [];
+  for (let i = 0; i < points.length; i++) {
+    const point = points[i], previous = points[i - 1];
+    if (previous && point[2] > previous[2]) {
+      for (const boundary of [start, end]) {
+        if (previous[2] < boundary && boundary < point[2]) {
+          const fraction = (boundary - previous[2]) / (point[2] - previous[2]);
+          section.push([previous[0] + (point[0] - previous[0]) * fraction,
+            previous[1] + (point[1] - previous[1]) * fraction, boundary]);
+        }
+      }
+    }
+    if (point[2] > end) break;
+    if (point[2] >= start) section.push(point);
+  }
+  return section;
+}
+function trackRoutes(selectedSection) {
+  return [primary, secondary].map(data => data
+    ? (selectedSection ? routeSection(data, ...range) : route(data)) : []);
+}
+const racingMap = $('racing-map');
+const trackPanel = $('track-location');
+const trackCameraMode = $('track-camera-mode');
+const selectedSectionOption = trackCameraMode.querySelector('[value="section"]');
+let previousTrackCamera;
+let trackCameraOverride;
+new ResizeObserver(scheduleRender).observe(racingMap);
+const trackCamera = {zoom:1, x:0, y:0};
+const trackColours = {brake:'#ff4545', throttle:'#32e260'};
+let trackProjection;
+let trackDrag;
+function restoreTrackCamera() {
+  if (!previousTrackCamera) return;
+  trackCameraMode.value = previousTrackCamera.mode;
+  Object.assign(trackCamera, previousTrackCamera.camera);
+  trackCameraOverride = previousTrackCamera.override;
+  previousTrackCamera = undefined;
+  selectedSectionOption.disabled = true;
+}
+function fitTrack() {
+  Object.assign(trackCamera, {zoom:1, x:0, y:0});
+  scheduleRender();
+}
+function zoomTrack(factor, x = racingMap.clientWidth / 2, y = racingMap.clientHeight / 2) {
+  if (trackCameraMode.value !== 'follow') trackCameraOverride = cursor;
+  const zoom = Math.max(1, Math.min(80, trackCamera.zoom * factor));
+  const ratio = zoom / trackCamera.zoom;
+  const dx = x - racingMap.clientWidth / 2, dy = y - racingMap.clientHeight / 2;
+  trackCamera.x = dx + (trackCamera.x - dx) * ratio;
+  trackCamera.y = dy + (trackCamera.y - dy) * ratio;
+  trackCamera.zoom = zoom;
+  if (zoom === 1) fitTrack();
+  scheduleRender();
+}
+function inspectTrackLocation(x, y) {
+  if (!trackProjection) return;
+  const [a, b] = trackRoutes(trackCameraMode.value === 'section');
+  const data = a.length > 1 ? primary : secondary;
+  if (!data) return;
+  const points = data === primary ? a : b;
+  let best = 30 ** 2, time;
+  for (let i = 1; i < points.length; i++) {
+    const [ax, ay] = trackProjection(points[i - 1]);
+    const [bx, by] = trackProjection(points[i]);
+    const dx = bx - ax, dy = by - ay;
+    const length = dx * dx + dy * dy;
+    if (!length) continue;
+    const fraction = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / length));
+    const error = (x - ax - fraction * dx) ** 2 + (y - ay - fraction * dy) ** 2;
+    if (error >= best) continue;
+    best = error;
+    time = points[i - 1][2] + fraction * (points[i][2] - points[i - 1][2]);
+  }
+  if (time === undefined) return;
+  seek(data.distanceAt(time), false);
+  return true;
+}
+const trackViewButton = $('show-track-view');
+const telemetryChannelsButton = $('show-telemetry-channels');
+function showTrackView(showTrack) {
+  trackViewButton.setAttribute('aria-pressed', String(showTrack));
+  telemetryChannelsButton.setAttribute('aria-pressed', String(!showTrack));
+  trackPanel.hidden = !showTrack && !popoutWindows.has('track');
+  const link = $('track-popout-link');
+  if (link) link.hidden = !showTrack;
+  $('channel-list').hidden = showTrack;
+  $('telemetry-channel-actions').hidden = showTrack;
+  $('choose-channels').disabled = showTrack;
+  scheduleRender();
+}
+trackViewButton.onclick = () => showTrackView(true);
+telemetryChannelsButton.onclick = () => showTrackView(false);
+function resetTrackView() {
+  if (trackCameraMode.value === 'section') {
+    trackCameraOverride = undefined;
+    scheduleRender();
+    return;
+  }
+  trackCameraOverride = cursor;
+  fitTrack();
+}
+$('track-fit').onclick = resetTrackView;
+racingMap.addEventListener('contextmenu', event => {
+  event.preventDefault();
+  resetTrackView();
+});
+trackCameraMode.onchange = () => {
+  trackCameraOverride = undefined;
+  scheduleRender();
+};
+$('track-zoom-in').onclick = () => zoomTrack(1.5);
+$('track-zoom-out').onclick = () => zoomTrack(1 / 1.5);
+$('track-pedals').onchange = scheduleRender;
+racingMap.addEventListener('wheel', event => {
+  event.preventDefault();
+  zoomTrack(Math.exp(Math.max(-1, Math.min(1, -event.deltaY * .002))), event.offsetX, event.offsetY);
+}, {passive:false});
+racingMap.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  trackDrag = {id:event.pointerId, x:event.clientX, y:event.clientY, panX:trackCamera.x, panY:trackCamera.y, moved:false};
+  racingMap.setPointerCapture(event.pointerId);
+});
+racingMap.addEventListener('pointermove', event => {
+  if (trackDrag?.id === event.pointerId) {
+    const dx = event.clientX - trackDrag.x, dy = event.clientY - trackDrag.y;
+    if (!trackDrag.moved && Math.hypot(dx, dy) < 4) return;
+    trackDrag.moved = true;
+    trackCameraOverride = cursor;
+    trackCamera.x = trackDrag.panX + dx;
+    trackCamera.y = trackDrag.panY + dy;
+    scheduleRender();
+  } else if (ready && !pinned && !playing) {
+    inspectTrackLocation(event.offsetX, event.offsetY);
+  }
+});
+racingMap.addEventListener('pointerup', event => {
+  if (trackDrag?.id !== event.pointerId || trackDrag.moved || !ready) return;
+  if (inspectTrackLocation(event.offsetX, event.offsetY)) {
+    stop();
+    pinned = true;
+    pinnedGraph = undefined;
+    updatePin();
+  }
+});
+racingMap.addEventListener('lostpointercapture', () => { trackDrag = null; });
+
+function routeCorners(data, correction) {
+  if (data.corners) return data.corners;
+  const points = route(data);
+  const distances = [0];
+  for (let i = 1; i < points.length; i++) {
+    const [ax, ay] = points[i - 1], [bx, by] = points[i];
+    distances.push(distances[i - 1] + Math.hypot((bx - ax) * correction, by - ay) * 111195);
+  }
+
+  // Measure heading changes across two 30 m chords to suppress GPS jitter.
+  const corners = [];
+  let bend;
+  const finishBend = () => {
+    if (!bend) return;
+    const start = lowerBound(distances, Math.max(0, bend.start - 30));
+    const end = Math.min(points.length - 1, lowerBound(distances, bend.end + 30));
+    corners.push({points:points.slice(start, end + 1), start:points[start][2], end:points[end][2]});
+    bend = undefined;
+  };
+  const length = distances.at(-1);
+  for (let metres = 30; metres <= length - 30; metres += 10) {
+    const a = points[lowerBound(distances, metres - 30)];
+    const b = points[lowerBound(distances, metres)];
+    const c = points[lowerBound(distances, metres + 30)];
+    const heading = (from, to) => Math.atan2(to[1] - from[1], (to[0] - from[0]) * correction);
+    const turn = heading(b, c) - heading(a, b);
+    const angle = Math.atan2(Math.sin(turn), Math.cos(turn));
+    if (Math.abs(angle) < Math.PI / 15) continue;
+    if (bend && (metres - bend.end > 35 || Math.sign(angle) !== bend.direction)) finishBend();
+    if (!bend) bend = {start:metres, end:metres, direction:Math.sign(angle)};
+    else bend.end = metres;
+  }
+  finishBend();
+  data.corners = corners;
+  return corners;
+}
+function frameCurrentCorner(camera, data, referenceData, correction, width, height, baseScale, centreX, centreY) {
+  const corners = routeCorners(data, correction);
+  if (!corners.length) return;
+  const time = data.timeAt(cursor);
+  const corner = corners.findLast(item => item.start <= time) ?? corners[0];
+  const points = [...corner.points];
+  if (referenceData && data.useDistance && referenceData.useDistance) {
+    const from = data.distanceAt(corner.start), to = data.distanceAt(corner.end);
+    for (const point of route(referenceData)) {
+      const distance = referenceData.distanceAt(point[2]);
+      if (distance >= from && distance <= to) points.push(point);
+    }
+  }
+  frameTrackPoints(camera, points, correction, width, height, baseScale, centreX, centreY);
+}
+function frameTrackPoints(camera, points, correction, width, height, baseScale, centreX, centreY) {
+  if (!points.length) return;
+  const east = points.map(point => point[0] * correction);
+  const north = points.map(point => point[1]);
+  const left = Math.min(...east), right = Math.max(...east), top = Math.max(...north), bottom = Math.min(...north);
+  const cornerScale = Math.min(Math.max(1,width-28)/(right-left||1), Math.max(1,height-28)/(top-bottom||1));
+  camera.zoom = Math.max(1, Math.min(80, cornerScale / baseScale));
+  const scale = baseScale * camera.zoom;
+  camera.x = (centreX - (left + right) / 2) * scale;
+  camera.y = ((top + bottom) / 2 - centreY) * scale;
+}
+function currentGpsPoint(data) {
+  if (!inExtent(data, cursor)) return null;
+  const time = data.timeAt(cursor);
+  const point = [sample(data.channels['GPS Longitude'], time)?.[0], sample(data.channels['GPS Latitude'], time)?.[0]];
+  return point.every(Number.isFinite) ? point : null;
+}
+function compactTrackGeometry(points, correction) {
+  const [eastOrigin, northOrigin] = points[0];
+  const local = ([east, north]) => [(east - eastOrigin) * correction, north - northOrigin];
+  const sorted = points.map(local).sort(([ax, ay], [bx, by]) => ax - bx || ay - by);
+  function hullSide(ordered) {
+    const side = [];
+    for (const point of ordered) {
+      while (side.length >= 2) {
+        const [ax, ay] = side.at(-2), [bx, by] = side.at(-1);
+        if ((bx - ax) * (point[1] - ay) > (by - ay) * (point[0] - ax)) break;
+        side.pop();
+      }
+      side.push(point);
+    }
+    return side.slice(0, -1);
+  }
+  const hull = [...hullSide(sorted), ...hullSide(sorted.reverse())];
+  let best;
+  for (let index = 0; index < hull.length; index++) {
+    const [ax, ay] = hull[index], [bx, by] = hull[(index + 1) % hull.length];
+    const dx = bx - ax, dy = by - ay;
+    const length = Math.hypot(dx, dy);
+    if (!length) continue;
+    const direction = dx < 0 || (dx === 0 && dy < 0) ? -1 : 1;
+    const cos = direction * dx / length, sin = direction * dy / length;
+    const rotate = ([x, y]) => [x * cos + y * sin, y * cos - x * sin];
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const point of hull) {
+      const [x, y] = rotate(point);
+      minX = Math.min(x, minX); maxX = Math.max(x, maxX);
+      minY = Math.min(y, minY); maxY = Math.max(y, maxY);
+    }
+    const span = maxY - minY;
+    if (!best || span < best.maxY - best.minY) {
+      best = {project:point => rotate(local(point)), minX, maxX, minY, maxY};
+    }
+  }
+  return best;
+}
+let compactMapCache;
+function paintTrackActivations(ctx, data, points, xy) {
+  if (points.length < 2 || !speedActivations.some(([name]) => settings.speedActivations?.[name])) return;
+  const times = points.map(point => point[2]);
+  ctx.save();
+  ctx.lineWidth = 3.5;
+  ctx.lineCap = 'round';
+  for (const [name, colour] of speedActivations) {
+    ctx.strokeStyle = colour;
+    for (const [start, end] of activationIntervals(data, name)) {
+      if (end <= times[0] || start >= times.at(-1)) continue;
+      ctx.beginPath();
+      for (let index = Math.max(1, lowerBound(times, start)); index < times.length && times[index - 1] < end; index++) {
+        const before = times[index - 1], after = times[index];
+        if (after <= before) continue;
+        const [x, y] = xy(points[index - 1]);
+        const [nextX, nextY] = xy(points[index]);
+        const dx = nextX - x, dy = nextY - y;
+        const from = (Math.max(start, before) - before) / (after - before);
+        const to = (Math.min(end, after) - before) / (after - before);
+        ctx.moveTo(x + dx * from, y + dy * from);
+        ctx.lineTo(x + dx * to, y + dy * to);
+      }
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function paintMap(canvas, interactive = false) {
+  if (interactive) trackProjection = undefined;
+  const display=canvasContext(canvas);
+  if(!display)return;
+  const {ctx,width}=display;
+  let {height}=display;
+  ctx.clearRect(0,0,width,height);
+  const sectionMode = interactive && trackCameraMode.value === 'section';
+  const [a, b] = trackRoutes(sectionMode);
+  const all = sectionMode ? [...route(primary), ...(secondary ? route(secondary) : [])] : [...a, ...b];
+  if (all.length < 2 || (sectionMode && a.length + b.length < 2)) {
+    ctx.font = canvasFont();ctx.fillStyle='#a4b3a7';ctx.textAlign='center';ctx.fillText(sectionMode ? 'No GPS route in the selected section' : 'No GPS route available',width/2,height/2);
+    return;
+  }
+  const meanLat=all[0][1]*Math.PI/180, correction=Math.cos(meanLat);
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(const [longitude,latitude] of all){
+    const x=longitude*correction;
+    minX=Math.min(minX,x);maxX=Math.max(maxX,x);
+    minY=Math.min(minY,latitude);maxY=Math.max(maxY,latitude);
+  }
+  if(Math.max(maxX-minX,maxY-minY)<.00005) {
+    ctx.font = canvasFont();ctx.fillStyle='#a4b3a7';ctx.textAlign='center';ctx.fillText('No on-track route in this segment',width/2,height/2);return;
+  }
+  let project = ([east, north]) => [east * correction, north];
+  if (!interactive) {
+    if (compactMapCache?.primary !== primary || compactMapCache?.secondary !== secondary) {
+      compactMapCache = {primary, secondary, geometry:compactTrackGeometry(all, correction)};
+    }
+    const geometry = compactMapCache.geometry;
+    if (geometry) {
+      ({project, minX, maxX, minY, maxY} = geometry);
+      const target = Math.ceil(Math.max(72, Math.min(225, 32 + Math.max(1, width - 36) * (maxY - minY) / (maxX - minX || 1))));
+      if (height !== target) {
+        canvas.style.height = target + 'px';
+        height = canvasContext(canvas).height;
+        ctx.clearRect(0, 0, width, height);
+      }
+    }
+  }
+  const camera = interactive ? trackCamera : {zoom:1, x:0, y:0};
+  const baseScale = Math.min(Math.max(1,width-36)/(maxX-minX||1),Math.max(1,height-32)/(maxY-minY||1));
+  const centreX = (minX + maxX) / 2, centreY = (minY + maxY) / 2;
+  const automatic = interactive && trackCameraOverride !== cursor;
+  if (automatic && trackCameraMode.value === 'corner') {
+    frameCurrentCorner(camera, a.length ? primary : secondary, a.length ? secondary : null, correction, width, height, baseScale, centreX, centreY);
+  }
+  if (automatic && sectionMode) {
+    frameTrackPoints(camera, [...a, ...b], correction, width, height, baseScale, centreX, centreY);
+  }
+  const scale = baseScale * camera.zoom;
+  const followPoint = automatic && trackCameraMode.value === 'follow' && camera.zoom > 1 ? currentGpsPoint(a.length ? primary : secondary) : null;
+  if (followPoint) {
+    camera.x = (centreX - followPoint[0] * correction) * scale;
+    camera.y = (followPoint[1] - centreY) * scale;
+  }
+  const xy = point => {
+    const [x, y] = project(point);
+    return [
+      width / 2 + camera.x + (x - centreX) * scale,
+      height / 2 + camera.y - (y - centreY) * scale
+    ];
+  };
+  if (interactive) {
+    trackProjection = xy;
+    $('track-reference-key').hidden = !b.length;
+    $('track-pedals-key').hidden = !$('track-pedals').checked;
+    const road = b.length > 1 && (secondary.lap.kind === 'complete' || a.length < 2) ? b : a;
+    const roadWidth = Math.max(6, 12 * scale / 111195);
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    let previous;
+    for (const point of road) {
+      const [x, y] = xy(point);
+      if (previous && Math.hypot(x - previous[0], y - previous[1]) < 100 * scale / 111195) ctx.lineTo(x, y);
+      else ctx.moveTo(x, y);
+      previous = [x, y];
+    }
+    ctx.strokeStyle = '#67746d';
+    ctx.lineWidth = roadWidth + 2;
+    ctx.stroke();
+    ctx.strokeStyle = '#333d38';
+    ctx.lineWidth = roadWidth;
+    ctx.stroke();
+    ctx.restore();
+  }
+  for (const [points,color,data] of [[b,comparison[0],secondary],[a,palette[0],primary]]) {
+    if(!points.length)continue;
+    ctx.beginPath();points.forEach((p,i)=>{const [x,y]=xy(p);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = .72;
+    ctx.lineWidth = 2.2;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    if (interactive && data === primary && $('track-pedals').checked) {
+      ctx.lineWidth = 3.5;
+      const brakes = data.channels['Brake Pos'], throttle = data.channels['Throttle Pos'];
+      for (let i = 1; i < points.length; i++) {
+        const time = points[i][2];
+        const pedal = sample(brakes, time)?.[0] > 5 ? 'brake' : sample(throttle, time)?.[0] > 5 ? 'throttle' : null;
+        if (!pedal) continue;
+        ctx.strokeStyle = trackColours[pedal];
+        ctx.beginPath();
+        ctx.moveTo(...xy(points[i - 1]));
+        ctx.lineTo(...xy(points[i]));
+        ctx.stroke();
+      }
+    }
+    if (interactive) paintTrackActivations(ctx, data, points, xy);
+    const point = !sectionMode || (cursor >= range[0] && cursor <= range[1]) ? currentGpsPoint(data) : null;
+    if (point) {
+      const [x,y] = xy(point);
+      ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fillStyle=color;ctx.fill();
+    }
+  }
+  if (selectedCorner?.route.length > 1) {
+    ctx.save();
+    ctx.strokeStyle = cornerHighlightColour;
+    ctx.lineWidth = 5;
+    ctx.lineCap = ctx.lineJoin = 'round';
+    ctx.beginPath();
+    selectedCorner.route.forEach((point, index) => {
+      if (index) ctx.lineTo(...xy(point));
+      else ctx.moveTo(...xy(point));
+    });
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+function scheduleRender(){
+  if(renderRequested)return;
+  renderRequested=true;
+  requestAnimationFrame(()=>{
+    renderRequested=false;
+    if(!ready || view!=='viewer')return;
+    const drivers = chartDriverLabels(selected?.driver, reference?.session.driver);
+    for (const row of chartRows) paintChart(row, drivers);
+    for(const row of readoutRows) {
+      row.a.textContent=readings(primary,row.name,true);
+      row.b.textContent=readings(secondary,row.name,true);
+    }
+    paintMap($('map'));
+    if (!trackPanel.hidden) paintMap(racingMap, true);
+    $('position').textContent=number(playTime-lap.start,2)+' / '+number(lap.end-lap.start,2)+' s';
+    $('scrub').value=Math.round(1000*(playTime-lap.start)/Math.max(.01,lap.end-lap.start));
+  });
+}
+function seek(x, clampRange) {
+  if(!primary)return;
+  if(clampRange && (x<range[0] || x>range[1]))resetZoom();
+  cursor=x;
+  playTime=primary.timeAt(x);
+  scheduleRender();
+}
+function setTime(t) {
+  playTime=t;
+  cursor=primary.distanceAt(t);
+  scheduleRender();
+}
+function updatePin(){
+  if (!pinned) pinnedGraph = undefined;
+  $('unpin').disabled = !pinned;
+  scheduleRender();
+}
+function stop() {
+  playing=false;
+  cancelAnimationFrame(frame);
+  $('play').textContent='Play';
+}
+function play() {
+  if(!ready)return;
+  if(playing){stop();return;}
+  pinned=false;updatePin();
+  if(playTime>=lap.end-.01)setTime(lap.start);
+  playing=true;
+  $('play').textContent='Pause';
+  let last=performance.now();
+  function step(now){
+    if(!playing)return;
+    setTime(Math.min(lap.end,playTime+(now-last)/1000*Number($('play-rate').value)));
+    last=now;
+    if(playTime>=lap.end)stop();else frame=requestAnimationFrame(step);
+  }
+  frame=requestAnimationFrame(step);
+}
+function setupPresets(){
+  const select=$('preset');
+  select.replaceChildren();
+  option(select,'Choose Preset','');
+  for(const label of Object.keys(builtIn))option(select,label,'builtin:'+label);
+  for(const label of Object.keys(settings.presets||{}))option(select,label,'saved:'+label);
+}
+$('preset').addEventListener('change',()=>{
+  const key=$('preset').value;
+  if(!key)return;
+  if(key.startsWith('builtin:')){
+    enabled=new Set(builtIn[key.slice(8)]);
+    save({enabled:[...enabled]});
+  }else{
+    const preset=settings.presets[key.slice(6)];
+    enabled=new Set(preset.enabled);
+    save({enabled:[...enabled],heights:preset.heights,tyres:preset.tyres || 'TyresTempCentre',
+      ...(preset.colors ? {colors:preset.colors} : {}), ...(preset.deltaChannels ? {deltaChannels:preset.deltaChannels} : {}),
+      ...(preset.hiddenGraphs ? {hiddenGraphs:preset.hiddenGraphs} : {}),
+      ...(preset.extraGraphChannels ? {extraGraphChannels:preset.extraGraphChannels} : {}),
+      ...(preset.hiddenSummary ? {hiddenSummary:preset.hiddenSummary} : {})});
+    renderSessionSummary();
+    if(ready)buildCharts();
+  }
+  buildChannels();
+});
+$('save-preset').onclick=()=>{
+  $('preset-name').value='';
+  $('preset-dialog').showModal();
+};
+$('cancel-preset').onclick=()=>$('preset-dialog').close();
+$('preset-form').addEventListener('submit',e=>{
+  e.preventDefault();
+  const name=$('preset-name').value.trim();
+  if(!name)return;
+  save({presets:{...settings.presets,[name]:{enabled:[...enabled],heights:{...settings.heights},tyres:tyreName(),colors:{...settings.colors},deltaChannels:settings.deltaChannels || [],hiddenGraphs:settings.hiddenGraphs ?? defaultHiddenGraphs,extraGraphChannels:settings.extraGraphChannels || [],hiddenSummary:settings.hiddenSummary ?? defaultHiddenSummary}}});
+  setupPresets();
+  $('preset').value='saved:'+name;
+  $('preset-dialog').close();
+});
+function openChannelPicker() {
+  $('channel-search').value='';
+  $('channel-dialog').showModal();
+  showChannelMode(false);
+  $('channel-search').focus();
+}
+$('choose-channels').onclick=openChannelPicker;
+$('settings-channels').onclick=openChannelPicker;
+$('channel-search').oninput=buildChannelSelector;
+$('channel-select-tab').onclick=()=>showChannelMode(false);
+$('channel-order-tab').onclick=()=>showChannelMode(true);
+for (const id of ['enable-shown', 'disable-shown']) $(id).onclick=()=>{
+  for (const name of shownChannels()) {
+    if (id === 'enable-shown') enabled.add(name); else enabled.delete(name);
+  }
+  save({enabled:[...enabled]});
+  buildChannels();
+};
+$('toggle-map').onclick=event=>{
+  const map = $('map-content');
+  map.hidden = !map.hidden;
+  event.currentTarget.setAttribute('aria-expanded', String(!map.hidden));
+  event.currentTarget.setAttribute('aria-label', map.hidden ? 'Expand track map' : 'Collapse track map');
+  if (!map.hidden) scheduleRender();
+};
+$('play').onclick=play;
+$('reset-zoom').onclick=()=>{
+  stop();
+  pinned=false;
+  selection=null;
+  updatePin();
+  resetZoom();
+};
+$('unpin').onclick=()=>{pinned=false;updatePin();};
+$('scrub').oninput=()=>{
+  if(!ready)return;
+  stop();pinned=false;updatePin();
+  setTime(lap.start+Number($('scrub').value)/1000*(lap.end-lap.start));
+};
+$('lap-select').onchange = () => {
+  lapHistoryFocus = -1;
+  selectLap(selected.laps.find(item => String(item.id) === $('lap-select').value));
+};
+$('remove-reference-session').onclick=()=>selectReferenceSession(undefined);
+$('car-select').onchange=()=>{manualReference=undefined;fillReferences();void readReference();};
+$('reference-select').onchange=()=>{
+  manualReference=$('reference-select').value==='auto'?undefined:$('reference-select').value;
+  fillReferences();
+  void readReference();
+};
+$('library-tab').onclick=()=>setView('library');
+$('viewer-tab').onclick=()=>setView('viewer');
+$('records-tab').onclick=()=>setView('records');
+$('recent-session-filters').addEventListener('change', event => {
+  if (event.target instanceof HTMLSelectElement && event.target.id !== 'limit') renderLibrary();
+});
+$('imported-lap-filters').addEventListener('change', renderComparisonLaps);
+$('reset-imported-lap-filters').onclick = () => {
+  for (const select of $('imported-lap-filters').querySelectorAll('select')) select.value = '';
+  renderComparisonLaps();
+};
+$('reset-library-filters').onclick = () => {
+  for (const select of $('recent-session-filters').querySelectorAll('select:not(#limit)')) select.value = '';
+  setRecentSessionLimit();
+  $('limit').dispatchEvent(new Event('change'));
+};
+function setRecentSessionLimit(value) {
+  const select = $('limit');
+  const options = [...select.options];
+  select.value = options.find(option => option.value === String(value))?.value ??
+    options.find(option => option.defaultSelected).value;
+}
+$('limit').onchange = () => {
+  save({limit:Number($('limit').value)});
+  renderLibrary();
+};
+$('interface-colour-mode').onchange = event => {
+  save({interfaceColourMode:event.target.value});
+  interfaceColourFields();
+  applyAppearance();
+};
+$('interface-colour').addEventListener('input', event => {
+  settings.interfaceColour = event.target.value;
+  applyAppearance();
+});
+$('interface-colour').addEventListener('change', event => {
+  save({interfaceColour:event.target.value});
+  applyAppearance();
+});
+$('interface-background-colour').addEventListener('input', event => {
+  settings.interfaceBackgroundColour = event.target.value;
+  applyAppearance();
+});
+$('interface-background-colour').addEventListener('change', event => {
+  save({interfaceBackgroundColour:event.target.value});
+  applyAppearance();
+});
+$('graph-background-colour').addEventListener('input', event => {
+  settings.graphBackgroundColour = event.target.value;
+  applyAppearance();
+});
+$('graph-background-colour').addEventListener('change', event => {
+  save({graphBackgroundColour:event.target.value});
+  applyAppearance();
+});
+$('reset-interface-colours').onclick = () => {
+  save({interfaceColourMode: null, interfaceColour: null, interfaceBackgroundColour: null, graphBackgroundColour: null});
+  applyAppearance();
+  settingsFields();
+};
+$('text-scale').addEventListener('input', event => {
+  $('text-scale-value').value = event.target.valueAsNumber + '%';
+});
+$('text-scale').addEventListener('change', event => {
+  save({textScalePercent:event.target.valueAsNumber});
+  applyAppearance();
+});
+for (const category of [...carClasses, 'other']) {
+  const row = node('tr');
+  const classLabel = category === 'other' ? 'Unclassified' : category;
+  const heading = node('th', classLabel);
+  heading.scope = 'row';
+  row.append(heading);
+  for (const [key, label] of temperatureThresholds) {
+    const cell = node('td');
+    const input = node('input');
+    input.type = 'number';
+    input.step = 'any';
+    input.placeholder = 'Off';
+    input.dataset.hotTemperature = key;
+    input.dataset.carClass = category;
+    input.setAttribute('aria-label', classLabel + ' ' + label + ' (°C)');
+    input.addEventListener('change', () => {
+      if (input.validity.badInput) return;
+      const byClass = settings.hotTemperaturesByClass ?? {};
+      const threshold = Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : null;
+      save({hotTemperaturesByClass: {...byClass, [category]: {...byClass[category], [key]: threshold}}});
+      renderSessionSummary();
+    });
+    cell.append(input);
+    row.append(cell);
+  }
+  $('class-temperature-thresholds').append(row);
+}
+const settingsFileButtons = [...document.querySelectorAll('[data-settings-file]')];
+for (const button of settingsFileButtons) {
+  button.onclick = async () => {
+    const {settingsFile:action, settingsCategory:category} = button.dataset;
+    const status = $(category + '-settings-file-status');
+    for (const control of settingsFileButtons) control.disabled = true;
+    setStatus(status, '');
+    try {
+      const result = await lmu.transferSettingsFile(action, category);
+      if (!result) return;
+      if (action === 'import') {
+        settings = result.settings;
+        if (category === 'display') {
+          enabled = new Set(settings.enabled ?? builtIn.Driving);
+          setupPresets();
+          if (Number.isFinite(settings.summaryHeight)) setSummaryHeight(settings.summaryHeight);
+          else {
+            summaryHeight = null;
+            telemetryPanels.style.removeProperty('--summary-height');
+          }
+          applyAppearance();
+          if (ready) {
+            buildCharts();
+            buildChannels();
+          }
+        }
+        settingsFields();
+        renderSessionSummary();
+      }
+      setStatus(status, action === 'import' ? 'Imported ' + result.filename : 'Exported ' + result);
+    } catch (error) {
+      setStatus(status, error.message.replace(/^Error invoking remote method '[^']+': Error: /, ''), {error:true});
+    } finally {
+      for (const control of settingsFileButtons) control.disabled = false;
+    }
+  };
+}
+$('reset-settings').onclick = async () => {
+  const button = $('reset-settings');
+  button.disabled = true;
+  try {
+    await lmu.resetSettings();
+  } catch (error) {
+    setStatus($('status'), error.message, {error:true});
+  } finally {
+    button.disabled = false;
+  }
+};
+for (const id of ['settings-button','empty-folders']) $(id).onclick = () => {
+  settingsFields();
+  if (id === 'empty-folders') $('settings-tab-folders').click();
+  $('folders').showModal();
+};
+for(const button of document.querySelectorAll('[data-folder]'))button.onclick=async()=>{
+  try {
+    settings=await lmu.folder(button.dataset.folder);
+    settingsFields();
+    void scan();
+  }catch(error){setStatus($('status'), error.message, {error:true});}
+};
+const summaryPanel = $('session-summary');
+const telemetryPanels = $('telemetry-panels');
+let summaryHeight;
+function setSummaryHeight(percent) {
+  summaryHeight = Math.max(20, Math.min(80, percent));
+  telemetryPanels.style.setProperty('--summary-height', summaryHeight + '%');
+}
+attachChartResize($('telemetry-divider'),
+  () => -summaryPanel.getBoundingClientRect().height,
+  offset => {
+    if (telemetryPanels.clientHeight) setSummaryHeight(-offset / telemetryPanels.clientHeight * 100);
+  },
+  () => save({summaryHeight}),
+  () => {
+    summaryHeight = null;
+    telemetryPanels.style.removeProperty('--summary-height');
+    save({summaryHeight});
+  });
+const summaryDialog = $('summary-fullscreen');
+const summaryToggle = $('toggle-summary-fullscreen');
+const graphDialog = $('graph-dialog');
+graphDialog.addEventListener('close', () => {
+  if (graphDialog.ownerDocument !== document) document.body.append(graphDialog);
+});
+function togglePanelPopout(key, panel, title) {
+  const existing = popoutWindows.get(key);
+  if (existing && !existing.closed) {
+    if (lmu.dockPanel) lmu.dockPanel(key).catch(error => message(error.message));
+    else existing.close();
+    return;
+  }
+  const popup = window.open('about:blank', key, 'popup');
+  if (!popup) {
+    message('Could not open the ' + title + ' window.');
+    return;
+  }
+  const doc = popup.document;
+  doc.title = 'Total Telemetry · ' + title;
+  doc.documentElement.lang = 'en-AU';
+  doc.documentElement.style.cssText = document.documentElement.style.cssText;
+  doc.body.className = 'panel-popout';
+  const stylesheet = doc.createElement('link');
+  stylesheet.rel = 'stylesheet';
+  stylesheet.href = document.querySelector('link[rel="stylesheet"]').href;
+  doc.head.append(stylesheet);
+  stylesheet.onload = scheduleRender;
+  const link = node('button', 'Focus ' + title, 'popout-link');
+  link.id = key + '-popout-link';
+  link.type = 'button';
+  link.onclick = () => popup.focus();
+  panel.before(link);
+  const button = $(key === 'track' ? 'pop-out-track' : 'pop-out-summary');
+  button.textContent = 'Dock Panel';
+  popoutWindows.set(key, popup);
+  if (key === 'summary') {
+    summaryToggle.hidden = true;
+    $('telemetry-divider').hidden = true;
+  }
+  doc.body.append(panel);
+  if (key === 'summary') observeSummaryPlots();
+  popup.addEventListener('resize', () => {
+    if (key === 'summary') redrawSummaryPlots();
+    scheduleRender();
+  });
+  popup.addEventListener('beforeunload', () => {
+    if (graphDialog.ownerDocument === doc) {
+      graphDialog.close();
+      document.body.append(graphDialog);
+    }
+    popoutWindows.delete(key);
+    link.replaceWith(panel);
+    button.textContent = 'Pop Out';
+    if (key === 'summary') {
+      summaryToggle.hidden = false;
+      $('telemetry-divider').hidden = false;
+      observeSummaryPlots();
+    } else {
+      panel.hidden = trackViewButton.getAttribute('aria-pressed') !== 'true';
+    }
+    scheduleRender();
+  }, {once:true});
+  scheduleRender();
+}
+$('pop-out-track').onclick = () => togglePanelPopout('track', trackPanel, 'Track View');
+$('pop-out-summary').onclick = () => {
+  if (!summaryDialog.open) togglePanelPopout('summary', summaryPanel, 'Session Summary');
+};
+summaryToggle.onclick = () => {
+  if (summaryDialog.open) {
+    summaryDialog.close();
+    return;
+  }
+  summaryDialog.append(summaryPanel);
+  summaryToggle.textContent = 'Exit Full Screen';
+  $('pop-out-summary').hidden = true;
+  summaryDialog.showModal();
+  summaryToggle.focus();
+};
+summaryDialog.addEventListener('close', () => {
+  telemetryPanels.append(summaryPanel);
+  summaryToggle.textContent = 'Full Screen';
+  $('pop-out-summary').hidden = false;
+  summaryToggle.focus();
+});
+
+window.addEventListener('resize', () => {
+  if (summaryPanel.ownerDocument === document) redrawSummaryPlots();
+  scheduleRender();
+});
+(async()=>{
+  settings=await lmu.settings();
+  if (settings.appVersion) {
+    $('app-version').textContent = 'v' + settings.appVersion;
+    $('app-version').hidden = false;
+  }
+  if (Number.isFinite(settings.summaryHeight)) setSummaryHeight(settings.summaryHeight);
+  applyAppearance();
+  enabled=new Set(settings.enabled || builtIn.Driving);
+  setRecentSessionLimit(settings.limit);
+  setupPresets();
+  showTrackView(true);
+  renderLibrary();
+  lmu.onFolderChange(scan);
+  if (!settings.telemetry && !settings.results) {
+    try {
+      if (!settings.telemetryReminderSeen) {
+        const reminder = $('first-run-telemetry');
+        await new Promise(resolve => {
+          reminder.addEventListener('close', resolve, {once:true});
+          reminder.showModal();
+        });
+        await lmu.save({telemetryReminderSeen:true});
+        settings.telemetryReminderSeen = true;
+      }
+      Object.assign(settings, await lmu.folder('first-run-installation'));
+    } catch (error) {
+      setStatus($('status'), error.message, {error:true});
+    }
+  }
+  void scan();
+  setInterval(scan,5000);
+})().catch(error=>{setStatus($('status'), error.message, {error:true});});

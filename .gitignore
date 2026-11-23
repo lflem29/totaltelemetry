@@ -1,0 +1,9 @@
+node_modules/
+runtime/
+__pycache__/
+*.pyc
+*.duckdb
+*.duckdb.wal
+/community-server/data/
+/win/
+*-Setup.exe

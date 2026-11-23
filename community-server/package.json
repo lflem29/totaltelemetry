@@ -1,0 +1,19 @@
+{
+  "name": "total-telemetry-community-server",
+  "productName": "Total Telemetry Community Server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "42.0.0"
+  },
+  "communityDefaults": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "https": false,
+    "key": ""
+  }
+}

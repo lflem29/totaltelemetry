@@ -1,0 +1,27 @@
+const {contextBridge, ipcRenderer} = require('electron');
+contextBridge.exposeInMainWorld('lmu', {
+  dockPanel: key => ipcRenderer.invoke('dock-panel', key),
+  settings: () => ipcRenderer.invoke('settings'),
+  save: changes => ipcRenderer.invoke('save-settings', changes),
+  transferSettingsFile: (action, category) => ipcRenderer.invoke('transfer-settings-file', action, category),
+  resetSettings: () => ipcRenderer.invoke('reset-settings'),
+  folder: type => ipcRenderer.invoke('folder', type),
+  scan: () => ipcRenderer.invoke('scan'),
+  resultsDistance: () => ipcRenderer.invoke('results-distance'),
+  onFolderChange: callback => { ipcRenderer.on('folder-change', () => callback()); },
+  practiceReview: (path, laps, corners) => ipcRenderer.invoke('practice-review', path, laps, corners),
+  summaryChannels: (path, channels) => ipcRenderer.invoke('read-summary-channels', path, channels),
+  setCommunityServer: fields => ipcRenderer.invoke('set-community-server', fields),
+  onCommunityProgress: callback => { ipcRenderer.on('community-progress', (_, progress) => callback(progress)); },
+  listCommunityLaps: filters => ipcRenderer.invoke('list-community-laps', filters),
+  removeCommunityLap: id => ipcRenderer.invoke('remove-community-lap', id),
+  importCommunityLap: id => ipcRenderer.invoke('import-community-lap', id),
+  importComparisonLaps: () => ipcRenderer.invoke('import-comparison-laps'),
+  removeComparisonLap: path => ipcRenderer.invoke('remove-comparison-lap', path),
+  comparisonLap: path => ipcRenderer.invoke('read-comparison-lap', path),
+  setDiscordWebhook: value => ipcRenderer.invoke('set-discord-webhook', value),
+  exportBestLap: (path, target) => ipcRenderer.invoke('export-best-lap', path, target),
+  graphExportFont: () => ipcRenderer.invoke('graph-export-font'),
+  exportGraphImage: (name, png) => ipcRenderer.invoke('export-graph-image', name, png),
+  lap: (path, id) => ipcRenderer.invoke('read-lap', path, id)
+});

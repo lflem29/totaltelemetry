@@ -1,0 +1,19 @@
+{
+  "name": "total-telemetry",
+  "productName": "Total Telemetry",
+  "version": "1.0.8",
+  "description": "Local Le Mans Ultimate telemetry viewer",
+  "main": "main.js",
+  "communityDefaults": {
+    "host": "127.0.0.1",
+    "port": 8787,
+    "https": false,
+    "key": ""
+  },
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "42.0.0"
+  }
+}
