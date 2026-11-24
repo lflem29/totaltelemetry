@@ -223,9 +223,10 @@ const settingsNumber = Number.isFinite;
 const settingsColour = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 const temperatureMap = settingsMap(value => value === null || settingsNumber(value));
 const displayFields = {
+  driverTrainerEnabled:value => typeof value === 'boolean', trainerColdTyreTemperature:settingsNumber,
   heights:settingsMap(settingsNumber), enabled:settingsList, tyres:settingsText,
   colors:settingsMap(settingsColour), speedActivations:settingsMap(value => typeof value === 'boolean'),
-  deltaChannels:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
+  deltaChannels:settingsList, graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
   interfaceColour:settingsColour, interfaceColourMode:value => ['green', 'orange', 'custom'].includes(value),
   interfaceBackgroundColour:settingsColour, graphBackgroundColour:settingsColour,
   textScalePercent:value => Number.isInteger(value) && value >= 75 && value <= 150,
@@ -236,7 +237,10 @@ const displayFields = {
 const settingsFileFields = new Map([
   ['display', {...displayFields, presets:settingsMap(preset => isSettingsObject(preset) &&
     settingsList(preset.enabled) && Object.entries(preset).every(([key, value]) =>
-      Object.hasOwn(displayFields, key) && displayFields[key](value)))}],
+      Object.hasOwn(displayFields, key) && displayFields[key](value))),
+    graphPresets:settingsMap(preset => isSettingsObject(preset) &&
+      settingsList(preset.hiddenGraphs) && settingsList(preset.extraGraphChannels) &&
+      displayFields.heights(preset.heights) && (preset.graphOrder === undefined || settingsList(preset.graphOrder)))}],
   ['temperatures', {hotTemperatures:temperatureMap, hotTemperaturesByClass:settingsMap(temperatureMap)}]
 ]);
 
@@ -281,7 +285,7 @@ function rememberWindow(key, win) {
 
 function backend(command, payload) {
   const runtime = path.join(__dirname, 'runtime', 'python.exe');
-  const python = process.platform === 'win32' ? (fs.existsSync(runtime) ? runtime : 'python') : 'python3';
+  const python = process.platform === 'win32' ? runtime : 'python3';
   return new Promise((resolve, reject) => {
     const child = execFile(python, [path.join(__dirname, 'telemetry.py'), command],
       {maxBuffer: 160 * 1024 * 1024, windowsHide: true}, (error, output, stderr) => {
@@ -382,8 +386,22 @@ if (primaryInstance) app.whenReady().then(async () => {
     if (child && !child.isDestroyed()) child.close();
   });
   ipcMain.handle('settings', () => ({...publicSettings(), appVersion: app.getVersion()}));
+  const trainerCachePath = path.join(app.getPath('userData'), 'driver-trainer-v1.json');
+  ipcMain.handle('read-trainer-cache', async event => {
+    if (event.sender !== win.webContents) return [];
+    try {
+      const entries = JSON.parse(await fs.promises.readFile(trainerCachePath,'utf8'));
+      return Array.isArray(entries) ? entries : [];
+    } catch { return []; }
+  });
+  ipcMain.handle('write-trainer-cache', async (event, entries) => {
+    if (event.sender !== win.webContents || !Array.isArray(entries)) return;
+    const temporary = trainerCachePath + '.tmp';
+    await fs.promises.writeFile(temporary,JSON.stringify(entries),'utf8');
+    await fs.promises.rename(temporary,trainerCachePath);
+  });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['limit', 'heights', 'enabled', 'presets', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'interfaceColour', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'distanceDriver', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['driverTrainerEnabled', 'trainerColdTyreTemperature', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'interfaceColour', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'distanceDriver', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
     save();
     return publicSettings();

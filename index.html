@@ -12,12 +12,28 @@
 <header class="masthead">
   <div class="brand"><img class="brand-icon" src="total-telemetry-icon.png" alt="" width="44" height="44"><div>Total Telemetry <span id="app-version" hidden></span><small>LE MANS ULTIMATE</small></div></div>
   <div class="masthead-actions">
-    <nav aria-label="Views"><button id="library-tab" class="active">Session Library</button><button id="viewer-tab" disabled>Telemetry Viewer</button><button id="records-tab" type="button">My Records</button></nav>
+    <nav aria-label="Views"><button id="library-tab" class="active">Session Library</button><button id="viewer-tab" disabled>Telemetry Viewer</button><button id="trainer-tab" type="button" hidden>Driver Trainer</button><button id="records-tab" type="button">My Records</button></nav>
     <button id="export-best-lap" type="button" hidden disabled>Export the Best Lap from This Session to Share</button>
   </div>
   <div class="head-right"><span id="status" role="status"></span><button id="settings-button">Settings</button></div>
 </header>
 <main>
+  <section id="trainer" hidden aria-labelledby="trainer-title">
+    <div class="trainer-intro">
+    <header class="trainer-heading"><h1 id="trainer-title">Driver Trainer</h1><div id="trainer-scan" hidden><progress id="trainer-progress" aria-label="Practice history scan"></progress> <span id="trainer-progress-label"></span><small class="trainer-scan-note">Checking saved practice sessions may take a few minutes.</small></div></header>
+    <p class="trainer-intro-copy">Use telemetry from in-game Practice sessions to pick one thing to work on in your next stint.</p>
+    <div class="trainer-context"><p id="trainer-combo"></p><div><strong>Current Session</strong> <span id="trainer-current"></span> <button id="trainer-choose" type="button">Choose a Different Session</button></div><div><strong>Comparing With</strong> <span id="trainer-reference"></span> <button id="trainer-choose-reference" type="button">Choose Comparison Session</button></div><small>New practice sessions load automatically after three clean, timed laps in one stint.</small></div>
+    <div class="trainer-map-frame"><canvas id="trainer-map" aria-label="Track map" role="img"></canvas></div>
+    </div>
+    <p id="trainer-status" role="status"></p>
+    <div id="trainer-analysis" hidden>
+      <div id="trainer-focus" role="group" aria-label="Practice Focus"><button data-focus="0" aria-pressed="true">Consistent Braking</button><button data-focus="1" aria-pressed="false">Consistent Corner Exits</button><button data-focus="2" aria-pressed="false">Consistent Lap Times</button></div>
+      <section class="trainer-chart"><div class="trainer-chart-heading"><div class="trainer-corner-heading"><div id="trainer-corner-controls" role="group" aria-label="Corner navigation" hidden><button id="trainer-prev-corner" type="button" aria-label="Previous corner">‹</button><span id="trainer-corner-label" aria-live="polite"></span><button id="trainer-next-corner" type="button" aria-label="Next corner">›</button></div><h2 id="trainer-metric"></h2></div><div class="trainer-chart-heading"><label id="trainer-cold-control" hidden>Temperature at Which Tyres Are Considered Cold <input id="trainer-cold-threshold" type="number" step="any" value="60" required> °C</label><strong id="trainer-spread"></strong><label class="trainer-assist" id="trainer-abs-control" hidden><input id="trainer-show-abs" type="checkbox" checked> ABS</label><label class="trainer-assist" id="trainer-tc-control" hidden><input id="trainer-show-tc" type="checkbox" checked> TC</label><label class="trainer-assist" id="trainer-comparison-control" hidden><input id="trainer-show-comparison" type="checkbox" checked> Previous Stint Traces</label></div></div><div id="trainer-chart-legend" hidden><span id="trainer-plot-axis">Lap in Stint</span><span id="trainer-current-legend">Current Stint</span><span id="trainer-previous-legend">Previous Stint</span><span id="trainer-cold-legend" hidden>Cold Tyres</span><span id="trainer-other-legend" hidden></span><span id="trainer-comparison-legend" hidden></span></div><canvas id="trainer-plot" role="img"></canvas><span id="trainer-hover-guide" aria-hidden="true" hidden></span><div id="trainer-hover-reading" hidden></div><p id="trainer-evidence"></p><p id="trainer-priority-label" hidden>Corners Ordered by Variance: Most to Least</p><div id="trainer-priorities" role="group" aria-labelledby="trainer-priority-label"></div></section>
+    </div>
+    <footer class="trainer-footer"><button id="trainer-trophies" aria-haspopup="dialog"><span>You’ve Earned <strong id="trainer-awards"></strong> Out of <strong id="trainer-unlocked"></strong> Unlocked Trophies <small class="trainer-unlock-note">(Visit More Tracks to Unlock More Trophies)</small></span><progress id="trainer-awards-meter" aria-hidden="true"></progress><span>View Trophies ›</span></button></footer>
+  </section>
+  <dialog id="trainer-session-dialog" aria-labelledby="trainer-session-heading"><form method="dialog"><h2 id="trainer-session-heading">Choose a Different Session</h2><label for="trainer-session-choice">Practice session</label><select id="trainer-session-choice"></select><div class="trainer-dialog-actions"><button value="cancel">Cancel</button><button value="load">Load Session</button></div></form></dialog>
+  <dialog id="trainer-trophy-dialog" aria-labelledby="trainer-trophy-heading"><div class="trainer-chart-heading"><h2 id="trainer-trophy-heading">Trophies</h2><form method="dialog"><button>Close</button></form></div><p id="trainer-trophy-progress"></p><div class="trainer-completion"><progress id="trainer-completion-meter" aria-label="Unlocked trophies earned"></progress><strong id="trainer-percent"></strong></div><h3 id="trainer-trophy-track"></h3><p id="trainer-streak"></p><div id="trainer-trophy-cards"></div><div id="trainer-tracks" role="group" aria-label="Track trophy progress"></div></dialog>
   <section id="library">
     <div class="library-heading">
       <div>
@@ -159,8 +175,8 @@
                 <dl id="map-temperatures">
                   <div><dt>Session Length:</dt> <dd id="map-session-length" title="Elapsed time covered by the telemetry recording"></dd></div>
                   <div><dt>Weather:</dt> <dd id="map-weather" title="Estimated from recorded cloud darkness and track wetness"></dd></div>
-                  <div><dt>Track Temp:</dt> <dd><span id="map-track-start"></span> through to <span id="map-track-finish"></span></dd></div>
-                  <div><dt>Air Temp:</dt> <dd><span id="map-air-start"></span> through to <span id="map-air-finish"></span></dd></div>
+                  <div><dt id="map-track-label">Track Temp:</dt> <dd><span id="map-track-start"></span> through to <span id="map-track-finish"></span></dd></div>
+                  <div><dt id="map-air-label">Air Temp:</dt> <dd><span id="map-air-start"></span> through to <span id="map-air-finish"></span></dd></div>
                 </dl>
               </section>
               <section id="session-settings-group" aria-labelledby="session-settings-title">
@@ -197,7 +213,12 @@
             <button type="button" data-zoom-sector="3" title="Zoom To Sector 3" aria-label="Zoom To Sector 3" disabled>Zoom To Sector 3</button>
           </div>
           <div id="viewer-message" role="status" hidden></div>
-          <button id="choose-graphs">Select Active Telemetry Graphs</button>
+          <div id="graph-preset-actions" class="actions">
+            <select id="graph-preset" aria-label="Active telemetry graph preset"></select>
+            <button id="save-graph-preset" type="button">Save Preset</button>
+            <button id="remove-graph-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
+            <button id="choose-graphs" type="button">Select Active Telemetry Graphs</button>
+          </div>
         </div>
       </div>
       <aside class="telemetry">
@@ -209,6 +230,7 @@
           <div id="telemetry-channel-actions" class="actions" hidden>
             <select id="preset" aria-label="Telemetry preset"></select>
             <button id="save-preset" type="button">Save Preset</button>
+            <button id="remove-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
             <button id="choose-channels" type="button" disabled>Select Channels</button>
           </div>
         </div>
@@ -297,6 +319,7 @@
     <button id="settings-tab-folders" type="button" role="tab" aria-controls="settings-panel-folders" aria-selected="false" tabindex="-1">LMU Folders</button>
     <button id="settings-tab-sharing" type="button" role="tab" aria-controls="settings-panel-sharing" aria-selected="false" tabindex="-1">Sharing</button>
     <button id="settings-tab-temperatures" type="button" role="tab" aria-controls="settings-panel-temperatures" aria-selected="false" tabindex="-1">Temperatures</button>
+    <button id="settings-tab-beta" type="button" role="tab" aria-controls="settings-panel-beta" aria-selected="false" tabindex="-1">Beta</button>
   </div>
   <div id="settings-panel-display" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-display" tabindex="0">
       <section aria-labelledby="viewer-display-title">
@@ -364,6 +387,9 @@
         </form>
       </section>
   </div>
+  <div id="settings-panel-beta" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-beta" tabindex="0" hidden>
+        <label class="trainer-setting"><input id="enable-driver-trainer" type="checkbox"><span>Enable Driver Trainer (beta)</span></label>
+  </div>
   <div id="settings-panel-temperatures" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-temperatures" tabindex="0" hidden>
     <section class="settings-section" aria-labelledby="hot-temperatures-title">
       <h3 id="hot-temperatures-title">Hot temperature thresholds</h3>
@@ -382,7 +408,7 @@
   <div class="settings-footer"><button id="reset-settings" type="button">Reset All Settings</button></div>
 </dialog>
 <dialog id="community-laps-dialog" aria-labelledby="community-laps-title">
-  <h2 id="community-laps-title">Community Laps</h2>
+  <div class="community-dialog-header"><h2 id="community-laps-title">Community Laps</h2><form method="dialog" class="actions"><button id="close-community-laps" class="button-secondary">Close</button></form></div>
   <form id="community-filter-form" class="filter-bar community-filters">
     <label>Track<select name="track" aria-label="Track"><option value="">All</option></select></label>
     <label>Layout<select name="layout" aria-label="Layout"><option value="">All</option></select></label>
@@ -400,12 +426,7 @@
       <tbody id="community-laps-list"></tbody>
     </table>
   </div>
-  <div class="community-page actions" id="community-page" hidden>
-    <button id="community-prev" class="button-secondary" type="button">Previous Page</button>
-    <span id="community-page-info" aria-live="polite"></span>
-    <button id="community-next" class="button-secondary" type="button">Next Page</button>
-  </div>
-  <form method="dialog" class="actions"><button id="close-community-laps" class="button-secondary">Close</button></form>
+  <p class="community-page" id="community-page" aria-live="polite" hidden></p>
 </dialog>
 <dialog id="best-lap-export-dialog" aria-labelledby="best-lap-export-title">
   <h2 id="best-lap-export-title">Export Best Lap</h2>
@@ -448,9 +469,19 @@
   <form id="graph-form">
     <div class="dialog-title"><h2 id="graph-dialog-title">Select Active Telemetry Graphs</h2><button type="button" id="cancel-graphs">Cancel</button></div>
     <p id="summary-channel-note" hidden>Top Speed, PRM peak, temperatures, and tyre pressures show the highest reading per lap. Virtual Energy and Fuel show usage per lap. Finish-line channels show the last reading before the crossing. ABS and TC time active is measured in seconds.</p>
-    <input id="graph-options-search" type="search" placeholder="Search channels" aria-label="Search channels">
-    <div id="graph-options"></div>
-    <p id="graph-options-empty" role="status" hidden>No matching channels.</p>
+    <div id="graph-picker-tabs" class="view-tabs" role="group" aria-label="Graph picker view">
+      <button id="graph-select-tab" type="button" aria-pressed="true">Select Graphs</button>
+      <button id="graph-order-tab" type="button" aria-pressed="false">Order Graphs</button>
+    </div>
+    <div id="graph-select-pane">
+      <input id="graph-options-search" type="search" placeholder="Search channels" aria-label="Search channels">
+      <div id="graph-options"></div>
+      <p id="graph-options-empty" role="status" hidden>No matching channels.</p>
+    </div>
+    <div id="graph-order-pane" hidden>
+      <ol id="graph-order-options"></ol>
+      <p id="graph-order-empty" hidden>Enable graphs to set their order.</p>
+    </div>
     <div class="actions"><button>Apply</button></div>
   </form>
 </dialog>
@@ -462,6 +493,6 @@
     <div class="actions"><span id="merge-count"></span><button id="submit-merge">Apply</button></div>
   </form>
 </dialog>
-<dialog id="preset-dialog"><form id="preset-form" method="dialog"><h2>Save telemetry preset</h2><label>Preset name<input id="preset-name" required maxlength="60"></label><div class="actions"><button type="button" id="cancel-preset">Cancel</button><button>Save</button></div></form></dialog>
+<dialog id="preset-dialog"><form id="preset-form" method="dialog"><h2 id="preset-dialog-title">Save Telemetry Preset</h2><label>Preset name<input id="preset-name" required maxlength="60"></label><div class="actions"><button type="button" id="cancel-preset">Cancel</button><button>Save</button></div></form></dialog>
 </body>
 </html>

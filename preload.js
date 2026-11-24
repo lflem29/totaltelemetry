@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('lmu', {
   scan: () => ipcRenderer.invoke('scan'),
   resultsDistance: () => ipcRenderer.invoke('results-distance'),
   onFolderChange: callback => { ipcRenderer.on('folder-change', () => callback()); },
+  readTrainerCache: () => ipcRenderer.invoke('read-trainer-cache'),
+  writeTrainerCache: entries => ipcRenderer.invoke('write-trainer-cache', entries),
   practiceReview: (path, laps, corners) => ipcRenderer.invoke('practice-review', path, laps, corners),
   summaryChannels: (path, channels) => ipcRenderer.invoke('read-summary-channels', path, channels),
   setCommunityServer: fields => ipcRenderer.invoke('set-community-server', fields),

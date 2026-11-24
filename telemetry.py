@@ -427,7 +427,9 @@ def index(payload):
                 entry = dict(stamp=stamp, data=parser(path))
             cached[key] = entry
             # Correlation augments a copy, leaving the cached telemetry as read.
-            return json.loads(json.dumps(entry['data'])) if parser is inspect else entry['data']
+            if parser is inspect:
+                return {**json.loads(json.dumps(entry['data'])), 'recordingStamp': f'{stamp[0]}:{stamp[1]}'}
+            return entry['data']
         except (OSError, ValueError, duckdb.Error, ET.ParseError) as exc:
             errors.append(f'{path.name}: {exc}')
             return None
