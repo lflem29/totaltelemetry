@@ -1,7 +1,7 @@
-- Driver Trainer compares completed lap times and highlights cold tyre laps using an adjustable temperature threshold.
-- Corner exit graphs extend beyond the next braking point. Hover readouts on both corner graphs show speed.
-- Trophy cards are larger, with wrapped track names and trophy counts on separate lines.
-- Driver Overview fills the available height. Telemetry graphs stay in place when changing tyre measurements or closing a graph. Gear traces show horizontal segments and omit brief neutral blips.
+- Choose Metric with PSI, Metric, or Imperial in Settings → Display, or set speed, distance, temperature, pressure, and fuel volume individually. Metric with PSI is the default.
+- Driver Trainer identifies its Practice-only scope and shows completed lap counts beside the session details.
+- Four built-in telemetry graph presets are available. Tyre Pressures has per-wheel toggles and starts with smoothing enabled.
+- Fuel Level, G Force, and Brake Thickness default to two decimal places. Sidebar headings use consistent typography.
 
 Download the single Windows x64 setup executable below.
 

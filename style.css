@@ -23,9 +23,9 @@ h1,h2,p{margin:0}h1{font-size:calc(42.0px * var(--text-scale));letter-spacing:-.
 #toggle-map[aria-expanded="true"]::after{transform:rotate(225deg);margin-top:4px}#map{display:block;width:100%;height:225px;background:#111915}.playbar{display:flex;align-items:center;gap:10px;padding:9px 12px}.playbar input{flex:1;min-width:0}.playbar output{font:calc(16.8px * var(--text-scale)) Consolas,monospace;min-width:155px}.chart{margin-top:10px}.chart .card-head{flex-wrap:wrap}.chart .card-head output{margin-left:auto}.chart canvas{background:var(--graph-bg,transparent);width:100%;display:block;touch-action:none;cursor:crosshair}.resize{display:block;width:100%;height:10px;padding:0;border:0;border-radius:0;background:linear-gradient(var(--button-fill),var(--button-fill)) center/36px 4px no-repeat;cursor:ns-resize;touch-action:none}.chart select{font-size:calc(15.4px * var(--text-scale));padding:3px 5px}.telemetry{background:#141c17;border-left:1px solid var(--rule);display:flex;min-height:0;flex-direction:column}.telemetry-head{padding:13px;border-bottom:1px solid var(--rule)}.telemetry-head p{font:calc(16.8px * var(--text-scale)) Consolas,monospace;margin:3px 0 9px}.telemetry-head .actions select{flex:1;min-width:0}#channel-search{width:100%;margin:9px 0 5px}.check{font-size:calc(16.8px * var(--text-scale));color:var(--muted)}#channel-list{overflow:auto;min-height:0;padding:0 12px}.channel{padding:7px 0;border-bottom:1px solid #29342b}.channel label{display:flex;gap:5px;align-items:center;font-size:calc(16.8px * var(--text-scale))}.reading{padding-left:23px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;font:calc(15.4px * var(--text-scale))/1.4 Consolas,monospace}.reading span{overflow-wrap:anywhere;white-space:pre-line}.selected-color{color:var(--accent)}.reference-color{color:var(--reference)}#viewer-message{min-width:0;overflow-wrap:anywhere;color:var(--muted);font-size:calc(16.8px * var(--text-scale))}
 dialog{background:var(--panel);color:var(--fg);border:1px solid var(--rule);border-radius:9px;padding:21px;width:min(650px,90vw)}dialog::backdrop{background:#080b09bc}.dialog-title,.folder-item{display:flex;align-items:center;justify-content:space-between;gap:12px}.folder-item{border-top:1px solid var(--rule);margin-top:15px;padding-top:15px}.folder-item p{overflow-wrap:anywhere}dialog>p{margin:7px 0 15px}#preset-form label{margin:10px 0}
 
-.telemetry-title-row{display:flex;gap:6px}
+.telemetry-title-row{display:flex;flex-wrap:wrap;gap:6px}
 .telemetry-title-row button{flex:1 0 auto;padding:6px;box-shadow:none}
-.telemetry-title-row button[aria-pressed],#session-summary-title{font-weight:400;text-transform:none;line-height:1.2;font-size:min(calc(22px * var(--text-scale)),4.2cqi)}
+:is(#show-track-view,#show-telemetry-channels,#session-summary-title){font:400 calc(16px * var(--text-scale))/1.2 Geist,"Segoe UI",sans-serif;letter-spacing:normal;text-transform:none}
 .telemetry-title-row button[aria-pressed="false"]{background:var(--panel);color:var(--fg)}
 .telemetry-title-row button[aria-pressed="false"]:hover{background:var(--raised)}
 #channel-options,#graph-options{max-height:52vh;overflow:auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:3px 14px;padding:6px 0}
@@ -53,6 +53,7 @@ dialog{background:var(--panel);color:var(--fg);border:1px solid var(--rule);bord
 #channel-list>p{grid-column:1/-1}
 #telemetry-panels{flex:1;min-height:0;display:flex;flex-direction:column;container-type:size}
 .session-summary{display:flex;flex-direction:column;flex:0 0 var(--summary-height,auto);min-height:0;max-height:90%;border-top:1px solid var(--rule);background:var(--raised)}
+.session-summary:has(#driver-performance:not([hidden]) #practice-overview:not([hidden])){min-height:var(--summary-height,min(720px,90%))}
 .session-summary-header{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;flex-shrink:0;gap:4px 8px;padding:8px 13px}
 .session-summary-actions{display:flex;flex-wrap:wrap;gap:4px;margin-left:auto}
 .session-summary-actions button{font-size:calc(14px * var(--text-scale));padding:4px 7px}
@@ -407,17 +408,17 @@ button{text-transform:capitalize}
 .practice-section p{margin-top:6px}
 .practice-interface-tips{margin:6px 0 0;padding-inline-start:1.25em;list-style:disc;color:var(--muted);font-style:italic}
 .practice-interface-tips li+li{margin-top:2px}
-#practice-overview,.practice-overview{min-height:100%}
-.practice-overview{display:flex;flex-direction:column;border-inline-start:3px solid var(--button-fill)}
-.practice-lap-consistency{display:flex;flex-direction:column;flex:1 0 auto}
+#practice-overview{display:flex;flex-direction:column;min-height:100%}
+.practice-overview{display:flex;flex-direction:column;flex:1 0 auto;border-inline-start:3px solid var(--button-fill)}
+.practice-lap-consistency{display:flex;flex-direction:column;flex:3 0 auto}
 .practice-overview button{padding:2px 6px}
 .practice-section h4{margin:8px 0 3px;color:var(--fg)}
 .practice-overview-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
 .practice-overview-metrics strong{font-size:1.22em;color:var(--accent)}
 .practice-overview-metrics progress{display:block;width:100%;height:6px;margin-top:6px;accent-color:var(--accent)}
-.practice-consistent-corners{display:grid;gap:3px;margin:4px 0;padding:0;list-style:none;font-variant-numeric:tabular-nums}
-.practice-consistent-corners li{display:grid;grid-template-columns:max-content 1fr max-content;align-items:center;gap:6px;min-height:calc(29px * var(--text-scale))}
-.practice-consistent-corners .practice-spread-track{grid-column:2;grid-row:1;min-width:0;height:calc(8px * var(--text-scale))}
+.practice-consistent-corners{display:grid;flex:1 0 auto;grid-auto-rows:minmax(min-content,1fr);gap:3px;margin:4px 0;padding:0;list-style:none;font-variant-numeric:tabular-nums}
+.practice-consistent-corners li{display:grid;grid-template-columns:max-content 1fr max-content;align-items:center;gap:6px;min-height:calc(32px * var(--text-scale))}
+.practice-consistent-corners .practice-spread-track{grid-column:2;grid-row:1;min-width:0;height:calc(10px * var(--text-scale))}
 .practice-corner-reading{grid-column:3;grid-row:1;color:var(--muted)}
 .practice-lap-plot{display:grid;flex:1 0 auto;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);margin:6px 0 0;padding:0;list-style:none;overflow:hidden}
 .practice-lap-plot li{display:flex;flex-direction:column;min-width:0;text-align:center;color:var(--muted);font-size:.8em;font-variant-numeric:tabular-nums}
@@ -492,10 +493,10 @@ button{text-transform:capitalize}
 #trainer-priorities button{padding:clamp(3px,.8vh,8px) 5px}
 #trainer-priorities button small{display:block;color:var(--muted);text-transform:none}
 #trainer-priorities button[aria-pressed=true] small{color:inherit}
-.trainer-footer{flex:none;margin-top:auto;position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--rule);z-index:2}
-#trainer-trophies{text-transform:none;width:100%;display:flex;align-items:center;gap:14px;border:0;background:transparent;padding:8px 0}
-#trainer-trophies > span:last-child{margin-left:auto;flex:none}
-#trainer-trophies > span:first-child{white-space:normal;text-align:left}
+.trainer-footer{flex:none;display:flex;align-items:center;gap:14px;padding:8px 0;margin-top:auto;position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--rule);z-index:2}
+.trainer-trophy-summary{min-width:0}
+#trainer-trophies{flex:none;margin-inline-start:auto;padding:5px 10px;font-size:calc(14px * var(--text-scale));background:var(--button-fill);color:var(--button-ink)}
+#trainer-trophies:hover{background:color-mix(in srgb,var(--button-fill) 88%,var(--button-shade))}
 .trainer-unlock-note{color:inherit;font-size:inherit}
 #trainer progress,#trainer-trophy-dialog progress{accent-color:var(--accent);height:8px}
 #trainer #trainer-awards-meter{width:min(16vw,170px);height:14px;appearance:none;border:0;border-radius:4px;overflow:hidden;background:var(--rule)}
@@ -515,7 +516,10 @@ button{text-transform:capitalize}
 .earned .trainer-trophy-state{color:#f2cd79}
 .trainer-completion,.trainer-dialog-actions{display:flex;align-items:center;gap:8px}.trainer-completion progress{flex:1}
 .trainer-dialog-actions{margin-top:12px;justify-content:flex-end}
-#trainer-session-choice{display:block;width:100%}
+#trainer-session-dialog{width:min(1200px,calc(100vw - 24px))}
+#trainer-session-choice{display:block;width:100%;min-width:0}
+.trainer-session-row button{margin-inline-start:8px}
+.trainer-session-laps{margin-inline-start:6px;white-space:nowrap;font-weight:700;font-variant-numeric:tabular-nums}
 
 #settings-panel-beta .trainer-setting{display:flex;align-items:center;gap:8px}
 .trainer-setting input{flex:none;margin:0}
@@ -563,12 +567,13 @@ button{text-transform:capitalize}
 
 #trainer-hover-guide,#trainer-hover-reading{position:fixed;pointer-events:none;z-index:3}
 #trainer-hover-guide{width:1px;background:var(--muted);opacity:.55}
-#trainer-hover-reading{padding:6px 9px;border:1px solid var(--rule);border-radius:5px;background:var(--raised);color:var(--fg);font-size:.8em;box-shadow:0 2px 8px #0005}
-#trainer-hover-reading strong{color:var(--accent)}
+#trainer-hover-reading{display:flex;gap:5px;font:600 .8em Consolas,monospace;white-space:nowrap}
+.trainer-hover-value{padding:3px 6px;border:1px solid var(--reading-colour);border-radius:4px;background:var(--raised);color:var(--reading-colour);box-shadow:0 2px 8px #0005}
+.trainer-hover-value.dotted{border-style:dotted}
 
 #graph-options .graph-option-no-data{margin-left:auto;color:var(--muted);font-size:.75em;white-space:nowrap}
 
-.wheel-temperature-controls{display:inline-flex;flex-wrap:wrap;gap:4px 8px}
+.wheel-trace-controls{display:inline-flex;flex-wrap:wrap;gap:4px 8px}
 
 .chart-export-actions{display:inline-flex;align-items:center;gap:5px;flex-shrink:0}
 .chart-close{display:grid;place-items:center;inline-size:1.65em;block-size:1.65em;padding:0;font-size:calc(16px * var(--text-scale));line-height:1}

@@ -1,7 +1,7 @@
-name: Build public desktop 1.0.9
+name: Build public desktop 1.0.10
 on:
   push:
-    branches: [build-v1.0.9]
+    branches: [build-v1.0.10]
 permissions:
   contents: write
 jobs:
@@ -17,16 +17,16 @@ jobs:
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y nsis p7zip-full
-          gh release download v1.0.8 -R "$GITHUB_REPOSITORY" -p '*.exe' -O previous.exe
-          echo 'd3ae74c533d2715a20f3ac3844851783932867ecd33ff311d56f7ea5d92c8f41  previous.exe' | sha256sum -c
+          gh release download v1.0.9 -R "$GITHUB_REPOSITORY" -p '*.exe' -O previous.exe
+          echo 'e1d4ced48707505a70e6ac5dd1d79f0697709a8aac2c57d463bac36c8d60bc6f  previous.exe' | sha256sum -c
           7z x -y -owin previous.exe >/dev/null
           find win -maxdepth 1 -iname '*uninstall*' -type f -delete
           mv 'win/Total Telemetry.exe' 'win/LMU Lap Workbench.exe'
           python3 prepare.py
           cp win/resources/app/total-telemetry-icon.ico .
           makensis -V2 installer.nsi
-          asset=Total-Telemetry-1.0.9-Setup.exe
+          asset=Total-Telemetry-1.0.10-Setup.exe
           7z t "$asset" >/dev/null
           sha=$(sha256sum "$asset" | cut -d ' ' -f 1)
           printf '\nSHA-256: `%s`\n' "$sha" >> release-notes.md
-          gh release create v1.0.9 "$asset" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title 'Total Telemetry 1.0.9' --notes-file release-notes.md
+          gh release create v1.0.10 "$asset" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest --title 'Total Telemetry 1.0.10' --notes-file release-notes.md

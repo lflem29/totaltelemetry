@@ -292,9 +292,7 @@ function settingsFields() {
   $('settings-channels').disabled = !ready;
   $('settings-channel-note').hidden = ready;
   for (const type of ['telemetry', 'results']) $(type + '-path').textContent = settings[type] || 'Folder not set';
-  for (const input of document.querySelectorAll('[data-hot-temperature]')) {
-    input.value = hotTemperature(input.dataset.carClass, input.dataset.hotTemperature) ?? '';
-  }
+  refreshUnitFields();
 }
 let distanceReport, distanceRequest;
 const distanceNumber = new Intl.NumberFormat(undefined, {minimumFractionDigits:1, maximumFractionDigits:1});
@@ -311,7 +309,7 @@ function renderResultsDistance() {
   for (const total of totals) option(picker, total.name, total.id);
   picker.value = preferred?.id ?? '';
   $('distance-driver-label').hidden = totals.length <= 1;
-  $('distance-total').textContent = preferred ? distanceNumber.format(preferred.km) + ' km' : '';
+  $('distance-total').textContent = preferred ? distanceNumber.format(convert('',preferred.km,'km')) + ' ' + displayUnit('','km') : '';
   $('track-hours').hidden = !preferred;
   const minutes = Math.round((preferred?.trackSeconds ?? 0) / 60);
   $('track-hours-total').textContent = Number.isFinite(preferred?.trackSeconds)
@@ -326,7 +324,7 @@ function renderResultsDistance() {
       const list = node('ol');
       for (const favourite of favourites) {
         const item = node('li', favourite.car);
-        item.append(node('small', distanceNumber.format(favourite.km) + ' km'));
+        item.append(node('small', distanceNumber.format(convert('',favourite.km,'km')) + ' ' + displayUnit('','km')));
         list.append(item);
       }
       value.append(list);
@@ -337,7 +335,7 @@ function renderResultsDistance() {
   $('favourite-tracks').hidden = !tracks.length;
   $('favourite-track-list').replaceChildren(...tracks.map(({track, km}) => {
     const item = node('li', track);
-    item.append(node('small', distanceNumber.format(km) + ' km'));
+    item.append(node('small', distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
     return item;
   }));
   const problem = distanceReport?.data?.errors;
@@ -913,7 +911,7 @@ function renderLibrary() {
     const comparison = node('td', undefined, 'session-comparison');
     comparison.append(addReference);
     addLoadedReferenceLabel(comparison, session.path);
-    const measure = (value, unit) => Number.isFinite(value) ? number(value, 1) + ' ' + unit : '—';
+    const measure = (value, unit) => Number.isFinite(value) ? measurement(value,unit,1) : '—';
     row.append(
       timestamp,
       track,
@@ -1389,22 +1387,91 @@ function sample(channel, time) {
 }
 function inExtent(data, x) { return x >= data.extent[0] && x <= data.extent[1]; }
 function tyreName() { return settings.tyres || 'TyresTempCentre'; }
+const metricUnits = {speed:'metric',distance:'metric',temperature:'metric',pressure:'metric',fuel:'metric'};
+const imperialUnits = Object.fromEntries(Object.keys(metricUnits).map(key => [key,'imperial']));
+const unitPresets = {metricPsi:{...metricUnits,pressure:'imperial'},metric:metricUnits,imperial:imperialUnits};
+const unitOptions = [...document.querySelectorAll('[data-measurement-unit]')];
+const usingImperial = key => (settings.measurementUnits?.[key] ?? unitPresets.metricPsi[key]) === 'imperial';
+
+function unitConversion(name, unit) {
+  const normalized = unit?.trim().toLowerCase();
+  if (['km/h','kph','kmh','mph'].includes(normalized)) {
+    const mph = usingImperial('speed');
+    return [mph ? 'mph' : 'km/h', normalized === 'mph' ? (mph ? 1 : 1.609344) : (mph ? 1 / 1.609344 : 1)];
+  }
+  if (['m','km','ft','mi'].includes(normalized)) {
+    const imperial = usingImperial('distance');
+    const long = normalized === 'km' || normalized === 'mi';
+    const factor = long ? 1.609344 : .3048;
+    const sourceImperial = normalized === 'ft' || normalized === 'mi';
+    return [imperial ? (long ? 'mi' : 'ft') : (long ? 'km' : 'm'),
+      sourceImperial === imperial ? 1 : imperial ? 1 / factor : factor];
+  }
+  if (['c','°c','degc','f','°f','degf'].includes(normalized)) {
+    const fahrenheit = usingImperial('temperature');
+    const sourceFahrenheit = ['f','°f','degf'].includes(normalized);
+    return fahrenheit === sourceFahrenheit ? [fahrenheit ? '°F' : '°C',1] :
+      fahrenheit ? ['°F',1.8,32] : ['°C',1 / 1.8,-32 / 1.8];
+  }
+  if (['TyresPressure','Turbo Boost Pressure'].includes(name) && ['pa','kpa','psi'].includes(normalized)) {
+    const psi = usingImperial('pressure');
+    const toKpa = normalized === 'pa' ? .001 : normalized === 'psi' ? 6.894757293168 : 1;
+    return [psi ? 'psi' : 'kPa',psi ? toKpa / 6.894757293168 : toKpa];
+  }
+  if (['l','litre','litres','liter','liters','us gal','gal'].includes(normalized)) {
+    const gallons = usingImperial('fuel');
+    const sourceGallons = normalized.endsWith('gal');
+    return [gallons ? 'US gal' : 'L',sourceGallons === gallons ? 1 : gallons ? 1 / 3.785411784 : 3.785411784];
+  }
+  return [unit || '',1];
+}
 function displayUnit(name, unit) {
-  const normalized = unit?.toLowerCase();
-  if (name === 'Turbo Boost Pressure' && normalized === 'pa') return 'kPa';
-  if (name === 'TyresPressure' && (normalized === 'kpa' || normalized === 'pa')) return 'psi';
-  if (['km/h', 'kph', 'kmh'].includes(normalized)) return 'km/h';
-  if (unit === 'C') return '°C';
-  return unit || '';
+  return unitConversion(name,unit)[0];
 }
 function convert(name, value, unit) {
   if (!Number.isFinite(value)) return value;
-  const normalized = unit?.toLowerCase();
-  if (name === 'Turbo Boost Pressure' && normalized === 'pa') return value / 1000;
-  if (name === 'TyresPressure' && normalized === 'kpa') return value / 6.894757293168;
-  if (name === 'TyresPressure' && normalized === 'pa') return value / 6894.757293168;
-  return value;
+  const [,factor,offset = 0] = unitConversion(name,unit);
+  return value * factor + offset;
 }
+function measurement(value, unit, digits) {
+  return number(convert('',value,unit),digits) + ' ' + displayUnit('',unit);
+}
+function temperatureInputValue(celsius) {
+  return Number.isFinite(celsius) ? Number(convert('',celsius,'°C').toFixed(6)) : '';
+}
+function temperatureSettingValue(value) {
+  return usingImperial('temperature') ? (value - 32) / 1.8 : value;
+}
+function refreshUnitFields() {
+  for (const input of unitOptions) input.value = usingImperial(input.dataset.measurementUnit) ? 'imperial' : 'metric';
+  $('unit-preset').value = Object.keys(unitPresets).find(preset =>
+    unitOptions.every(input => unitPresets[preset][input.dataset.measurementUnit] === input.value)) ?? 'custom';
+  const unit = displayUnit('','°C');
+  for (const text of document.querySelectorAll('[data-temperature-unit]')) text.textContent = unit;
+  $('trainer-cold-unit').textContent = unit;
+  for (const input of document.querySelectorAll('[data-hot-temperature]')) {
+    input.value = temperatureInputValue(hotTemperature(input.dataset.carClass,input.dataset.hotTemperature));
+    input.setAttribute('aria-label',input.dataset.temperatureLabel + ' (' + unit + ')');
+  }
+}
+function applyMeasurementUnits(units) {
+  save({measurementUnits:units});
+  refreshUnitFields();
+  renderLibrary();
+  renderSessionSummary();
+  if (ready) {
+    const column = $('plot-column');
+    const scrollTop = column.scrollTop;
+    buildCharts();
+    column.scrollTop = scrollTop;
+    buildChannels();
+  }
+  renderDriverTrainer();
+}
+$('unit-preset').onchange = event => applyMeasurementUnits(unitPresets[event.target.value]);
+for (const input of unitOptions) input.onchange = () => applyMeasurementUnits(
+  Object.fromEntries(unitOptions.map(field => [field.dataset.measurementUnit,field.value])));
+
 const wholeNumberTelemetry = new Set([
   'Brakes Temp', 'frontBrakes', 'rearBrakes', 'tyres', ...Object.keys(tyreChannels),
   'Steering Pos', 'Throttle Pos', 'Brake Pos'
@@ -1415,6 +1482,7 @@ function telemetryDecimalPlaces(key, fallback = 1, overrides = settings.telemetr
     (Object.hasOwn(tyreChannels, key) ? overrides?.tyres : undefined);
   if (Number.isInteger(places) && places >= 0 && places <= 6) return places;
   if (/height/i.test(key)) return 5;
+  if (key === 'Fuel Level' || key === 'Brake Thickness' || /^G Force\b/i.test(key)) return 2;
   return wholeNumberTelemetry.has(key) ? 0 : fallback;
 }
 function summaryDecimalDefault(key) {
@@ -1545,8 +1613,8 @@ function extraSummaryOptions(session) {
   }
   return names.map(name => {
     if (name === 'Ground Speed') {
-      const values = Object.fromEntries(session.laps.map(lap => [lap.id, lap.topSpeed]));
-      return [name, extraSummaryName(name), 'km/h', values];
+      const values = Object.fromEntries(session.laps.map(lap => [lap.id, convert('Ground Speed',lap.topSpeed,'km/h')]));
+      return [name, extraSummaryName(name), displayUnit('Ground Speed','km/h'), values];
     }
     const derived = derivedSummaryChannels.get(name);
     if (derived) {
@@ -1653,7 +1721,7 @@ function summaryChart(key, label, unit, readings, endpoints) {
   const readoutWidth = points.reduce((width, point) => Math.max(width, point.label.length + 3 + format(point.value).length), 0);
   readout.style.width = 'calc(' + readoutWidth + 'ch + 12px)';
   const thresholdKey = key === 'frontBrakes' || key === 'rearBrakes' ? 'brakes' : key;
-  const threshold = hotTemperature(selected?.carClass, thresholdKey);
+  const threshold = convert('',hotTemperature(selected?.carClass, thresholdKey),'°C');
   const isHot = value => Number.isFinite(threshold) && Number.isFinite(value) && value >= threshold;
   const values = points.map(point => point.value).filter(Number.isFinite);
   const hasWarnings = values.some(isHot);
@@ -2150,8 +2218,8 @@ function renderPracticeReview(request) {
       const band = node('span');
       band.style.width = (100 * spread / scale) + '%';
       track.append(band);
-      const reading = number(spread, digits) + ' km/h spread (' + number(low.speed, digits) + '–' +
-        number(high.speed, digits) + ' km/h) · ' + count + ' laps';
+      const reading = measurement(spread,'km/h',digits) + ' spread (' + number(convert('',low.speed,'km/h'),digits) + '–' +
+        measurement(high.speed,'km/h',digits) + ') · ' + count + ' laps';
       item.append(action, track, node('span', reading, 'practice-corner-reading'));
       list.append(item);
     }
@@ -2280,12 +2348,14 @@ function renderSessionSummary() {
     const readings = summary?.temperatureEndpoints?.[channel];
     for (const [index, bound] of ['start','finish'].entries()) {
       const value = readings?.[index];
-      $('map-' + channel + '-' + bound).textContent = Number.isFinite(value) ? number(value, telemetryDecimalPlaces(summaryChannelKeys[channel])) + ' °C' : '—';
+      $('map-' + channel + '-' + bound).textContent = Number.isFinite(value) ? measurement(value,'°C',telemetryDecimalPlaces(summaryChannelKeys[channel])) : '—';
     }
   }
   const hidden = hiddenSummaryChannels();
   const chartOptions = [
-    ...summaryTemperatureOptions.map(([key, label]) => [key, telemetryName(summaryChannelKeys[key] ?? key, label), '°C', summary?.peakTemperaturesByLap?.[key], summary?.chartEndpoints?.[key] ?? summary?.temperatureEndpoints?.[key]]),
+    ...summaryTemperatureOptions.map(([key, label]) => [key, telemetryName(summaryChannelKeys[key] ?? key, label), displayUnit('','°C'),
+      Object.fromEntries(Object.entries(summary?.peakTemperaturesByLap?.[key] ?? {}).map(([id,value]) => [id,convert('',value,'°C')])),
+      (summary?.chartEndpoints?.[key] ?? summary?.temperatureEndpoints?.[key])?.map(value => convert('',value,'°C'))]),
     ['virtualEnergy', telemetryName('virtualEnergy'), '%', summary?.energyUsedByLap]
   ].filter(([key]) => !hidden.has(key));
   chartOptions.push(...extraSummaryOptions(selected));
@@ -2990,7 +3060,7 @@ function expandedCorner(from, apex, to, approach, selectedDriver, referenceDrive
     const speed = data.channels['Ground Speed'];
     const time = data.timeAt(to);
     const exitSpeed = time >= speed?.times[0] && time <= speed.times.at(-1)
-      ? sample(speed, time)?.[0] : undefined;
+      ? convert('Ground Speed',sample(speed,time)?.[0],speed.unit) : undefined;
     return {pedals:[brakeOn, brakeOff, throttleOn, fullThrottle], exitSpeed};
   });
 
@@ -3014,12 +3084,12 @@ function expandedCorner(from, apex, to, approach, selectedDriver, referenceDrive
     const [own, other] = events.map(event => event.pedals[index]?.distance);
     const readings = [own, other].map(distance => {
       if (!Number.isFinite(distance)) return '—';
-      const offset = Math.round(distance - apex);
-      return offset ? Math.abs(offset) + ' m ' + (offset < 0 ? 'before apex' : 'after apex') : 'At apex';
+      const offset = Math.round(convert('',distance - apex,'m'));
+      return offset ? Math.abs(offset) + ' ' + displayUnit('','m') + ' ' + (offset < 0 ? 'before apex' : 'after apex') : 'At apex';
     });
-    const difference = Math.round(own - apex) - Math.round(other - apex);
-    addRow(label, readings, !Number.isFinite(difference) ? '—' : difference === 0 ? 'Within 1 m'
-      : selectedDriver + ' ' + Math.abs(difference) + ' m ' + (difference < 0 ? 'earlier' : 'later'));
+    const difference = Math.round(convert('',own - apex,'m')) - Math.round(convert('',other - apex,'m'));
+    addRow(label, readings, !Number.isFinite(difference) ? '—' : difference === 0 ? 'Within 1 ' + displayUnit('','m')
+      : selectedDriver + ' ' + Math.abs(difference) + ' ' + displayUnit('','m') + ' ' + (difference < 0 ? 'earlier' : 'later'));
   }
   const speeds = events.map(event => event.exitSpeed);
   const digits = telemetryDecimalPlaces('Ground Speed');
@@ -3027,9 +3097,9 @@ function expandedCorner(from, apex, to, approach, selectedDriver, referenceDrive
     ['Minimum Speed', minimums], ['Speed at Corner Exit', speeds], ['Post Corner Max Speed', maxima]
   ]) {
     const difference = values[0] - values[1];
-    addRow(label, values.map(value => Number.isFinite(value) ? number(value, digits) + ' km/h' : '—'),
+    addRow(label, values.map(value => Number.isFinite(value) ? number(value, digits) + ' ' + displayUnit('','km/h') : '—'),
       !Number.isFinite(difference) ? '—' : Number(number(difference, digits)) === 0 ? 'Same speed'
-        : selectedDriver + ' ' + number(Math.abs(difference), digits) + ' km/h ' + (difference < 0 ? 'slower' : 'faster'));
+        : selectedDriver + ' ' + number(Math.abs(difference), digits) + ' ' + displayUnit('','km/h') + ' ' + (difference < 0 ? 'slower' : 'faster'));
   }
   const scroll = node('div', undefined, 'corner-detail-table');
   scroll.append(table);
@@ -3117,14 +3187,14 @@ function cornerTimeLossPanel() {
   const note = corners.length ? 'Estimated corners · Largest time loss first'
     : 'No comparable corners were detected in the recorded GPS route.';
   panel.append(node('p', note));
-  const speedText = value => Number.isFinite(value) ? number(value, speedDigits) + ' km/h' : '—';
+  const speedText = value => Number.isFinite(value) ? number(value, speedDigits) + ' ' + displayUnit('','km/h') : '—';
   const cornerRows = corners.map(({index, from, apex, to, change, minimums}) => {
     const displayed = Math.round(change * 1000) / 1000;
     const maxima = [primary, secondary].map((data, i) => postCornerMaxSpeed(data, speeds[i], to));
     return {index, from, apex, to, change:displayed, minimums, maxima, labels:[
       'Corner ' + (index + 1),
-      selectedDriver + ' ' + number(minimums[0], speedDigits) + ' km/h',
-      comparedDriver + ' ' + number(minimums[1], speedDigits) + ' km/h',
+      selectedDriver + ' ' + number(minimums[0], speedDigits) + ' ' + displayUnit('','km/h'),
+      comparedDriver + ' ' + number(minimums[1], speedDigits) + ' ' + displayUnit('','km/h'),
       timeGapLabel(displayed),
       selectedDriver + ' ' + speedText(maxima[0]),
       comparedDriver + ' ' + speedText(maxima[1])
@@ -3271,19 +3341,19 @@ $('change-active-reference').onclick = () => {
 };
 
 const chartHiddenWheels = new Map();
-let smoothTyrePressure = false;
+let smoothTyrePressure = true;
 
-function temperatureWheelControls(chartKey, channelName, colour, redraw) {
+function wheelTraceControls(chartKey, channelName, colour, redraw) {
   const sources = [primary.channels[channelName], secondary?.channels[channelName]];
-  const hasWheelTemperatures = sources.some(channel =>
+  const hasWheelTraces = sources.some(channel =>
     channel?.rows[0]?.length === (channel?.rate ? 4 : 5) &&
-    (/temp/i.test(channelName) || /^(?:°?[cfk]|deg[cf])$/i.test(channel.unit?.trim() ?? '')));
-  if (!hasWheelTemperatures) return {};
+    (channelName === 'TyresPressure' || /temp/i.test(channelName) || /^(?:°?[cfk]|deg[cf])$/i.test(channel.unit?.trim() ?? '')));
+  if (!hasWheelTraces) return {};
 
   const key = chartKey === 'delta' ? chartKey + '|' + channelName : chartKey;
   if (!chartHiddenWheels.has(key)) chartHiddenWheels.set(key, new Set());
   const hiddenWheels = chartHiddenWheels.get(key);
-  const controls = node('span', undefined, 'wheel-temperature-controls');
+  const controls = node('span', undefined, 'wheel-trace-controls');
   controls.setAttribute('role', 'group');
   controls.setAttribute('aria-label', telemetryName(channelName) + ' wheel traces');
   const swatches = wheels.map((wheel, index) => {
@@ -3393,7 +3463,7 @@ function buildCharts() {
     const source = primary.channels[key] || secondary?.channels[key];
     const isWheelChannel = source?.rows[0]?.length === (source?.rate ? 4 : 5) && /tyres|brakes|wheels/i.test(key);
     const redrawWheels = () => { row.cache = null; scheduleRender(); };
-    const wheelOptions = temperatureWheelControls(key, channelName,
+    const wheelOptions = wheelTraceControls(key, channelName,
       index => index === 0 ? graphColor(key) : palette[index], redrawWheels);
     if (wheelOptions.controls) head.append(wheelOptions.controls);
     else if (key === 'tyres' || isWheelChannel) head.append(node('span','FL / FR / RL / RR'));
@@ -3461,7 +3531,7 @@ function buildCharts() {
         read.style.inlineSize = (main.length + (ref ? 3 + ref.length : 0)) + 'ch';
         const fallback = mergeColors[(index + 1) % mergeColors.length], colorKey = key+'|'+name;
         text.style.color = graphColor(colorKey,fallback);
-        const wheelOptions = temperatureWheelControls(key, name, () => graphColor(colorKey,fallback), redrawWheels);
+        const wheelOptions = wheelTraceControls(key, name, () => graphColor(colorKey,fallback), redrawWheels);
         const button = colorControl(telemetryName(name),colorKey,fallback,()=>{
           text.style.color = graphColor(colorKey,fallback);
           wheelOptions.updateSwatches?.();
@@ -3579,20 +3649,6 @@ function trace(data, name) {
   } else {
     points = channel.rows.map((values,index) => [channel.times[index],values])
       .filter(([time]) => time >= data.lap.start - 1e-6 && time < data.lap.end);
-  }
-  if (name === 'Gear') {
-    // Hold the outgoing gear through neutral blips of up to a quarter second.
-    for (let start = 1; start < points.length; start++) {
-      if (points[start][1][0] !== 0) continue;
-      let end = start + 1;
-      while (end < points.length && points[end][1][0] === 0) end++;
-      const previous = points[start - 1][1][0];
-      const next = points[end]?.[1][0];
-      if (previous > 0 && next > 0 && points[end][0] - points[start][0] <= .25) {
-        for (let index = start; index < end; index++) points[index][1] = [previous];
-      }
-      start = end - 1;
-    }
   }
   return points.map(([time,values], index) => [
     channel.rate || (index > 0 && index < points.length - 1) ? data.distanceAt(time) :
@@ -3723,10 +3779,13 @@ function baseChart(row, width, height, ratio) {
   else if (name === 'Gear') { low = Math.floor(Math.min(-1,low)); high = Math.ceil(Math.max(1,high)); }
   else if (name === 'delta') { low = Math.min(0,low); high = Math.max(0,high); }
   if (!Number.isFinite(low) || !Number.isFinite(high)) { low = 0; high = 1; }
+  const splitGear = name === 'Gear' && [first,second].every(points => points.some(([,values]) => Number.isFinite(values[0])));
+  const gearOffset = splitGear ? .18 : 0;
   const padding = (high-low)*.07 || 1;
   if (!['Throttle Pos','Brake Pos','Gear'].includes(name)) { low -= padding; high += padding; }
   if (name === 'delta') [low, high] = deltaHeadingLimits(low, high, bottom - top);
-  const y = value => bottom - (value-low)/(high-low)*(bottom-top);
+  const gearPadding = splitGear ? gearOffset + .12 : 0;
+  const y = value => bottom - (value-low+gearPadding)/(high-low+2*gearPadding)*(bottom-top);
   ctx.font = canvasFont();
   ctx.strokeStyle = lightGraphBackground ? '#59645d55' : '#2a382e';
   ctx.fillStyle = lightGraphBackground ? '#253329' : '#a4b3a7';
@@ -3736,8 +3795,8 @@ function baseChart(row, width, height, ratio) {
     ctx.beginPath();
     ctx.moveTo(xx, top); ctx.lineTo(xx,bottom); ctx.stroke();
     const tick = range[0] + (range[1]-range[0])*i/4;
-    const label = number(tick,primary.useDistance ? (range[1]-range[0]<10 ? 1 : 0) : 1);
-    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' m' : ' s') : ''),xx,bottom+18*textScale(),width);
+    const label = number(primary.useDistance ? convert('',tick,'m') : tick,primary.useDistance ? (range[1]-range[0]<10 ? 1 : 0) : 1);
+    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' ' + displayUnit('','m') : ' s') : ''),xx,bottom+18*textScale(),width);
   }
   ctx.textAlign = 'right';
   const digits = telemetryDecimalPlaces(name, ['delta','TyresPressure'].includes(name) ? 2 : high-low<12 ? 1 : 0);
@@ -3747,7 +3806,7 @@ function baseChart(row, width, height, ratio) {
     const yy = y(tick);
     ctx.beginPath();
     ctx.moveTo(left,yy); ctx.lineTo(right,yy); ctx.stroke();
-    ctx.fillText(name === 'Gear' && tick === -1 ? 'R' : number(tick,digits), left-8,yy+4*textScale());
+    ctx.fillText(name === 'Gear' ? valueLabel('Gear',tick) : number(tick,digits), left-8,yy+4*textScale());
   }
   ctx.save();
   ctx.beginPath(); ctx.rect(left,top,right-left,bottom-top); ctx.clip();
@@ -3767,7 +3826,7 @@ function baseChart(row, width, height, ratio) {
       ctx.strokeStyle=colors[i%4];ctx.lineWidth=1.35;ctx.setLineDash(dashed?[5,3]:[]);
       ctx.beginPath();
       if (name === 'Gear') {
-        paintGearSegments(ctx,points,x,y);
+        paintGearSegments(ctx,points,x,gear => y(gear + (dashed ? -gearOffset : gearOffset)));
         ctx.stroke();
         break;
       }
@@ -3793,7 +3852,7 @@ function baseChart(row, width, height, ratio) {
     ctx.textAlign = 'center';
     ctx.fillText('No Recorded Data for the Loaded Laps',(left + right) / 2,(top + bottom) / 2,right - left);
   }
-  return {image,x,y,left,right,top,bottom,width,height,ratio,from:range[0],to:range[1]};
+  return {image,x,y,left,right,top,bottom,width,height,ratio,gearOffset,from:range[0],to:range[1]};
 }
 function mergedBase(row, box) {
   const {image,ctx,width,height,ratio,left,right,top,bottom,x} = box;
@@ -3841,8 +3900,9 @@ function mergedBase(row, box) {
     ctx.strokeStyle=(lightGraphBackground ? '#59645d55' : '#2a382e');ctx.beginPath();
     ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();
     ctx.fillStyle=(lightGraphBackground ? '#253329' : '#a4b3a7');ctx.textAlign='center';
-    const label = number(range[0]+(range[1]-range[0])*i/4,primary.useDistance?0:1);
-    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' m' : ' s') : ''),px,bottom+18*textScale(),width);
+    const tick = range[0]+(range[1]-range[0])*i/4;
+    const label = number(primary.useDistance ? convert('',tick,'m') : tick,primary.useDistance?0:1);
+    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' ' + displayUnit('','m') : ' s') : ''),px,bottom+18*textScale(),width);
     {
       const [lo,hi]=scales.get('Time delta');
       ctx.textAlign='right';ctx.fillText(number(hi-(hi-lo)*i/4,1),left-8,py+4*textScale());
@@ -3934,7 +3994,9 @@ function paintCursorValues(ctx, row, name) {
         const layout = row.group ? (referenceLap ? row.readings[index]?.ref : row.readings[index]?.main)
           : referenceLap ? row.referenceLayout : row.mainLayout;
         const label = valueLabel(channelName, value, channel.unit);
-        add(prefix + wheel + label, shown, scale, colour, prefix.length + wheel.length + (layout?.widths[component] ?? label.length), referenceLap);
+        const traceScale = channelName === 'Gear' && row.cache.gearOffset
+          ? gear => scale(gear + (referenceLap ? -row.cache.gearOffset : row.cache.gearOffset)) : scale;
+        add(prefix + wheel + label, shown, traceScale, colour, prefix.length + wheel.length + (layout?.widths[component] ?? label.length), referenceLap);
       });
     }
   });
@@ -4050,7 +4112,7 @@ function speedPeaks() {
   const peak = data => {
     const max = trace(data, name).reduce((best, [, [speed]]) =>
       Number.isFinite(speed) ? Math.max(best, speed) : best, -Infinity);
-    const unit = displayUnit(name, data.channels[name]?.unit) || 'km/h';
+    const unit = displayUnit(name, data.channels[name]?.unit) || displayUnit('','km/h');
     return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) + ' ' + unit : '—';
   };
   const peaks = node('span', telemetryName(name, 'Top Speed') + ' · ', 'chart-reading');
@@ -4608,6 +4670,27 @@ function play() {
   }
   frame=requestAnimationFrame(step);
 }
+const builtInGraphPresets = {
+  'Lap Comparison': {
+    graphOrder:['Ground Speed','Brake Pos','Throttle Pos','Steering Pos','Gear'],
+    heights:{'Ground Speed':235}
+  },
+  'Braking & Corner Entry': {
+    graphOrder:['Brake Pos','Ground Speed','Steering Pos','Gear'],
+    heights:{'Brake Pos':235},
+    speedActivation:'ABS'
+  },
+  'Corner Exit & Traction': {
+    graphOrder:['Throttle Pos','Ground Speed','Steering Pos','Gear'],
+    heights:{'Throttle Pos':235},
+    speedActivation:'TC'
+  },
+  'Tyres & Brakes': {
+    graphOrder:['TyresPressure','tyres','Brakes Temp','Ground Speed'],
+    heights:{TyresPressure:195,tyres:195,'Brakes Temp':195}
+  }
+};
+
 let presetTarget = 'presets';
 const presetControls = {
   presets:{select:$('preset'), save:$('save-preset'), remove:$('remove-preset'), title:'Save Telemetry Channel Preset'},
@@ -4617,9 +4700,8 @@ function populatePresets(target, selection = presetControls[target].select.value
   const {select, remove} = presetControls[target];
   select.replaceChildren();
   option(select,'Choose Preset','');
-  if(target === 'presets') {
-    for(const label of Object.keys(builtIn))option(select,label,'builtin:'+label);
-  }
+  const defaults = target === 'presets' ? builtIn : builtInGraphPresets;
+  for (const label of Object.keys(defaults)) option(select,label,'builtin:'+label);
   for(const label of Object.keys(settings[target] || {}))option(select,label,'saved:'+label);
   select.value = [...select.options].some(entry => entry.value === selection) ? selection : '';
   remove.disabled = !select.value.startsWith('saved:');
@@ -4650,10 +4732,19 @@ $('preset').addEventListener('change',()=>{
 });
 $('graph-preset').onchange=()=>{
   const key = $('graph-preset').value;
-  $('remove-graph-preset').disabled = !key;
+  $('remove-graph-preset').disabled = !key.startsWith('saved:');
   if(!key)return;
-  const {hiddenGraphs, extraGraphChannels, heights, graphOrder = []} = settings.graphPresets[key.slice(6)];
-  save({hiddenGraphs, extraGraphChannels, heights, graphOrder});
+  if (key.startsWith('builtin:')) {
+    const {graphOrder, heights, speedActivation} = builtInGraphPresets[key.slice(8)];
+    save({
+      graphOrder, heights, extraGraphChannels:[],
+      hiddenGraphs:chartSpecs.map(([,name]) => name).filter(name => !graphOrder.includes(name)),
+      ...(speedActivation ? {speedActivations:{...settings.speedActivations,[speedActivation]:true}} : {})
+    });
+  } else {
+    const {hiddenGraphs, extraGraphChannels, heights, graphOrder = []} = settings.graphPresets[key.slice(6)];
+    save({hiddenGraphs, extraGraphChannels, heights, graphOrder});
+  }
   if(ready)buildCharts();
 };
 for(const [target, controls] of Object.entries(presetControls)){
@@ -4823,11 +4914,11 @@ for (const category of [...carClasses, 'other']) {
     input.placeholder = 'Off';
     input.dataset.hotTemperature = key;
     input.dataset.carClass = category;
-    input.setAttribute('aria-label', classLabel + ' ' + label + ' (°C)');
+    input.dataset.temperatureLabel = classLabel + ' ' + label;
     input.addEventListener('change', () => {
       if (input.validity.badInput) return;
       const byClass = settings.hotTemperaturesByClass ?? {};
-      const threshold = Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : null;
+      const threshold = Number.isFinite(input.valueAsNumber) ? temperatureSettingValue(input.valueAsNumber) : null;
       save({hotTemperaturesByClass: {...byClass, [category]: {...byClass[category], [key]: threshold}}});
       renderSessionSummary();
     });
@@ -5142,6 +5233,11 @@ async function readTrainerSession(session, laps) {
 }
 
 const trainerNormalize = value => String(value ?? '').trim().toLowerCase();
+function trainerSessionLapCount(session) {
+  const count = session.laps.filter(lap => lap.kind === 'complete').length;
+  return count + (count === 1 ? ' Lap Driven' : ' Laps Driven');
+}
+
 function trainerLabel(stint) {
   return [dateLabel(stint.session.recorded), 'Stint ' + stint.number,
     practiceConditionLabels.get(stint.condition)].filter(Boolean).join(' · ');
@@ -5361,7 +5457,13 @@ function updateTrainerHover(event) {
   if (px < left || px > right || py < top || py > bottom) { hideTrainerHover(); return; }
   const hit = reading(px,py);
   if (!hit) { hideTrainerHover(); return; }
-  trainerHoverReading.replaceChildren(node('strong',hit.title),...hit.lines.map(line => node('div',line)));
+  trainerHoverReading.replaceChildren(...hit.values.map(({text,colour,dotted,label}) => {
+    const badge = node('span', text, 'trainer-hover-value');
+    badge.style.setProperty('--reading-colour',colour);
+    badge.classList.toggle('dotted',dotted);
+    badge.setAttribute('aria-label',label + ' ' + text);
+    return badge;
+  }));
   trainerHoverReading.hidden = false;
   const size = trainerHoverReading.getBoundingClientRect();
   trainerHoverReading.style.left = Math.max(4,Math.min(event.clientX + 14,innerWidth - size.width - 4)) + 'px';
@@ -5409,7 +5511,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   const focus = trainerFocus;
   const braking = focus === 0;
   const channelName = braking ? 'Brake Pos' : 'Ground Speed';
-  const unit = braking ? '%' : 'km/h';
+  const unit = braking ? '%' : displayUnit('','km/h');
   const axis = telemetryName(channelName, braking ? 'Brake pedal' : 'Ground speed') + ' · ' + unit;
   $('trainer-chart-legend').hidden = true;
   if (!corner) {
@@ -5519,27 +5621,29 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   const left = 62, right = width - 18, top = 10, bottom = height - 25;
   const x = distance => left + (right - left) * (distance - start) / (end - start);
   const y = value => bottom - (bottom - top) * (value - min) / (max - min);
-  const hoverTraces = traces.map((points,index) => ({points,lap:data[index]}));
-  if (showComparison) previousTraces.forEach((points,index) =>
-    hoverTraces.push({points,lap:previousData[index]}));
-  for (const trace of hoverTraces) trace.distances = trace.points.map(([distance]) => distance);
-  trainerHover = {left,right,top,bottom,reading(px,py) {
+  const hoverTraces = extremes.flatMap((lap,index) => {
+    const traceIndex = data.findIndex(trace => trace.lap.id === lap.id);
+    if (traceIndex < 0) return [];
+    const points = traces[traceIndex];
+    return [{lap:data[traceIndex],points,distances:points.map(([distance]) => distance),slowest:index === 1}];
+  });
+  trainerHover = {left,right,top,bottom,reading(px) {
     const distance = start + (end - start) * (px - left) / (right - left);
-    let nearest;
-    for (const trace of hoverTraces) {
-      const value = trainerTraceValue(trace.points,trace.distances,distance);
-      if (!Number.isFinite(value)) continue;
-      const separation = Math.abs(y(value) - py);
-      if (nearest && separation >= nearest.separation) continue;
-      const channel = trace.lap.channels['Ground Speed'];
-      const time = trace.lap.timeAt(distance);
-      const speed = !braking ? value :
+    const values = hoverTraces.flatMap(({lap,points,distances,slowest}) => {
+      const channel = lap.channels['Ground Speed'];
+      const time = lap.timeAt(distance);
+      const speed = !braking ? trainerTraceValue(points,distances,distance) :
         time >= channel?.times[0] && time <= channel.times.at(-1) ?
           convert('Ground Speed',sample(channel,time)?.[0],channel.unit) : undefined;
-      if (Number.isFinite(speed)) nearest = {speed,separation};
-    }
-    if (!nearest) return null;
-    return {x:px,title:number(nearest.speed,telemetryDecimalPlaces('Ground Speed')) + ' km/h',lines:[]};
+      if (!Number.isFinite(speed)) return [];
+      return [{
+        text:number(speed,telemetryDecimalPlaces('Ground Speed')) + ' ' + displayUnit('','km/h'),
+        colour:slowest ? '#f5a982' : '#c5fa78',
+        dotted:slowest,
+        label:slowest ? 'Slowest corner lap' : 'Fastest corner lap'
+      }];
+    });
+    return values.length ? {x:px,values} : null;
   }};
   ctx.font = '12px system-ui';
   for (let i = 0; i <= 4; i++) {
@@ -5550,7 +5654,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
     ctx.strokeStyle = '#354438';
     ctx.beginPath(); ctx.moveTo(left,y(value)); ctx.lineTo(right,y(value)); ctx.stroke();
     ctx.textAlign = 'center';
-    paintHorizontalTick(ctx,number((end - start) * i / 4,0) + ' m',left + (right - left) * i / 4,height - 8,width);
+    paintHorizontalTick(ctx,measurement((end - start) * i / 4,'m',0),left + (right - left) * i / 4,height - 8,width);
   }
   const drawTrace = (points,index) => {
     ctx.strokeStyle = index === -2 ? '#e0787d' : index < 0 ? '#90ac98' : index ? '#f5a982' : '#c5fa78';
@@ -5624,9 +5728,9 @@ function trainerCompletedLaps(session) {
 const trainerColdThreshold = $('trainer-cold-threshold');
 trainerColdThreshold.onchange = () => {
   if (Number.isFinite(trainerColdThreshold.valueAsNumber) && trainerColdThreshold.validity.valid) {
-    save({trainerColdTyreTemperature:trainerColdThreshold.valueAsNumber});
+    save({trainerColdTyreTemperature:temperatureSettingValue(trainerColdThreshold.valueAsNumber)});
   }
-  trainerColdThreshold.value = settings.trainerColdTyreTemperature ?? 60;
+  trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
   renderDriverTrainer();
 };
 
@@ -5665,14 +5769,16 @@ function renderTrainerLapTimes(values, prior, manualComparison) {
   const step = (width - left - 12) / Math.max(values.length,prior.length);
   trainerHover = {left,right:width - 12,top:9,bottom,reading(px) {
     const index = Math.min(Math.max(values.length,prior.length) - 1,Math.floor((px - left) / step));
-    const lines = [[values,'Current Session'],[prior,manualComparison ? 'Comparison Session' : 'Previous Session']]
-      .filter(([row]) => row[index])
-      .map(([row,name]) => {
-        const lap = row[index];
-        const temperature = Number.isFinite(lap.temperature) ? ' · ' + number(lap.temperature,1) + ' °C peak' : '';
-        return name + (lap.number == null ? '' : ' · Lap ' + lap.number) + ' · ' + lapTime(lap.time) + temperature;
-      });
-    return lines.length ? {x:left + step * (index + .5),title:'Completed Lap ' + (index + 1),lines} : null;
+    const readings = [[values[index],false],[prior[index],true]].flatMap(([lap,previous]) => {
+      if (!lap) return [];
+      return [{
+        text:lapTime(lap.time),
+        colour:isCold(lap) ? '#91d5ff' : previous ? '#f5a982' : '#c5fa78',
+        dotted:previous,
+        label:previous ? (manualComparison ? 'Comparison Session' : 'Previous Session') : 'Current Session'
+      }];
+    });
+    return readings.length ? {x:left + step * (index + .5),values:readings} : null;
   }};
   $('trainer-previous-legend').hidden = !prior.length;
   ctx.textAlign = 'center';
@@ -5748,7 +5854,9 @@ function renderTrainerTrophies() {
     silhouette.setAttribute('d','M17 8h30v6h9v9c0 9-6 15-14 16a15 15 0 0 1-7 5v7h9v6H20v-6h9v-7a15 15 0 0 1-7-5C14 38 8 32 8 23v-9h9V8Zm0 12h-3v3c0 4 2 7 5 9a24 24 0 0 1-2-12Zm30 0a24 24 0 0 1-2 12c3-2 5-5 5-9v-3h-3Z');
     cup.append(silhouette);
     emblem.append(cup);
-    card.append(emblem,node('strong',name,'trainer-trophy-title'),node('p',description),
+    card.append(emblem,node('strong',name,'trainer-trophy-title'),node('p',description
+      .replace('10 m',measurement(10,'m',usingImperial('distance') ? 1 : 0))
+      .replace('3 km/h',measurement(3,'km/h',usingImperial('speed') ? 2 : 0))),
       node('small',awarded ? 'Awarded' : detail ? 'Available' : 'Visit a track in Practice to unlock','trainer-trophy-state'));
     return card;
   }));
@@ -5783,6 +5891,8 @@ function renderDriverTrainer() {
   };
   $('trainer-combo').textContent = stint ? [stint.session.track,stint.session.car,practiceConditionLabels.get(stint.condition)].filter(Boolean).join(' · ') : '';
   $('trainer-current').textContent = stint ? trainerLabel(stint) : 'No eligible practice stint';
+  $('trainer-current-laps').textContent = stint ? trainerSessionLapCount(stint.session) : '';
+  $('trainer-reference-laps').textContent = earlier ? trainerSessionLapCount(earlier.session) : '';
   $('trainer-reference').textContent = earlier ? trainerLabel(earlier) : !$('trainer-scan').hidden ? 'Looking for an earlier compatible stint…' : 'No earlier compatible stint';
   $('trainer-status').textContent = stint ? '' : !$('trainer-scan').hidden ? 'Looking for your latest eligible practice stint…' : 'Complete three clean, timed Practice laps in one stint to get started.';
   $('trainer-analysis').hidden = !stint;
@@ -5804,6 +5914,7 @@ function renderDriverTrainer() {
     priorOffset >= 0 ? trainerValues(earlier,trainerFocus,priorOffset) : [];
   const stats = timingStats(values), previous = timingStats(prior);
   const unit = ['m','km/h','s'][trainerFocus];
+  const spreadReading = (value,digits) => measurement(value,unit,digits) + ' spread';
 
   const headings = ['Brake at a repeatable point','Make your corner exits consistent','Consistent Lap Times'];
   $('trainer-metric').textContent = headings[trainerFocus];
@@ -5820,7 +5931,7 @@ function renderDriverTrainer() {
       };
     }
   }
-  $('trainer-spread').textContent = stats.count >= 3 ? number(stats.spread,trainerFocus === 2 ? 3 : 1) + ' ' + unit + ' spread' : '—';
+  $('trainer-spread').textContent = stats.count >= 3 ? spreadReading(stats.spread,trainerFocus === 2 ? 3 : 1) : '—';
   const lapCount = count => count + (count === 1 ? ' lap' : ' laps') + ' counted';
   const comparisonLabel = manual ? 'Comparison Session' : 'Previous Session';
   $('trainer-evidence').textContent = 'Current Session: ' + lapCount(stats.count) +
@@ -5831,7 +5942,7 @@ function renderDriverTrainer() {
   priority.replaceChildren(...(trainerFocus === 2 ? [] : ranked.map(({corner,stats:spread}) => {
     const button = node('button');
     const cornerNumber = String(corner.index + 1);
-    const detail = spread.count >= 3 ? number(spread.spread,1) + ' ' + unit + ' spread' : 'Insufficient data';
+    const detail = spread.count >= 3 ? spreadReading(spread.spread,1) : 'Insufficient data';
     button.title = detail;
     button.setAttribute('aria-label','Corner ' + cornerNumber);
     button.setAttribute('aria-description',detail);
@@ -5847,7 +5958,7 @@ function renderDriverTrainer() {
   $('trainer-cold-control').hidden = !lapTimes;
   $('trainer-cold-legend').hidden = true;
   if (lapTimes) {
-    if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = settings.trainerColdTyreTemperature ?? 60;
+    if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
     renderTrainerLapTimes(completed,comparisonCompleted,Boolean(manual));
   }
   else renderTrainerCornerTrace(stint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? earlier : undefined);
@@ -5870,7 +5981,9 @@ $('trainer-focus').onclick = event => {
 function openTrainerSessionPicker(title, options, selectedId, comparison = false) {
   const choice = $('trainer-session-choice');
   $('trainer-session-heading').textContent = title;
-  choice.replaceChildren(...options.map(stint => new Option(stint.session.track + ' · ' + trainerLabel(stint),stint.id)));
+  choice.replaceChildren(...options.map(stint => new Option([
+    stint.session.track, stint.session.car, trainerLabel(stint), trainerSessionLapCount(stint.session)
+  ].filter(Boolean).join(' · '),stint.id)));
   if (comparison) choice.prepend(new Option('Automatic · Latest earlier matching session',''));
   if (selectedId && options.some(stint => stint.id === selectedId)) choice.value = selectedId;
   $('trainer-session-dialog').returnValue = '';

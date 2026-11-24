@@ -222,7 +222,10 @@ const settingsList = value => Array.isArray(value) && value.every(settingsText);
 const settingsNumber = Number.isFinite;
 const settingsColour = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
 const temperatureMap = settingsMap(value => value === null || settingsNumber(value));
+const measurementUnitKeys = ['speed','distance','temperature','pressure','fuel'];
 const displayFields = {
+  measurementUnits:value => isSettingsObject(value) && Object.keys(value).length === measurementUnitKeys.length &&
+    measurementUnitKeys.every(key => ['metric','imperial'].includes(value[key])),
   driverTrainerEnabled:value => typeof value === 'boolean', trainerColdTyreTemperature:settingsNumber,
   heights:settingsMap(settingsNumber), enabled:settingsList, tyres:settingsText,
   colors:settingsMap(settingsColour), speedActivations:settingsMap(value => typeof value === 'boolean'),
@@ -401,7 +404,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['driverTrainerEnabled', 'trainerColdTyreTemperature', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'interfaceColour', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'distanceDriver', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'interfaceColour', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'distanceDriver', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
     save();
     return publicSettings();
