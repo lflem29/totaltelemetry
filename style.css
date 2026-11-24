@@ -506,7 +506,7 @@ button{text-transform:capitalize}
 #trainer-trophy-dialog :is(h2,h3,p){margin:3px 0}
 #trainer-trophy-dialog article p{font-size:.78em}
 #trainer-trophy-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:8px}
-#trainer-trophy-cards article{display:flex;flex-direction:column;align-items:center;gap:7px;min-height:clamp(155px,30vh,285px);border:1px solid var(--rule);border-radius:7px;padding:clamp(6px,1.35vh,13px) 8px;text-align:center;background:var(--panel)}
+#trainer-trophy-cards article{display:flex;flex-direction:column;align-items:center;gap:5px;min-height:clamp(155px,30vh,285px);border:1px solid var(--rule);border-radius:7px;padding:clamp(6px,1vh,12px) 8px;text-align:center;background:var(--panel)}
 #trainer-trophy-cards .earned{border-color:color-mix(in srgb,#e8bd65 55%,var(--rule));background:radial-gradient(ellipse at 50% 0%,#e8bd6517,transparent 70%),var(--panel)}
 .trainer-trophy-emblem{display:grid;place-items:center;width:clamp(38px,10vh,84px);aspect-ratio:1;border-radius:50%;background:#121b16;color:#536458}
 .trainer-trophy-emblem svg{width:78%;height:78%;fill:currentColor}
@@ -579,6 +579,7 @@ button{text-transform:capitalize}
 
 .trainer-chart-heading:has(#trainer-cold-control:not([hidden])){flex-wrap:wrap}
 
+#trainer-tracks{row-gap:4px}
 #trainer-tracks button{display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:2px;min-width:0;padding:4px 6px;font-size:calc(14px * var(--text-scale));line-height:1.15}
 .trainer-track-name{white-space:normal;overflow-wrap:anywhere;text-wrap:balance}
 .trainer-track-count{font-weight:700;font-variant-numeric:tabular-nums}
