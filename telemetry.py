@@ -284,6 +284,7 @@ def inspect(path):
     return dict(path=str(path), filename=path.name, recorded=iso_name(metadata, path),
                 driver=metadata.get('DriverName', ''), track=metadata.get('TrackLayout') or metadata.get('TrackName', ''),
                 trackName=metadata.get('TrackName', ''), trackLayout=metadata.get('TrackLayout', ''),
+                trackLayoutVersion=metadata.get('TrackLayoutVersion') or metadata.get('TrackVersion') or '',
                 gameVersion=metadata.get('GameVersion', ''),
                 car=metadata.get('CarName', ''), carClass=metadata.get('CarClass', ''), session=metadata.get('SessionType', ''),
                 fuel=[finite(v) for v in fuel], speed=finite(speed), distanceKm=finite(distance_km), durationSeconds=finite(end - start), laps=laps, summaryChannels=summary_channels,
@@ -414,7 +415,7 @@ def index(payload):
                 if parser is inspect:
                     session_summary = data.get('sessionSummary', {})
                     needs_update = (
-                        not {'summaryChannels', 'carClass', 'durationSeconds', 'trackName', 'trackLayout', 'gameVersion'} <= data.keys()
+                        not {'summaryChannels', 'carClass', 'durationSeconds', 'trackName', 'trackLayout', 'trackLayoutVersion', 'gameVersion'} <= data.keys()
                         or not {'peakTemperaturesByLap', 'chartEndpoints', 'energyUsedByLap', 'temperatureEndpoints',
                                 'weatherEndpoints', 'hypercarSetup'} <= session_summary.keys()
                         or not {'frontBrakes', 'rearBrakes'} <= session_summary.get('chartEndpoints', {}).keys()

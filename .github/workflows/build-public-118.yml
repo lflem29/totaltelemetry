@@ -1,0 +1,61 @@
+name: Build public Total Telemetry Windows packages
+on:
+  push:
+    branches: [build-public-v1.1.8]
+permissions:
+  contents: write
+jobs:
+  windows:
+    if: github.repository == 'lflem29/totaltelemetry' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [desktop, server]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ '${{ matrix.app }}' == desktop ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y nsis p7zip-full
+            gh release download v1.0.10 -R "$GITHUB_REPOSITORY" -p 'Total-Telemetry-1.0.10-Setup.exe' -O baseline.exe
+            echo '58036114b5a2f744f2a5008a9b21366739a28f7d033932b3421a2a024d4494ca  baseline.exe' | sha256sum -c
+            7z x -y -owin baseline.exe >/dev/null
+            find win -maxdepth 1 -iname '*uninstall*' -type f -delete
+            mv 'win/Total Telemetry.exe' 'win/LMU Lap Workbench.exe'
+            python3 prepare.py
+            cp win/resources/app/total-telemetry-icon.ico .
+            makensis -V2 installer.nsi
+            asset=Total-Telemetry-1.1.8-Setup.exe
+            7z t "$asset" >/dev/null
+            tag=v1.1.8
+            title='Total Telemetry 1.1.8'
+            latest=true
+          else
+            gh release download community-server-v1.0.1 -R "$GITHUB_REPOSITORY" -p 'Total-Telemetry-Community-Server-v1.0.1-win-x64.zip' -O baseline.zip
+            echo '62901c72ce4be74059ff18c876b12ecedef6e6f945248d5ee42e0746ea015adc  baseline.zip' | sha256sum -c
+            unzip -q baseline.zip -d staged
+            mapfile -t modules < <(find staged -path '*/resources/app/server.cjs')
+            test "${#modules[@]}" -eq 1
+            app_dir=$(dirname "${modules[0]}")
+            package_dir=$(dirname "$(dirname "$app_dir")")
+            rm -rf "$app_dir"
+            mkdir "$app_dir"
+            cp community-server/{main.cjs,server.cjs,preload.cjs,index.html,app.js,style.css,README.md,package.json} "$app_dir/"
+            python3 community-server/bundle-caddy.py "$package_dir"
+            test -f "$package_dir/resources/caddy/caddy.exe"
+            asset=Total-Telemetry-Community-Server-1.1.3-win-x64.zip
+            (cd staged && zip -qr -1 "../$asset" .)
+            unzip -tq "$asset"
+            unzip -p "$asset" "${app_dir#staged/}/main.cjs" | cmp - community-server/main.cjs
+            echo 'Updates the public Windows Community Server with shared record handling and bundled Caddy for optional HTTPS. Enter your own hostname if enabling HTTPS.' > release-notes.md
+            tag=community-server-v1.1.3
+            title='Total Telemetry Community Server 1.1.3'
+            latest=false
+          fi
+          printf '\nSHA-256: `%s`\n' "$(sha256sum "$asset" | cut -d ' ' -f 1)" >> release-notes.md
+          gh release create "$tag" "$asset" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest="$latest" --title "$title" --notes-file release-notes.md

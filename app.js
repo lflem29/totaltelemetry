@@ -188,7 +188,7 @@ function setView(name) {
   $('records-tab').classList.toggle('active', name === 'records');
   if (name !== 'viewer') stop();
   if (name === 'library') renderLoadedSessions();
-  if (name === 'records') renderRecords();
+  if (name === 'records') { renderRecords(); void refreshFriendRecords(); }
   if (name === 'trainer') { renderDriverTrainer(); void scanDriverTrainer(sessions); }
   if (name === 'viewer') scheduleRender();
 }
@@ -228,7 +228,7 @@ function isLightBackground(colour) {
   return red * 0.2126 + green * 0.7152 + blue * 0.0722 > 0.179;
 }
 let lightGraphBackground = false;
-function textScale() { return (settings.textScalePercent ?? 100) / 100; }
+function textScale() { return 0.9 * (settings.textScalePercent ?? 100) / 100; }
 function interfaceColourMode() {
   const mode = settings.interfaceColourMode;
   if (mode === 'orange' || mode === 'green' || mode === 'custom') return mode;
@@ -242,11 +242,51 @@ function activeInterfaceColour() {
   if (mode === 'green') return greenInterfaceColour;
   return backgroundColour(settings.interfaceColour, greenInterfaceColour);
 }
+const interfaceColourOptions = [
+  ['header','Header','#131a16'], ['panel','Panels and Dialogs','#171e1a'],
+  ['raised','Cards and Inactive Tabs','#1d2721'], ['control','Inputs and Secondary Buttons','#202a23'],
+  ['rule','Borders and Dividers','#344139'], ['fg','Primary Text','#ecf2e9'],
+  ['muted','Secondary Text','#a4b3a7'], ['button-ink','Primary Button Text','#ffffff'],
+  ['focus','Keyboard Focus and Graph Cursor','#e8f0dd'],
+  ['accent','Selected Lap and Highlights','#c6f36c'], ['reference','Reference Lap','#f0a479'],
+  ['warning','Warnings and Time Loss','#ff8787'], ['graph-grid','Graph Grid','#2a382e'],
+  ['graph-axis','Graph Axes and Labels','#a4b3a7'], ['map-surface','Track Map Background','#111915'],
+  ['map-brake','Track Map Braking','#ff4545'], ['map-throttle','Track Map Throttle','#32e260'],
+  ['abs','ABS Trace','#ff626c'], ['tc','Traction Control Trace','#45d4df'],
+  ['cold','Cold Tyre Trace','#91d5ff'], ['prior-stint','Previous Stint Traces','#e0787d'],
+  ['other-laps','Other Lap Traces','#90ac98'], ['trophy','Earned Trophies','#f2cd79']
+];
+const elementColour = (key, fallback) => backgroundColour(settings.elementColours?.[key],fallback);
+const elementColourFields = interfaceColourOptions.map(([key,label,defaultColour]) => {
+  const field = node('label',label);
+  const input = node('input');
+  input.type = 'color';
+  field.append(input);
+  $('element-colours').append(field);
+  input.oninput = () => {
+    settings.elementColours = {...settings.elementColours,[key]:input.value};
+    applyAppearance();
+  };
+  input.onchange = () => {
+    save({elementColours:{...settings.elementColours,[key]:input.value}});
+    applyAppearance();
+    renderSessionSummary();
+    if (ready) {
+      const column = $('plot-column');
+      const scrollTop = column.scrollTop;
+      buildCharts();
+      column.scrollTop = scrollTop;
+    }
+  };
+  return {key,input,defaultColour};
+});
+
 function interfaceColourFields() {
   const mode = interfaceColourMode();
   $('interface-colour-mode').value = mode;
   $('custom-interface-colour').hidden = mode !== 'custom';
   $('interface-colour').value = backgroundColour(settings.interfaceColour, greenInterfaceColour);
+  for (const {key,input,defaultColour} of elementColourFields) input.value = elementColour(key,defaultColour);
 }
 function applyAppearance() {
   const root = document.documentElement;
@@ -255,7 +295,14 @@ function applyAppearance() {
   const buttonFill = interfaceColour.toLowerCase() === orangeInterfaceColour ? '#ba5600' : interfaceColour;
   root.style.setProperty('--button-fill', buttonFill);
   const lightButton = isLightBackground(buttonFill);
-  root.style.setProperty('--button-ink', lightButton ? '#000' : '#fff');
+  for (const [key] of interfaceColourOptions) {
+    const colour = elementColour(key,'');
+    if (colour) root.style.setProperty('--' + key,colour);
+    else root.style.removeProperty('--' + key);
+  }
+  root.style.setProperty('--button-ink', elementColour('button-ink',lightButton ? '#000' : '#fff'));
+  palette[0] = elementColour('accent','#c6f36c');
+  comparison[0] = elementColour('reference','#f0a479');
   root.style.setProperty('--button-shade', lightButton ? '#fff' : '#000');
   const background = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
   const graphBackground = backgroundColour(settings.graphBackgroundColour, '');
@@ -272,9 +319,17 @@ function applyAppearance() {
   $('text-scale-value').value = (settings.textScalePercent ?? 100) + '%';
   for (const chart of chartRows) chart.cache = null;
   if (selected) paintLapHistory();
+  if (view === 'trainer') renderDriverTrainer();
   scheduleRender();
 }
 function settingsFields() {
+  $('check-tpr-update').hidden = !settings.tprUpdatesSupported;
+  $('settings-primary-driver').textContent = settings.primaryDriver || 'Awaiting Confirmation';
+  $('settings-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
+  $('share-track-records').checked = settings.shareTrackRecords === true;
+  $('manage-track-records').disabled = !settings.communityOwnerConfigured;
+  if (!$('settings-panel-telemetry-data').hidden || $('telemetry-name-fields').childElementCount) renderTelemetryData();
+  $('auto-load-telemetry').checked = settings.autoLoadTelemetry !== false;
   syncDriverTrainerSetting();
   const server = settings.communityServer;
   $('community-host').value = server?.host ?? '';
@@ -299,16 +354,8 @@ const distanceNumber = new Intl.NumberFormat(undefined, {minimumFractionDigits:1
 function renderResultsDistance() {
   $('results-distance').hidden = !settings.results;
   const totals = distanceReport?.data?.drivers ?? [];
-  const known = new Set(sessions.map(session => session.driver?.trim().toLowerCase().replace(/\s+/g, ' ')).filter(Boolean));
-  const identified = totals.filter(total => known.has(total.id));
-  const preferred = totals.find(total => total.id === settings.distanceDriver) ??
-    (identified.length === 1 ? identified[0] : totals.length === 1 ? totals[0] : undefined);
-  const picker = $('distance-driver');
-  picker.replaceChildren();
-  option(picker, 'Choose your driver', '');
-  for (const total of totals) option(picker, total.name, total.id);
-  picker.value = preferred?.id ?? '';
-  $('distance-driver-label').hidden = totals.length <= 1;
+  const driver = normaliseDriverName(settings.primaryDriver);
+  const preferred = driver ? totals.find(total => normaliseDriverName(total.name || total.id) === driver) : undefined;
   $('distance-total').textContent = preferred ? distanceNumber.format(convert('',preferred.km,'km')) + ' ' + displayUnit('','km') : '';
   $('track-hours').hidden = !preferred;
   const minutes = Math.round((preferred?.trackSeconds ?? 0) / 60);
@@ -338,12 +385,14 @@ function renderResultsDistance() {
     item.append(node('small', distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
     return item;
   }));
+  $('distance-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
   const problem = distanceReport?.data?.errors;
   $('distance-status').textContent = distanceReport?.error
     ?? (!distanceReport ? 'Calculating distance from results files…'
       : !totals.length ? 'No driver distance available in the results files.'
       : preferred ? 'Estimated from ' + preferred.laps.toLocaleString() + ' laps in the results folder.'
-      : 'Choose your driver to see their distance.') + (problem ? ' ' + problem + ' results files could not be counted.' : '');
+      : driver ? 'No distance was found for ' + settings.primaryDriver + '.'
+      : 'Confirm your primary driver to see their distance.') + (problem ? ' ' + problem + ' results files could not be counted.' : '');
 }
 function refreshResultsDistance() {
   const folder = settings.results;
@@ -365,9 +414,42 @@ function refreshResultsDistance() {
     if (distanceRequest === request) distanceRequest = undefined;
   });
 }
-$('distance-driver').onchange = event => {
-  save({distanceDriver:event.target.value});
-  renderResultsDistance();
+function normaliseDriverName(name) {
+  return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+let primaryDriverSuggestion;
+let deferredDriverConfirmation = false;
+function offerPrimaryDriver(suggestion) {
+  if (!suggestion || settings.primaryDriver || !lmu.confirmPrimaryDriver) return;
+  primaryDriverSuggestion = suggestion;
+  $('primary-driver-suggestion').textContent = suggestion.name + ' · ' + suggestion.laps.toLocaleString() + ' completed laps';
+  if (!deferredDriverConfirmation && !$('confirm-primary-driver').open) $('confirm-primary-driver').showModal();
+}
+$('distance-confirm-driver').onclick = $('settings-confirm-driver').onclick = () => {
+  deferredDriverConfirmation = false;
+  if ($('folders').open) $('folders').close();
+  offerPrimaryDriver(primaryDriverSuggestion);
+};
+$('primary-driver-later').onclick = () => $('confirm-primary-driver').close();
+$('confirm-primary-driver').onclose = () => { deferredDriverConfirmation = true; };
+$('primary-driver-confirm').onclick = async () => {
+  const button = $('primary-driver-confirm');
+  button.disabled = true;
+  try {
+    Object.assign(settings,await lmu.confirmPrimaryDriver(primaryDriverSuggestion.name));
+    $('confirm-primary-driver').close();
+    loadRecordNotifications();
+    settingsFields();
+    renderResultsDistance();
+    refreshRecordsFromScan();
+    friendConnectionGeneration++;
+    void refreshFriendRecords(true);
+  } catch (error) {
+    $('primary-driver-status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 };
 function bindTabs(listId, onChange) {
   const tabs = [...$(listId).querySelectorAll('[role=tab]')];
@@ -395,7 +477,9 @@ function bindTabs(listId, onChange) {
   return tabs;
 }
 bindTabs('library-tabs', () => { $('library').scrollTop = 0; });
-bindTabs('settings-tabs');
+bindTabs('settings-tabs', () => {
+  if (!$('settings-panel-telemetry-data').hidden && !$('telemetry-name-fields').childElementCount) renderTelemetryData();
+});
 
 function filterLibraryEntries(id, entries) {
   const controls = $(id);
@@ -481,7 +565,13 @@ communityDialog.oncancel = event => {
   if (communityOperation) event.preventDefault();
 };
 lmu.onCommunityProgress?.(({operation, stage, received, total}) => {
-  if (operation === 'upload' && exportingBestLap) {
+  if (operation.startsWith('requested-lap:')) {
+    const id = operation.slice('requested-lap:'.length);
+    if (stage === 'done') requestedLapProgress.delete(id);
+    else requestedLapProgress.set(id,{stage,received,total});
+    const row = $('requested-upload-' + id);
+    if (row) updateRequestedLapProgress(row,requestedLapProgress.get(id));
+  } else if (operation === 'upload' && exportingBestLap) {
     showLapTransfer(bestLapExportProgress, bestLapExportStatus, stage, received, total);
   } else if (operation === communityOperation) {
     showLapTransfer(communityProgressBar, communityStatus, stage, received, total);
@@ -645,9 +735,23 @@ $('community-server-form').onsubmit = async event => {
       https:$('community-https').checked, key:key.value, ownerPassword:owner.value
     });
     Object.assign(settings, updated);
+    friendConnectionGeneration++;
+    friendSyncAfter = 0;
+    friendRecords = [];
+    communityMinimumGameVersion = updated.communityMinimumGameVersion ?? null;
+    recordRequests = [];
+    serverConnectionState = 'disconnected';
+    serverSyncUntil = 0;
+    lastServerSync = null;
+    serverSyncError = false;
+    serverEvents.length = 0;
+    renderServerStatus();
+    refreshRecordsFromScan();
+    void refreshFriendRecords(true);
     settingsFields();
     key.value = owner.value = '';
     status.textContent = 'Community server settings saved.';
+    void checkTprUpdate();
   } catch (error) {
     status.textContent = error.message;
   } finally {
@@ -719,7 +823,9 @@ function updateRecordsLoading() {
   loading.hidden = !initial;
   loading.textContent = initial ? 'Loading session recordings…' : '';
   recordsFilters.setAttribute('aria-busy', String(initial));
-  for (const control of recordsFilters.querySelectorAll('select,button')) control.disabled = initial;
+  for (const control of recordsFilters.querySelectorAll('select,button')) {
+    control.disabled = initial || (control.id === 'record-version' && settings.shareTrackRecords === true && settings.communityConfigured);
+  }
   $('records-status').hidden = initial;
 }
 function refreshRecordsFromScan() {
@@ -747,14 +853,470 @@ function setRecordOptions(select, label, values, current) {
   if (select.value !== value) select.value = value;
 }
 
+const serverOperations = new Map();
+const serverEvents = [];
+let serverConnectionState = 'disconnected';
+let serverSyncUntil = 0;
+let serverStatusTimer;
+let lastServerSync = null;
+let serverSyncError = false;
+const importantServerActions = new Map([
+  ['Sending Request','Telemetry Request Sent'],['Sending Response','Request Response Sent'],
+  ['Uploading Lap','Lap Uploaded'],['Downloading Lap','Lap Downloaded'],
+  ['Uploading Requested Lap','Requested Lap Uploaded'],['Downloading Requested Lap','Requested Lap Downloaded']
+]);
+const backgroundSyncActions = new Set(['Syncing Track Records','Checking Requests']);
+function renderServerStatus() {
+  clearTimeout(serverStatusTimer);
+  const operations = [...serverOperations.values()];
+  const foreground = operations.findLast(action => !backgroundSyncActions.has(action));
+  const syncActive = operations.some(action => backgroundSyncActions.has(action));
+  const remaining = serverSyncUntil - performance.now();
+  const showSync = syncActive || (remaining > 0 && serverConnectionState === 'connected');
+  const action = foreground || (showSync ? 'Syncing' : '');
+  if (!foreground && !syncActive && showSync) serverStatusTimer = setTimeout(renderServerStatus,remaining);
+  const state = action ? 'busy' : serverConnectionState;
+  const connection = $('server-connection');
+  connection.dataset.state = state;
+  connection.dataset.protocol = settings.communityServer?.https ? 'https' : 'http';
+  const shortStatus = {
+    'Checking Community Laps':'Checking Laps',
+    'Downloading Requested Lap':'Downloading Lap','Uploading Requested Lap':'Uploading Lap'
+  };
+  const label = shortStatus[action] || action || (state === 'connected' ? 'Connected' : 'Disconnected');
+  $('server-connection-label').textContent = label;
+  connection.title = state !== 'disconnected'
+    ? label + (connection.dataset.protocol === 'https' ? ' via HTTPS (encrypted)' : ' via HTTP (unencrypted)')
+    : action || label;
+  connection.setAttribute('aria-label',connection.title);
+}
+lmu.onCommunityActivity?.(({id,action,state,status,message,transferStep}) => {
+  if (state === 'busy') {
+    serverOperations.set(id,action);
+    if (backgroundSyncActions.has(action)) serverSyncUntil = performance.now() + 900;
+  } else {
+    serverOperations.delete(id);
+    serverConnectionState = state === 'connected' ? 'connected' :
+      message?.startsWith('Could not reach') || message?.includes('rejected the access key') ? 'disconnected' : serverConnectionState;
+  }
+  if (!transferStep) {
+    if (state === 'error') logServerEvent(action + ' · ' + (message || 'Failed'),true);
+    else if (state === 'connected' && (!status || (status >= 200 && status < 300)) && importantServerActions.has(action)) {
+      logServerEvent(importantServerActions.get(action));
+    }
+  }
+  renderServerStatus();
+});
+function logServerEvent(text, deduplicate = false) {
+  if (deduplicate && serverEvents[0]?.text === text) return;
+  serverEvents.unshift({time:new Date(),text});
+  serverEvents.length = Math.min(100,serverEvents.length);
+  if ($('server-events-dialog').open) renderServerEvents();
+}
+function renderServerEvents() {
+  const lastSync = lastServerSync ? ' Last successful sync at ' + lastServerSync.toLocaleTimeString() + '.' : '';
+  $('server-sync-health').textContent = !settings.communityConfigured ? 'Community Server is not configured.' :
+    serverSyncError ? 'Sync failed. Retrying automatically.' + lastSync :
+    lastServerSync ? 'Syncing is working.' + lastSync : 'Waiting for the first sync.';
+  $('server-events-empty').hidden = !!serverEvents.length;
+  $('server-events').replaceChildren(...serverEvents.map(({time,text}) =>
+    node('li',time.toLocaleTimeString() + ' · ' + text)));
+}
+$('server-connection').onclick = () => {
+  renderServerEvents();
+  $('server-events-dialog').showModal();
+};
+
+$('manage-track-records').onclick = () => {
+  $('owner-records-dialog').showModal();
+  void renderOwnerRecords('list');
+};
+async function renderOwnerRecords(action,id) {
+  const list = $('owner-records-list');
+  const status = $('owner-records-status');
+  for (const button of list.querySelectorAll('button')) button.disabled = true;
+  status.textContent = 'Loading Track Records…';
+  try {
+    const {records,requests} = await lmu.manageTrackRecords(action,id);
+    const rows = [];
+    for (const [entries,operation,label] of [[records,'remove','Remove Record'],[requests,'revoke','Revoke Lap Access']]) {
+      for (const item of entries) {
+        const record = item.record ?? item;
+        const row = node('li',[record.driver,record.track,record.layout,record.carClass,lapTime(record.time),
+          item.requesterName ? 'Requested by ' + item.requesterName : ''].filter(Boolean).join(' · '));
+        const button = node('button',label,'button-secondary');
+        button.onclick = () => {
+          if (window.confirm(label + '?')) void renderOwnerRecords(operation,item.id);
+        };
+        row.append(button);
+        rows.push(row);
+      }
+    }
+    list.replaceChildren(...rows);
+    status.textContent = rows.length ? '' : 'No shared records or active lap downloads.';
+    if (action !== 'list') void refreshFriendRecords(true);
+  } catch (error) {
+    status.textContent = error.message;
+    for (const button of list.querySelectorAll('button')) button.disabled = false;
+  }
+}
+
+let recordRequests = [];
+const pendingRecordTransfers = new Set();
+const requestedLapProgress = new Map();
+
+function updateRequestedLapProgress(row, progress) {
+  row.hidden = !progress;
+  if (!progress) return;
+  const {stage,received,total} = progress;
+  const bar = row.querySelector('progress');
+  const status = row.querySelector('span');
+  if (stage === 'preparing') {
+    bar.removeAttribute('value');
+    status.textContent = 'Preparing Requested Lap…';
+    return;
+  }
+  const percent = Math.floor(received * 100 / total);
+  bar.value = percent;
+  status.textContent = percent === 100 ? 'Waiting for Server Confirmation…' : 'Uploading Requested Lap · ' + percent + '%';
+}
+
+const pendingRecordRequests = new Set();
+let recordNotifications = {};
+
+function recordNotificationStorageKey() {
+  return 'track-record-notifications:' + (settings.primaryDriverProfile ?? 'unconfirmed');
+}
+
+function loadRecordNotifications() {
+  recordNotifications = {};
+  try {
+    recordNotifications = JSON.parse(localStorage.getItem(recordNotificationStorageKey()) || '{}') || {};
+  } catch { /* Notifications remain available for the current run. */ }
+  renderRecordNotifications();
+}
+
+function writeRecordNotifications() {
+  try { localStorage.setItem(recordNotificationStorageKey(),JSON.stringify(recordNotifications)); } catch {}
+  renderRecordNotifications();
+}
+function addRecordNotification(key,text,options = {}) {
+  if (Object.hasOwn(recordNotifications,key)) return;
+  recordNotifications[key] = {text,...options};
+  const keys = Object.keys(recordNotifications);
+  if (keys.length > 400) {
+    const dismissed = keys.find(id => recordNotifications[id].dismissed);
+    if (dismissed) delete recordNotifications[dismissed];
+  }
+  writeRecordNotifications();
+}
+function resolveRecordNotification(key) {
+  recordNotifications[key].dismissed = true;
+  writeRecordNotifications();
+}
+function renderRecordNotifications() {
+  const pending = Object.entries(recordNotifications).filter(([,entry]) => !entry.dismissed).reverse();
+  const count = pending.length;
+  $('notification-count').textContent = count === 0 ? 'No Notifications' :
+    count.toLocaleString() + (count === 1 ? ' Notification' : ' Notifications');
+  $('notifications-button').dataset.pending = String(pending.some(([,entry]) => entry.requestId));
+  $('notifications-empty').hidden = !!pending.length;
+  $('dismiss-all-notifications').disabled = !pending.some(([,entry]) => !entry.requestId);
+  $('notification-list').replaceChildren(...pending.map(([key,entry]) => {
+    const item = node('li',entry.text);
+    const actions = node('div',undefined,'actions');
+    item.append(actions);
+    if (entry.requestId) {
+      const row = node('div',undefined,'requested-upload-progress');
+      row.id = 'requested-upload-' + entry.requestId;
+      const bar = node('progress');
+      bar.max = 100;
+      bar.setAttribute('aria-label','Requested lap upload progress');
+      row.append(node('span'),bar);
+      item.insertBefore(row,actions);
+      updateRequestedLapProgress(row,requestedLapProgress.get(entry.requestId));
+      for (const [action,label] of [['accept','Accept and Upload Lap'],['deny','Deny']]) {
+        const accepted = recordRequests.some(request => request.id === entry.requestId && request.status === 'accepted');
+        const button = node('button',action === 'accept' && accepted ? 'Retry Upload' : label,action === 'deny' ? 'button-secondary' : '');
+        button.disabled = pendingRecordTransfers.has(entry.requestId);
+        button.onclick = () => void respondToRecordRequest(action,entry.requestId,key);
+        actions.append(button);
+      }
+    } else {
+      if (entry.record) {
+        const viewRecord = node('button','View Track Record');
+        viewRecord.onclick = () => {
+          resolveRecordNotification(key);
+          $('notifications-dialog').close();
+          $('hide-friend-records').checked = false;
+          setView('records');
+          renderRecords({trackName:entry.record.track,trackLayout:entry.record.layout,
+            carClass:entry.record.carClass});
+        };
+        actions.append(viewRecord);
+      }
+      const dismiss = node('button','Dismiss','button-secondary');
+      dismiss.onclick = () => resolveRecordNotification(key);
+      actions.append(dismiss);
+    }
+    return item;
+  }));
+}
+$('dismiss-all-notifications').onclick = () => {
+  for (const entry of Object.values(recordNotifications)) {
+    if (!entry.requestId) entry.dismissed = true;
+  }
+  writeRecordNotifications();
+};
+$('notifications-button').onclick = () => {
+  renderRecordNotifications();
+  $('notifications-dialog').showModal();
+};
+
+function importedRequestedLap(request) {
+  if (!request) return undefined;
+  const suffix = '/v1/track-records/requests/download/' + request.id;
+  return settings.comparisonLaps?.find(lap => lap.path?.endsWith(suffix));
+}
+
+async function respondToRecordRequest(action,id,key) {
+  if (pendingRecordTransfers.has(id)) return;
+  pendingRecordTransfers.add(id);
+  renderRecordNotifications();
+  try {
+    await updateRecordRequests(await lmu.trackRecordRequest(action,id));
+    if (recordNotifications[key] && !recordNotifications[key].dismissed) resolveRecordNotification(key);
+  } catch (error) {
+    addRecordNotification('request-error-' + id + '-' + action,error.message);
+    void refreshFriendRecords(true);
+  } finally {
+    pendingRecordTransfers.delete(id);
+    renderRecordNotifications();
+  }
+}
+
+async function updateRecordRequests(requests) {
+  if (!Array.isArray(requests)) return;
+  recordRequests = requests;
+  const knownRequests = new Set(requests.map(request => request.id));
+  for (const [key,entry] of Object.entries(recordNotifications)) {
+    if (entry.requestId && !entry.dismissed && !knownRequests.has(entry.requestId) && !pendingRecordTransfers.has(entry.requestId)) {
+      resolveRecordNotification(key);
+    }
+  }
+  for (const request of requests) {
+    const record = request.record;
+    const description = [record.driver,record.track,record.layout !== record.track ? record.layout : '',
+      record.carClass,record.car,lapTime(record.time),dateLabel(record.recorded,australianDate)].filter(Boolean).join(' · ');
+    const key = 'request-' + request.id;
+    if (request.incoming) {
+      if (request.status === 'accepted' && !pendingRecordTransfers.has(request.id)) {
+        pendingRecordTransfers.add(request.id);
+        void lmu.trackRecordRequest('accept',request.id).then(updated => {
+          pendingRecordTransfers.delete(request.id);
+          return updateRecordRequests(updated);
+        }).catch(error => {
+          pendingRecordTransfers.delete(request.id);
+          addRecordNotification(key + '-retry','Could not finish uploading the approved lap · ' + error.message);
+          renderRecordNotifications();
+        });
+      }
+      if (['pending','accepted'].includes(request.status)) {
+        addRecordNotification(key,(request.requesterName || 'A friend') + ' requested one lap of your telemetry · ' + description,{requestId:request.id});
+      } else if (recordNotifications[key] && !recordNotifications[key].dismissed) {
+        resolveRecordNotification(key);
+        if (request.status === 'uploaded') addRecordNotification(key + '-sent','Requested lap uploaded · ' + description);
+      }
+      continue;
+    }
+    if (request.status === 'accepted' || request.status === 'uploaded')
+      addRecordNotification(key + '-accepted','Telemetry request accepted · ' + description);
+    if (request.status === 'denied') addRecordNotification(key + '-denied','Telemetry request denied · ' + description);
+    if (['expired','revoked'].includes(request.status)) {
+      if (!importedRequestedLap(request)) addRecordNotification(key + '-' + request.status,'Requested telemetry is ' + request.status + ' · ' + description);
+    }
+    if (request.status !== 'uploaded') continue;
+    addRecordNotification(key + '-uploaded','Requested lap uploaded · ' + description);
+    if (importedRequestedLap(request) || pendingRecordTransfers.has(request.id)) continue;
+    pendingRecordTransfers.add(request.id);
+    try {
+      addRecordNotification(key + '-downloading','Downloading Requested Lap · ' + description);
+      settings.comparisonLaps = await lmu.trackRecordRequest('download',request.id);
+      for (const suffix of ['-downloading','-download-error']) {
+        if (recordNotifications[key + suffix] && !recordNotifications[key + suffix].dismissed) resolveRecordNotification(key + suffix);
+      }
+      addRecordNotification(key + '-downloaded','Requested lap downloaded and ready to use as a reference · ' + description);
+      renderLibrary();
+    } catch (error) {
+      addRecordNotification(key + '-download-error','Requested lap could not download. Retrying automatically. · ' + description);
+    } finally {
+      pendingRecordTransfers.delete(request.id);
+    }
+  }
+  renderRecordNotifications();
+  refreshRecordsFromScan();
+}
+
+let friendRecords = [];
+let communityMinimumGameVersion = null;
+let unlockedRecordVersion = '';
+function friendRecordBaselineKey() {
+  const server = settings.communityServer;
+  return 'track-record-baseline:' + JSON.stringify([server?.https,server?.host,server?.port,settings.primaryDriverProfile]);
+}
+function rememberFriendRecordTimes(records) {
+  try {
+    localStorage.setItem(friendRecordBaselineKey(),JSON.stringify(Object.fromEntries(records.map(record => [friendDriverContestKey(record),record.time]))));
+  } catch { /* The current session can still sync. */ }
+}
+let friendSyncBusy = false;
+let privateRequestsAvailable = false;
+let friendSyncAfter = 0;
+let friendConnectionGeneration = 0;
+
+async function refreshFriendRecords(changed = false) {
+  if (!settings.communityConfigured || !lmu.syncTrackRecords || friendSyncBusy ||
+      (!changed && Date.now() < friendSyncAfter)) return;
+  friendSyncBusy = true;
+  friendSyncAfter = Date.now() + 30_000;
+  const generation = friendConnectionGeneration;
+  try {
+    const result = await lmu.syncTrackRecords();
+    const {records,minimumGameVersion} = Array.isArray(result) ? {records:result,minimumGameVersion:null} : result;
+    if (generation !== friendConnectionGeneration) return;
+    const availabilityChanged = privateRequestsAvailable !== (result.privateRequestsAvailable === true);
+    privateRequestsAvailable = result.privateRequestsAvailable === true;
+    const policyChanged = minimumGameVersion !== communityMinimumGameVersion;
+    communityMinimumGameVersion = minimumGameVersion;
+    if (availabilityChanged || policyChanged || JSON.stringify(records) !== JSON.stringify(friendRecords)) {
+      if (!policyChanged) notifyBeatenRecords(records);
+      friendRecords = records;
+      refreshRecordsFromScan();
+    }
+    rememberFriendRecordTimes(records);
+    let syncStatus = '';
+    if (!privateRequestsAvailable) syncStatus = 'Update the Community Server to share Track Records and request telemetry.';
+    else if (settings.shareTrackRecords && !settings.primaryDriver) syncStatus = 'Confirm your primary driver to share Track Records.';
+    else if (settings.shareTrackRecords && result.eligibility?.eligibleRecords === 0) {
+      syncStatus = result.eligibility.excludedSessions
+        ? 'No eligible records to share. Your official laps are below the server minimum game version (' +
+          minimumGameVersion + ') or have no recognised game version.'
+        : 'No official laps for your primary driver are available to share. Check that the LMU Results folder is set.';
+    }
+    $('friend-records-status').textContent = syncStatus;
+    const requests = lmu.trackRecordRequest ? await lmu.trackRecordRequest('list') : null;
+    if (generation !== friendConnectionGeneration) return;
+    lastServerSync = new Date();
+    serverSyncError = false;
+    if ($('server-events-dialog').open) renderServerEvents();
+    if (requests) await updateRecordRequests(requests);
+  } catch (error) {
+    if (generation === friendConnectionGeneration) {
+      serverSyncError = true;
+      if ($('server-events-dialog').open) renderServerEvents();
+      $('friend-records-status').textContent = error.message.includes('route is no longer available')
+        ? 'Update the Community Server to sync Track Records.'
+        : 'Friends’ records could not sync. Retrying automatically.';
+    }
+  } finally {
+    friendSyncBusy = false;
+    if (generation !== friendConnectionGeneration) void refreshFriendRecords(true);
+  }
+}
+
+$('share-track-records').onchange = event => {
+  const {checked} = event.target;
+  void lmu.save({shareTrackRecords:checked}).then(() => {
+    settings.shareTrackRecords = checked;
+    renderRecords();
+    if (checked) void refreshFriendRecords(true);
+  }).catch(error => {
+    event.target.checked = settings.shareTrackRecords === true;
+    setStatus($('community-settings-status'),error.message,{error:true});
+  });
+};
+$('hide-friend-records').onchange = () => renderRecords();
+
+function recordContestKey(dimensions) {
+  return JSON.stringify(dimensions.slice(0,3).map(value => value.trim().toLowerCase()));
+}
+function localRecordCandidates() {
+  const driver = normaliseDriverName(settings.primaryDriver);
+  const recordings = driver ? sessions.filter(session => normaliseDriverName(session.driver) === driver) : sessions;
+  return recordings.flatMap(session => {
+    const bestLap = session.laps.reduce((best,item) =>
+      eligibleRecordLap(item) && item.validity === 'official' && (!best || item.time < best.time) ? item : best,null);
+    return bestLap ? [{session,bestLap,dimensions:recordDimensions(session)}] : [];
+  });
+}
+function friendContestKey(record) {
+  return recordContestKey([record.track,record.layout,record.carClass || 'Unknown']);
+}
+function friendDriverContestKey(record) {
+  return JSON.stringify([normaliseDriverName(record.driver),friendContestKey(record)]);
+}
+function recordMeetsMinimum(session, minimum) {
+  const version = recordedGameVersion(session.gameVersion);
+  return !minimum || Boolean(version && compareVersions(version, minimum) >= 0);
+}
+function notifyBeatenRecords(records) {
+  let previous;
+  try { previous = JSON.parse(localStorage.getItem(friendRecordBaselineKey())); } catch { return; }
+  if (!previous || !settings.primaryDriver) return;
+  const local = new Map();
+  for (const {session,bestLap,dimensions} of localRecordCandidates()) {
+    if (!recordMeetsMinimum(session, settings.shareTrackRecords && communityMinimumGameVersion)) continue;
+    const key = recordContestKey(dimensions);
+    local.set(key,Math.min(local.get(key) ?? Infinity,bestLap.time));
+  }
+  for (const record of records) {
+    const time = local.get(friendContestKey(record));
+    if (normaliseDriverName(record.driver) === normaliseDriverName(settings.primaryDriver) ||
+        time === undefined || !(record.time < time) || (previous[friendDriverContestKey(record)] ?? Infinity) < time) continue;
+    addRecordNotification('beaten-' + record.id + '-' + record.time,
+      record.driver + ' beat your ' + (record.carClass || 'class') + ' record at ' + record.track + ' · ' + lapTime(record.time),
+      {record:{track:record.track,layout:record.layout,carClass:record.carClass,car:record.car,gameVersion:record.gameVersion}});
+  }
+}
+function renderRecordMedals(candidates) {
+  const hidden = $('hide-friend-records').checked;
+  $('record-medals').hidden = hidden;
+  if (hidden) return;
+  const groups = new Map();
+  for (const {session,bestLap,dimensions,friend} of candidates) {
+    const key = recordContestKey(dimensions);
+    if (!groups.has(key)) groups.set(key,new Map());
+    const group = groups.get(key);
+    const driver = friend ? session.driver.trim().toLowerCase() : '';
+    group.set(driver,Math.min(group.get(driver) ?? Infinity,bestLap.time));
+  }
+  const medals = [0,0,0];
+  for (const group of groups.values()) {
+    if (!group.has('') || group.size < 2) continue;
+    const local = group.get('');
+    const rank = [...group.values()].filter(time => time < local).length;
+    if (rank < medals.length) medals[rank]++;
+  }
+  ['gold','silver','bronze'].forEach((medal,index) => {
+    $('record-' + medal).textContent = medals[index];
+  });
+}
+
 function renderRecords(lastSession) {
   recordsRefreshPending = false;
   const lastDimensions = lastSession && recordDimensions(lastSession);
-  const candidates = sessions.flatMap(session => {
-    const bestLap = session.laps.reduce((best, item) =>
-      eligibleRecordLap(item) && (!best || item.time < best.time) ? item : best, null);
-    return bestLap ? [{session, bestLap, dimensions: recordDimensions(session)}] : [];
-  });
+  const candidates = localRecordCandidates();
+  if (!$('hide-friend-records').checked) {
+    const primary = normaliseDriverName(settings.primaryDriver);
+    const verified = new Set(friendRecords.filter(record => record.requestable).map(friendDriverContestKey));
+    for (const friend of friendRecords) {
+      if ((primary && normaliseDriverName(friend.driver) === primary) ||
+          (!friend.requestable && verified.has(friendDriverContestKey(friend)))) continue;
+      const session = {...friend,trackName:friend.track,trackLayout:friend.layout,trackLayoutVersion:friend.layoutVersion};
+      const bestLap = {time:friend.time,sectors:friend.sectors,validity:friend.validity};
+      candidates.push({session,bestLap,dimensions:recordDimensions(session),friend});
+    }
+  }
   const filters = recordFields.map(([key, label], index) => {
     const select = $('record-' + key);
     const current = lastDimensions ? (key === 'car' ? '' : lastDimensions[index]) : select.value;
@@ -768,42 +1330,52 @@ function renderRecords(lastSession) {
   });
 
   const versionSelect = $('record-version');
-  const currentVersion = lastSession ? recordedGameVersion(lastSession.gameVersion) : versionSelect.value;
-  const versions = new Set([...resultGameVersions, ...sessions.map(session => session.gameVersion)]
-    .map(recordedGameVersion).filter(Boolean));
-  setRecordOptions(versionSelect, 'All Versions', [...versions].sort((a, b) => compareVersions(b, a)), currentVersion);
+  const locked = settings.shareTrackRecords === true && settings.communityConfigured;
+  versionSelect.disabled = locked;
+  const versionLock = $('record-version-lock');
+  versionLock.hidden = !locked;
+  if (locked) {
+    versionSelect.replaceChildren(new Option(communityMinimumGameVersion ||
+      (communityMinimumGameVersion === null ? 'Waiting for Server' : 'No Minimum Set'), communityMinimumGameVersion ?? ''));
+  } else {
+    const currentVersion = lastSession ? recordedGameVersion(lastSession.gameVersion) : unlockedRecordVersion;
+    const versions = new Set([...resultGameVersions, ...candidates.map(({session}) => session.gameVersion)]
+      .map(recordedGameVersion).filter(Boolean));
+    setRecordOptions(versionSelect, 'All Versions', [...versions].sort((a, b) => compareVersions(b, a)), currentVersion);
+    unlockedRecordVersion = versionSelect.value;
+  }
 
   const minimum = versionSelect.value;
+  if (locked && communityMinimumGameVersion === null) candidates.length = 0;
+  renderRecordMedals(candidates.filter(({session}) => recordMeetsMinimum(session, minimum)));
   $('record-last-session').disabled = !sessions.length;
   const fastest = new Map();
   for (const row of candidates) {
     if (filters.some((value, index) => value && value !== row.dimensions[index])) continue;
     const version = recordedGameVersion(row.session.gameVersion);
-    if (minimum && (!version || compareVersions(version, minimum) < 0)) continue;
-    const key = JSON.stringify(row.dimensions);
+    if (!recordMeetsMinimum(row.session, minimum)) continue;
+    const key = JSON.stringify([recordContestKey(row.dimensions),row.friend ? row.session.driver.trim().toLowerCase() : null]);
     if (!fastest.has(key) || row.bestLap.time < fastest.get(key).bestLap.time) {
       fastest.set(key, {...row, version});
     }
   }
 
-  const filtered = Boolean(minimum) || filters.some(Boolean);
   const records = [...fastest.values()].sort((a, b) => {
-    if (filtered && a.bestLap.time !== b.bestLap.time) return a.bestLap.time - b.bestLap.time;
-    for (let index = 0; index < recordFields.length; index++) {
-      const order = a.dimensions[index].localeCompare(b.dimensions[index]);
+    for (let index = 0; index < 3; index++) {
+      const order = a.dimensions[index].localeCompare(b.dimensions[index], undefined, {sensitivity:'accent'});
       if (order) return order;
     }
-    return 0;
+    return a.bestLap.time - b.bestLap.time || a.session.driver.localeCompare(b.session.driver);
   });
   const rows = [];
   let previousTrack;
-  for (const {session, bestLap, dimensions, version} of records) {
+  for (const {session, bestLap, dimensions, version, friend} of records) {
     const [track, layout, carClass, car] = dimensions;
     const trackKey = JSON.stringify([track, layout]);
     if (previousTrack !== trackKey) {
       const group = node('tr', undefined, 'records-track-group');
-      const title = node('th', track === layout ? track : track + ' · ' + layout);
-      title.colSpan = 10;
+      const title = node('th', [track,layout !== track ? layout : ''].filter(Boolean).join(' · '));
+      title.colSpan = 11;
       group.append(title);
       rows.push(group);
       previousTrack = trackKey;
@@ -811,27 +1383,75 @@ function renderRecords(lastSession) {
 
     const row = node('tr', undefined, 'record-result');
     const time = node('td', undefined, 'numeric-cell');
-    const button = node('button', lapTime(bestLap.time));
-    button.type = 'button';
-    row.onclick = () => openSession(session, bestLap);
-    time.append(button);
-    if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
     const referenceCell = node('td', undefined, 'session-comparison');
-    const addReference = node('button', '+ Add as a Reference Lap', 'reference-add');
-    addReference.type = 'button';
-    addReference.setAttribute('aria-label', addReference.textContent + ': ' + car + ' at ' + track + ' · ' + lapTime(bestLap.time));
-    addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path && referenceSessionLapId === bestLap.id));
-    addReference.onclick = event => {
-      event.stopPropagation();
-      selectReferenceSession(session.path, bestLap.id);
-    };
-    referenceCell.append(addReference);
-    addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
-    const sessionLaps = session.laps.filter(eligibleRecordLap);
-    const bestSectors = [0, 1, 2].map(index => Math.min(Infinity,
-      ...sessionLaps.map(item => item.sectors?.[index]).filter(value => Number.isFinite(value) && value > 0)));
-    const optimalTime = bestSectors.reduce((total, sector) => total + sector, 0);
-    const optimal = node('td', lapTime(optimalTime), 'numeric-cell');
+    const telemetryCell = node('td', undefined, 'record-telemetry');
+    if (friend) {
+      time.textContent = lapTime(bestLap.time);
+      const request = recordRequests.findLast(item => !item.incoming && item.recordId === friend.id && item.record.lapKey === friend.lapKey);
+      const imported = importedRequestedLap(request);
+      telemetryCell.textContent = imported ? 'Downloaded' : request?.status === 'uploaded' ? 'Ready to Download' :
+        friend.requestable ? 'On Request' : 'Unavailable';
+      if (!imported && (!friend.requestable || !privateRequestsAvailable || !settings.primaryDriver || !lmu.trackRecordRequest)) {
+        referenceCell.textContent = friend.requestable && !settings.primaryDriver ? 'Confirm Your Driver' : '—';
+      }
+      else {
+        const requestLabel = 'Request the Telemetry for This Lap from ' + friend.driver;
+        const action = node('button',imported ? '+ Add as a Reference Lap' :
+          request ? {pending:'Request Sent',accepted:'Request Accepted',denied:'Request Denied',uploaded:'Download Telemetry Lap',expired:requestLabel,revoked:'Access Revoked'}[request.status]
+            : requestLabel,imported ? 'reference-add' : 'record-request');
+        action.disabled = !imported && ((!!request && !['uploaded','expired'].includes(request.status)) || pendingRecordRequests.has(friend.id) || pendingRecordTransfers.has(request?.id));
+        if (imported) {
+          action.onclick = () => selectReferenceSession(imported.path);
+          addLoadedReferenceLabel(referenceCell,imported.path);
+        } else action.onclick = async () => {
+          if (pendingRecordRequests.has(friend.id)) return;
+          pendingRecordRequests.add(friend.id);
+          action.disabled = true;
+          try {
+            if (request?.status === 'uploaded') {
+              settings.comparisonLaps = await lmu.trackRecordRequest('download',request.id);
+              renderLibrary();
+            } else await updateRecordRequests(await lmu.trackRecordRequest('request',friend.id,friend.lapKey));
+          }
+          catch (error) { $('friend-records-status').textContent = error.message; }
+          finally { pendingRecordRequests.delete(friend.id); refreshRecordsFromScan(); }
+        };
+        referenceCell.prepend(action);
+      }
+    } else {
+      const button = node('button', lapTime(bestLap.time));
+      button.type = 'button';
+      row.onclick = () => openSession(session,bestLap);
+      time.append(button);
+      if (session.path) {
+        telemetryCell.append(node('span','Available'));
+        if (settings.communityConfigured && lmu.exportBestLap) {
+          const upload = node('button','Export to Server','button-secondary');
+          upload.type = 'button';
+          upload.onclick = event => {
+            event.stopPropagation();
+            openBestLapExport(session,bestLap);
+          };
+          telemetryCell.append(upload);
+        }
+      } else telemetryCell.textContent = 'Unavailable';
+      const addReference = node('button', '+ Add as a Reference Lap', 'reference-add');
+      addReference.type = 'button';
+      addReference.setAttribute('aria-label', addReference.textContent + ': ' + car + ' at ' + track + ' · ' + lapTime(bestLap.time));
+      addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path && referenceSessionLapId === bestLap.id));
+      addReference.onclick = event => {
+        event.stopPropagation();
+        selectReferenceSession(session.path, bestLap.id);
+      };
+      referenceCell.append(addReference);
+      addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
+    }
+    if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
+    const bestSectors = friend ? friend.bestSectors?.map(value => Number.isFinite(value) && value > 0 ? value : Infinity) ?? [] :
+      [0,1,2].map(index => Math.min(Infinity,...session.laps.filter(item => eligibleRecordLap(item) && item.validity === 'official')
+        .map(item => item.sectors?.[index]).filter(value => Number.isFinite(value) && value > 0)));
+    const optimalTime = bestSectors.length === 3 ? bestSectors.reduce((total, sector) => total + sector, 0) : Infinity;
+    const optimal = node('td', lapTime(optimalTime), 'numeric-cell record-optimal');
     if (Number.isFinite(optimalTime)) {
       const difference = Math.round((optimalTime - bestLap.time) * 1000) / 1000;
       optimal.append(node('small', '(' + timeGapLabel(difference) + ')'));
@@ -841,14 +1461,14 @@ function renderRecords(lastSession) {
     row.append(node('td', carClass), carCell, time,
       ...[0, 1, 2].map(index => node('td', Number.isFinite(bestLap.sectors?.[index])
         ? number(bestLap.sectors[index], 3) + ' s' : '—', 'numeric-cell')),
-      optimal, node('td', dateLabel(session.recorded, australianDate)),
-      node('td', version || 'Unknown'), referenceCell);
+      optimal, node('td', dateLabel(session.recorded, australianDate), 'record-date'),
+      node('td', version || 'Unknown'), telemetryCell, referenceCell);
     rows.push(row);
   }
   $('record-rows').replaceChildren(...rows);
   $('records-table').hidden = !rows.length;
   $('records-status').textContent = records.length ? records.length + (records.length === 1 ? ' record' : ' records')
-    : 'No matching records.';
+    : locked && communityMinimumGameVersion === null ? 'Waiting for the Community Server Game Version.' : 'No matching records.';
 }
 
 for (const [key] of recordFields) {
@@ -857,7 +1477,10 @@ for (const [key] of recordFields) {
     renderRecords();
   };
 }
-$('record-version').onchange = () => renderRecords();
+$('record-version').onchange = event => {
+  unlockedRecordVersion = event.target.value;
+  renderRecords();
+};
 $('record-last-session').onclick = () => {
   const lastSession = sessions[0];
   if (!lastSession) return;
@@ -865,7 +1488,7 @@ $('record-last-session').onclick = () => {
 };
 $('record-clear').onclick = () => {
   for (const [key] of recordFields) $('record-' + key).value = '';
-  $('record-version').value = '';
+  unlockedRecordVersion = '';
   renderRecords();
 };
 
@@ -879,6 +1502,7 @@ function renderLibrary() {
   const rows = matches.slice(0, limit);
   $('recent-sessions-no-matches').hidden = !$('library-loading').hidden || !timedSessions.length || !!matches.length;
   $('empty').hidden = !$('library-loading').hidden || timedSessions.length > 0;
+  $('empty-recording-guide').hidden = scanKey === undefined || !settings.telemetry || timedSessions.length > 0;
   $('session-wrap').hidden = !rows.length;
   $('empty-title').textContent = settings.telemetry ? 'Waiting for timed laps' : 'Choose your telemetry folder';
   $('empty-text').textContent = settings.telemetry ? settings.telemetry
@@ -928,6 +1552,41 @@ function showLibraryLoading(loading) {
   $('library-loading').hidden = !loading;
   if (loading) $('empty').hidden = $('recent-sessions-no-matches').hidden = true;
 }
+let scannedTelemetryFolder;
+const seenTelemetry = new Set();
+const pendingTelemetry = new Set();
+
+$('auto-load-telemetry').onchange = event => {
+  save({autoLoadTelemetry:event.target.checked});
+  pendingTelemetry.clear();
+};
+
+async function autoLoadNewTelemetry(recordings, folder) {
+  const baseline = scannedTelemetryFolder !== folder;
+  if (baseline) {
+    scannedTelemetryFolder = folder;
+    seenTelemetry.clear();
+    pendingTelemetry.clear();
+  }
+  for (const recording of recordings) {
+    if (folder && !baseline && settings.autoLoadTelemetry !== false && !seenTelemetry.has(recording.path)) {
+      pendingTelemetry.add(recording.path);
+    }
+    seenTelemetry.add(recording.path);
+  }
+  if (settings.autoLoadTelemetry === false || !folder) return false;
+
+  // The scanner returns newest recordings first. Open one if a batch arrives together.
+  const available = recordings.filter(recording => pendingTelemetry.has(recording.path) && recording.laps.length);
+  const [latest,...older] = available;
+  if (!latest) return false;
+  for (const recording of older) pendingTelemetry.delete(recording.path);
+  selectSummaryCategory('vehicle');
+  await openSession(latest);
+  if (ready || selected?.path !== latest.path) pendingTelemetry.delete(latest.path);
+  return true;
+}
+
 async function scan() {
   refreshResultsDistance();
   if (scanBusy) { runningScanAgain = true; return; }
@@ -935,21 +1594,31 @@ async function scan() {
   scanBusy = true;
   updateRecordsLoading();
   const initialScan = scanKey === undefined;
+  const telemetryFolder = settings.telemetry;
   if (initialScan) showLibraryLoading(true);
   try {
     const response = await lmu.scan();
-    if (response.stale) { runningScanAgain = true; return; }
+    if (response.stale || telemetryFolder !== settings.telemetry) { runningScanAgain = true; return; }
     scanFailed = false;
     if (initialScan) showLibraryLoading(false);
     const nextKey = JSON.stringify(response);
-    if (scanKey === nextKey) return;
+    if (scanKey === nextKey) {
+      void refreshFriendRecords();
+      await autoLoadNewTelemetry(response.sessions,telemetryFolder);
+      return;
+    }
     scanKey = nextKey;
     sessions = response.sessions;
+    offerPrimaryDriver(response.suggestedDriver);
+    $('settings-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
+    renderResultsDistance();
+    void refreshFriendRecords(true);
     if (settings.driverTrainerEnabled === true && view === 'trainer') void scanDriverTrainer(sessions);
     resultGameVersions = response.resultGameVersions || [];
     $('issues').hidden = !response.errors.length;
     $('issue-list').replaceChildren(...response.errors.map(error => node('li', error)));
     renderLibrary();
+    if (await autoLoadNewTelemetry(sessions,telemetryFolder)) return;
     if (selected) {
       const updated = sessions.find(item => item.path === selected.path);
       if (updated) {
@@ -1135,14 +1804,15 @@ function fillReferences() {
     : 'Reference session unavailable';
   const automatic = candidates.find(x => x.lap.time) || null;
   refSelect.replaceChildren();
-  option(refSelect, automatic ? 'Automatic · ' + lapTime(automatic.lap.time) : 'Automatic · no timed lap', 'auto');
+  const automaticLabel = automatic ? 'Automatic · ' + lapLabel(automatic.lap) : 'Automatic · no timed lap';
+  option(refSelect, automaticLabel, 'auto');
   option(refSelect, 'No comparison', '');
   const referenceLabel = value => lapLabel(value.lap) + ' · ' + (value.imported ? (value.session.driver || 'Imported lap') : dateLabel(value.session.recorded));
   const lapsInOrder = [...candidates].sort((a, b) => (a.lap.number ?? Infinity) - (b.lap.number ?? Infinity));
   for (const value of lapsInOrder) {
     option(refSelect, referenceLabel(value), referenceKey(value));
   }
-  fitLapDropdown(refSelect, ['Automatic · no timed lap', 'Automatic · 00:00.000', 'No comparison', ...pool.map(referenceLabel), ...candidates.filter(value => value.imported).map(referenceLabel)]);
+  fitLapDropdown(refSelect, [automaticLabel, 'Automatic · no timed lap', 'No comparison', ...pool.map(referenceLabel), ...candidates.filter(value => value.imported).map(referenceLabel)]);
   if (manualReference !== undefined && [...refSelect.options].some(x => x.value === manualReference)) {
     refSelect.value = manualReference;
     reference = candidates.find(x => referenceKey(x) === manualReference) || null;
@@ -1217,17 +1887,23 @@ const bestLapExportLocal = $('best-lap-export-local');
 const bestLapExportDiscord = $('best-lap-export-discord');
 const bestLapExportCommunity = $('best-lap-export-community');
 const bestLapExportCancel = $('best-lap-export-cancel');
-let exportSessionPath;
-exportBestLapButton.onclick = () => {
-  if (exportBestLapButton.disabled) return;
-  exportSessionPath = selected.path;
-  $('best-lap-export-lap').textContent = [selected.driver, selected.track, lapTime(selected.best)].filter(Boolean).join(' · ');
+let exportSessionPath, exportRecordLapId;
+function openBestLapExport(session, recordLap) {
+  if (exportingBestLap) return;
+  exportSessionPath = session.path;
+  exportRecordLapId = recordLap?.id;
+  bestLapExportLocal.hidden = bestLapExportDiscord.hidden = Boolean(recordLap);
+  $('best-lap-export-lap').textContent = [session.driver, session.track, lapTime(recordLap?.time ?? session.best)].filter(Boolean).join(' · ');
   bestLapExportDiscord.disabled = !settings.discordWebhookConfigured;
   bestLapExportCommunity.disabled = !settings.communityConfigured;
   setStatus(bestLapExportStatus,
-    settings.discordWebhookConfigured ? '' : 'Add a Discord webhook in Settings to export to Discord.',
+    recordLap ? 'This shares the selected record lap with the community.' :
+      settings.discordWebhookConfigured ? '' : 'Add a Discord webhook in Settings to export to Discord.',
     {temporary:false});
   bestLapExportDialog.showModal();
+}
+exportBestLapButton.onclick = () => {
+  if (!exportBestLapButton.disabled) openBestLapExport(selected);
 };
 bestLapExportCancel.onclick = () => bestLapExportDialog.close();
 bestLapExportDialog.oncancel = event => {
@@ -1241,7 +1917,7 @@ async function exportBestLap(target) {
   if (target !== 'local') showLapTransfer(bestLapExportProgress, bestLapExportStatus,
     target === 'community' ? 'Preparing best lap…' : 'Uploading best lap…');
   try {
-    const filename = await lmu.exportBestLap(exportSessionPath, target);
+    const filename = await lmu.exportBestLap(exportSessionPath, target, exportRecordLapId);
     if (!filename) return;
     bestLapExportDialog.close();
     setStatus($('status'), (target === 'discord' ? 'Sent to Discord · ' : target === 'community' ? 'Uploaded to Community Server · ' : 'Exported ') + filename);
@@ -1393,6 +2069,10 @@ const unitPresets = {metricPsi:{...metricUnits,pressure:'imperial'},metric:metri
 const unitOptions = [...document.querySelectorAll('[data-measurement-unit]')];
 const usingImperial = key => (settings.measurementUnits?.[key] ?? unitPresets.metricPsi[key]) === 'imperial';
 
+function turboPressureReference() {
+  return settings.turboPressureReference ?? 'gauge';
+}
+
 function unitConversion(name, unit) {
   const normalized = unit?.trim().toLowerCase();
   if (['km/h','kph','kmh','mph'].includes(normalized)) {
@@ -1416,7 +2096,10 @@ function unitConversion(name, unit) {
   if (['TyresPressure','Turbo Boost Pressure'].includes(name) && ['pa','kpa','psi'].includes(normalized)) {
     const psi = usingImperial('pressure');
     const toKpa = normalized === 'pa' ? .001 : normalized === 'psi' ? 6.894757293168 : 1;
-    return [psi ? 'psi' : 'kPa',psi ? toKpa / 6.894757293168 : toKpa];
+    const gauge = name === 'Turbo Boost Pressure' && turboPressureReference() === 'gauge';
+    const unit = (psi ? 'psi' : 'kPa') + (gauge ? ' gauge' : '');
+    return [unit,psi ? toKpa / 6.894757293168 : toKpa,
+      gauge ? -101.325 / (psi ? 6.894757293168 : 1) : 0];
   }
   if (['l','litre','litres','liter','liters','us gal','gal'].includes(normalized)) {
     const gallons = usingImperial('fuel');
@@ -1443,6 +2126,7 @@ function temperatureSettingValue(value) {
   return usingImperial('temperature') ? (value - 32) / 1.8 : value;
 }
 function refreshUnitFields() {
+  $('turbo-pressure-reference').value = turboPressureReference();
   for (const input of unitOptions) input.value = usingImperial(input.dataset.measurementUnit) ? 'imperial' : 'metric';
   $('unit-preset').value = Object.keys(unitPresets).find(preset =>
     unitOptions.every(input => unitPresets[preset][input.dataset.measurementUnit] === input.value)) ?? 'custom';
@@ -1456,6 +2140,9 @@ function refreshUnitFields() {
 }
 function applyMeasurementUnits(units) {
   save({measurementUnits:units});
+  refreshMeasurementDisplays();
+}
+function refreshMeasurementDisplays() {
   refreshUnitFields();
   renderLibrary();
   renderSessionSummary();
@@ -1468,6 +2155,10 @@ function applyMeasurementUnits(units) {
   }
   renderDriverTrainer();
 }
+$('turbo-pressure-reference').onchange = event => {
+  save({turboPressureReference:event.target.value});
+  refreshMeasurementDisplays();
+};
 $('unit-preset').onchange = event => applyMeasurementUnits(unitPresets[event.target.value]);
 for (const input of unitOptions) input.onchange = () => applyMeasurementUnits(
   Object.fromEntries(unitOptions.map(field => [field.dataset.measurementUnit,field.value])));
@@ -1786,7 +2477,7 @@ function summaryChart(key, label, unit, readings, endpoints) {
       points.forEach(({value}, i) => {
         if (!Number.isFinite(value)) return;
         const hot = isHot(value);
-        ctx.fillStyle = hot ? '#ff8787' : colour;
+        ctx.fillStyle = hot ? elementColour('warning','#ff8787') : colour;
         ctx.beginPath();
         ctx.arc(x(i), y(value), hot ? warningRadius : i === index ? 3.5 : 1.75, 0, Math.PI * 2);
         ctx.fill();
@@ -2789,9 +3480,8 @@ function openGraphPicker() {
 }
 $('choose-graphs').onclick=openGraphPicker;
 $('settings-graphs').onclick=openGraphPicker;
-const telemetryNamesDialog = $('telemetry-names-dialog');
 const telemetryNameFields = $('telemetry-name-fields');
-$('settings-telemetry-names').onclick = () => {
+function renderTelemetryData() {
   const names = new Set([
     ...defaultTelemetryNames.keys(), ...Object.keys(settings.telemetryNames ?? {}),
     ...Object.keys(settings.telemetryDecimals ?? {}), ...Object.values(builtIn).flat(),
@@ -2799,10 +3489,13 @@ $('settings-telemetry-names').onclick = () => {
     ...derivedSummaryChannels.keys(),
     ...availableChannels(), ...sessions.flatMap(session => session.summaryChannels ?? [])
   ]);
-  telemetryNameFields.replaceChildren(...[...names].sort((a, b) => a.localeCompare(b)).map(key => {
+  const channels = [...names].map(key => ({
+    key,
+    source:summaryTemperatureOptions.find(([name]) => name === key)?.[1] ??
+      derivedSummaryChannels.get(key)?.[1] ?? (key === 'virtualEnergy' ? 'Virtual Energy summary' : key)
+  })).sort((a,b) => a.source.localeCompare(b.source));
+  telemetryNameFields.replaceChildren(...channels.map(({key,source}) => {
     const row = node('div', undefined, 'telemetry-display-row');
-    const source = summaryTemperatureOptions.find(([name]) => name === key)?.[1] ??
-      derivedSummaryChannels.get(key)?.[1] ?? (key === 'virtualEnergy' ? 'Virtual Energy summary' : key);
     const input = node('input');
     input.type = 'text';
     input.dataset.channel = key;
@@ -2824,9 +3517,9 @@ $('settings-telemetry-names').onclick = () => {
     return row;
   }));
   $('telemetry-names-search').value = '';
-  telemetryNamesDialog.showModal();
-  $('telemetry-names-search').focus();
-};
+  telemetryNameFields.scrollTop = 0;
+  $('telemetry-data-status').textContent = '';
+}
 $('telemetry-names-search').oninput = event => {
   const query = event.target.value.trim().toLowerCase();
   for (const input of telemetryNameFields.querySelectorAll('input[type=text]')) {
@@ -2834,7 +3527,7 @@ $('telemetry-names-search').oninput = event => {
       .some(text => text.toLowerCase().includes(query));
   }
 };
-$('cancel-telemetry-names').onclick = () => telemetryNamesDialog.close();
+$('cancel-telemetry-names').onclick = renderTelemetryData;
 $('telemetry-names-form').onsubmit = event => {
   event.preventDefault();
   const entries = [...telemetryNameFields.querySelectorAll('input[type=text]')]
@@ -2849,7 +3542,8 @@ $('telemetry-names-form').onsubmit = event => {
   }
   save({telemetryNames:Object.fromEntries(entries), telemetryDecimals});
   if (view === 'records') renderRecords();
-  telemetryNamesDialog.close();
+  for (const input of telemetryNameFields.querySelectorAll('input')) input.defaultValue = input.value;
+  $('telemetry-data-status').textContent = 'Telemetry data settings saved.';
   renderSessionSummary();
   if (ready) {
     buildChannels();
@@ -2914,7 +3608,7 @@ function speedActivationControls(controls, track = false) {
       : track ? channel + ' activation on each lap’s racing line.'
       : channel + ' activation on each lap’s speed trace.';
     const swatch = node('span', undefined, 'speed-activation-swatch');
-    swatch.style.backgroundColor = colour;
+    swatch.style.backgroundColor = elementColour(channel.toLowerCase(),colour);
     label.append(checkbox, swatch, channel);
     checkbox.onchange = () => {
       save({speedActivations: {...settings.speedActivations, [channel]: checkbox.checked}});
@@ -3727,7 +4421,7 @@ function paintSpeedActivations(ctx, x, y) {
     const speed = data?.channels['Ground Speed'];
     if (!speed?.rows.length) continue;
     for (const [name, colour, lightColour] of speedActivations) {
-      ctx.strokeStyle = lightGraphBackground ? lightColour : colour;
+      ctx.strokeStyle = elementColour(name.toLowerCase(),lightGraphBackground ? lightColour : colour);
       ctx.lineWidth = 2;
       ctx.lineCap = 'round';
       ctx.setLineDash([]);
@@ -3787,8 +4481,8 @@ function baseChart(row, width, height, ratio) {
   const gearPadding = splitGear ? gearOffset + .12 : 0;
   const y = value => bottom - (value-low+gearPadding)/(high-low+2*gearPadding)*(bottom-top);
   ctx.font = canvasFont();
-  ctx.strokeStyle = lightGraphBackground ? '#59645d55' : '#2a382e';
-  ctx.fillStyle = lightGraphBackground ? '#253329' : '#a4b3a7';
+  ctx.strokeStyle = elementColour('graph-grid',lightGraphBackground ? '#59645d55' : '#2a382e');
+  ctx.fillStyle = elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7');
   ctx.textAlign = 'center';
   for (let i = 0; i <= 4; i++) {
     const xx = left + (right-left)*i/4;
@@ -3843,7 +4537,7 @@ function baseChart(row, width, height, ratio) {
   }
   if (name === 'Ground Speed') paintSpeedActivations(ctx, x, y);
   if (name === 'delta') {
-    ctx.setLineDash([3,3]);ctx.strokeStyle=(lightGraphBackground ? '#253329' : '#a4b3a7');ctx.beginPath();
+    ctx.setLineDash([3,3]);ctx.strokeStyle=(elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7'));ctx.beginPath();
     ctx.moveTo(left,y(0));ctx.lineTo(right,y(0));ctx.stroke();
     paintDeltaHeadings(ctx, left, right, top, bottom);
   }
@@ -3897,9 +4591,9 @@ function mergedBase(row, box) {
   ctx.font = canvasFont();
   for (let i=0;i<=4;i++) {
     const px=left+(right-left)*i/4, py=top+(bottom-top)*i/4;
-    ctx.strokeStyle=(lightGraphBackground ? '#59645d55' : '#2a382e');ctx.beginPath();
+    ctx.strokeStyle=(elementColour('graph-grid',lightGraphBackground ? '#59645d55' : '#2a382e'));ctx.beginPath();
     ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();
-    ctx.fillStyle=(lightGraphBackground ? '#253329' : '#a4b3a7');ctx.textAlign='center';
+    ctx.fillStyle=(elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7'));ctx.textAlign='center';
     const tick = range[0]+(range[1]-range[0])*i/4;
     const label = number(primary.useDistance ? convert('',tick,'m') : tick,primary.useDistance?0:1);
     paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' ' + displayUnit('','m') : ' s') : ''),px,bottom+18*textScale(),width);
@@ -4157,7 +4851,7 @@ function paintChart(row, [selectedDriver, referenceDriver]) {
     }
   }
   if(cursor>=range[0] && cursor<=range[1]) {
-    ctx.strokeStyle=(lightGraphBackground ? '#172119' : '#e8f0dd');ctx.beginPath();ctx.moveTo(x(cursor),top);ctx.lineTo(x(cursor),bottom);ctx.stroke();
+    ctx.strokeStyle=(elementColour('focus',lightGraphBackground ? '#172119' : '#e8f0dd'));ctx.beginPath();ctx.moveTo(x(cursor),top);ctx.lineTo(x(cursor),bottom);ctx.stroke();
   }
   if(selection?.row===row) {
     const a=Math.max(left,Math.min(right,x(selection.initial))),b=Math.max(left,Math.min(right,x(selection.x)));
@@ -4462,7 +5156,7 @@ function paintTrackActivations(ctx, data, points, xy) {
   ctx.lineWidth = 3.5;
   ctx.lineCap = 'round';
   for (const [name, colour] of speedActivations) {
-    ctx.strokeStyle = colour;
+    ctx.strokeStyle = elementColour(name.toLowerCase(),colour);
     for (const [start, end] of activationIntervals(data, name)) {
       if (end <= times[0] || start >= times.at(-1)) continue;
       ctx.beginPath();
@@ -4586,7 +5280,7 @@ function paintMap(canvas, interactive = false) {
         const time = points[i][2];
         const pedal = sample(brakes, time)?.[0] > 5 ? 'brake' : sample(throttle, time)?.[0] > 5 ? 'throttle' : null;
         if (!pedal) continue;
-        ctx.strokeStyle = trackColours[pedal];
+        ctx.strokeStyle = elementColour('map-' + pedal,trackColours[pedal]);
         ctx.beginPath();
         ctx.moveTo(...xy(points[i - 1]));
         ctx.lineTo(...xy(points[i]));
@@ -4691,16 +5385,52 @@ const builtInGraphPresets = {
   }
 };
 
+const builtInColourPresets = {
+  'Classic Green': {interfaceColourMode:'green'},
+  'TRD IMSA': {
+    interfaceColour:'#d71920', interfaceBackgroundColour:'#080808', graphBackgroundColour:'#0b0b0b',
+    elementColours:{header:'#050505',panel:'#121212',raised:'#1a1a1a',control:'#202020',rule:'#383838',
+      fg:'#f7f7f7',muted:'#bdbdbd',accent:'#ffcf00',reference:'#ff7800',warning:'#ff6266',
+      focus:'#ffcf00','graph-grid':'#292929','graph-axis':'#bdbdbd','map-surface':'#0b0b0b',trophy:'#ffcf00'}
+  },
+  'Slate & Amber': {
+    interfaceColour:'#a45412', interfaceBackgroundColour:'#171a20', graphBackgroundColour:'#1e232d',
+    elementColours:{header:'#1b1f28',panel:'#222733',raised:'#2b3240',control:'#323a4b',rule:'#4b5567',
+      fg:'#f3f0e8',muted:'#b4bdcc',accent:'#ffcb79',reference:'#77c8ff','graph-grid':'#364152','map-surface':'#181e29'}
+  },
+  'Ocean & Coral': {
+    interfaceColour:'#116777', interfaceBackgroundColour:'#101b21', graphBackgroundColour:'#16252e',
+    elementColours:{header:'#14232b',panel:'#1a2b36',raised:'#223744',control:'#2b414f',rule:'#405c69',
+      fg:'#edf7f9',muted:'#acc5cd',accent:'#6ae0db',reference:'#ffab91','graph-grid':'#304d59','map-surface':'#13242c'}
+  },
+  'Plum & Gold': {
+    interfaceColour:'#704387', interfaceBackgroundColour:'#1b1522', graphBackgroundColour:'#231b2b',
+    elementColours:{header:'#21192a',panel:'#2b2135',raised:'#352842',control:'#42334e',rule:'#564461',
+      fg:'#f8effa',muted:'#c6b4d0',accent:'#dfa5f4',reference:'#ffd47e','graph-grid':'#493650','map-surface':'#21192a'}
+  }
+};
+
+function colourPresetSettings() {
+  return {
+    interfaceColourMode:interfaceColourMode(),
+    interfaceColour:backgroundColour(settings.interfaceColour,greenInterfaceColour),
+    interfaceBackgroundColour:backgroundColour(settings.interfaceBackgroundColour,defaultInterfaceBackgroundColour),
+    ...(settings.graphBackgroundColour ? {graphBackgroundColour:settings.graphBackgroundColour} : {}),
+    elementColours:{...settings.elementColours}
+  };
+}
+
 let presetTarget = 'presets';
 const presetControls = {
   presets:{select:$('preset'), save:$('save-preset'), remove:$('remove-preset'), title:'Save Telemetry Channel Preset'},
-  graphPresets:{select:$('graph-preset'), save:$('save-graph-preset'), remove:$('remove-graph-preset'), title:'Save Telemetry Graph Preset'}
+  graphPresets:{select:$('graph-preset'), save:$('save-graph-preset'), remove:$('remove-graph-preset'), title:'Save Telemetry Graph Preset'},
+  colourPresets:{select:$('colour-preset'), save:$('save-colour-preset'), remove:$('remove-colour-preset'), title:'Save Colour Preset'}
 };
 function populatePresets(target, selection = presetControls[target].select.value){
   const {select, remove} = presetControls[target];
   select.replaceChildren();
   option(select,'Choose Preset','');
-  const defaults = target === 'presets' ? builtIn : builtInGraphPresets;
+  const defaults = {presets:builtIn, graphPresets:builtInGraphPresets, colourPresets:builtInColourPresets}[target];
   for (const label of Object.keys(defaults)) option(select,label,'builtin:'+label);
   for(const label of Object.keys(settings[target] || {}))option(select,label,'saved:'+label);
   select.value = [...select.options].some(entry => entry.value === selection) ? selection : '';
@@ -4747,6 +5477,21 @@ $('graph-preset').onchange=()=>{
   }
   if(ready)buildCharts();
 };
+$('colour-preset').onchange = () => {
+  const key = $('colour-preset').value;
+  const saved = key.startsWith('saved:');
+  $('remove-colour-preset').disabled = !saved;
+  if (!key) return;
+  const preset = saved ? settings.colourPresets[key.slice(6)] : builtInColourPresets[key.slice(8)];
+  save({
+    interfaceColourMode:preset.interfaceColourMode ?? 'custom',
+    interfaceColour:preset.interfaceColour ?? null,
+    interfaceBackgroundColour:preset.interfaceBackgroundColour ?? null,
+    graphBackgroundColour:preset.graphBackgroundColour ?? null,
+    elementColours:preset.elementColours ?? {}
+  });
+  refreshTheme();
+};
 for(const [target, controls] of Object.entries(presetControls)){
   controls.save.onclick=()=>{
     presetTarget = target;
@@ -4769,6 +5514,12 @@ $('preset-form').addEventListener('submit',e=>{
   e.preventDefault();
   const name=$('preset-name').value.trim();
   if(!name)return;
+  if (presetTarget === 'colourPresets') {
+    save({colourPresets:{...settings.colourPresets,[name]:colourPresetSettings()}});
+    populatePresets(presetTarget, 'saved:'+name);
+    $('preset-dialog').close();
+    return;
+  }
   const graphLayout = {
     hiddenGraphs:[...(settings.hiddenGraphs ?? defaultHiddenGraphs)],
     extraGraphChannels:[...(settings.extraGraphChannels || [])],
@@ -4888,10 +5639,23 @@ $('graph-background-colour').addEventListener('change', event => {
   save({graphBackgroundColour:event.target.value});
   applyAppearance();
 });
-$('reset-interface-colours').onclick = () => {
-  save({interfaceColourMode: null, interfaceColour: null, interfaceBackgroundColour: null, graphBackgroundColour: null});
+function refreshTheme() {
   applyAppearance();
-  settingsFields();
+  interfaceColourFields();
+  $('interface-background-colour').value = backgroundColour(settings.interfaceBackgroundColour,defaultInterfaceBackgroundColour);
+  $('graph-background-colour').value = backgroundColour(settings.graphBackgroundColour,defaultGraphBackgroundColour);
+  renderSessionSummary();
+  if (ready) {
+    const column = $('plot-column');
+    const scrollTop = column.scrollTop;
+    buildCharts();
+    column.scrollTop = scrollTop;
+  }
+}
+$('reset-interface-colours').onclick = () => {
+  save({interfaceColourMode:null, interfaceColour:null, interfaceBackgroundColour:null, graphBackgroundColour:null, elementColours:{}});
+  populatePresets('colourPresets','');
+  refreshTheme();
 };
 $('text-scale').addEventListener('input', event => {
   $('text-scale-value').value = event.target.valueAsNumber + '%';
@@ -4975,17 +5739,80 @@ $('reset-settings').onclick = async () => {
     button.disabled = false;
   }
 };
+let availableUpdate;
+let updateInProgress = false;
+const updateStatus = $('tpr-update-status');
+const updateDialog = $('tpr-update-dialog');
+const installUpdateButton = $('install-tpr-update');
+
+async function checkTprUpdate(interactive = false) {
+  if (!settings.tprUpdatesSupported || updateInProgress) return;
+  updateInProgress = true;
+  installUpdateButton.hidden = true;
+  if (interactive) {
+    updateStatus.textContent = 'Checking the Community Server…';
+    if (!updateDialog.open) updateDialog.showModal();
+  }
+  try {
+    availableUpdate = await lmu.checkTprUpdate();
+    $('tpr-update-available').hidden = !availableUpdate;
+    installUpdateButton.hidden = !availableUpdate;
+    updateStatus.textContent = availableUpdate ? 'TPR Edition ' + availableUpdate.version + ' is ready to download.' :
+      'No newer TPR installer is available from the Community Server.';
+  } catch (error) {
+    availableUpdate = undefined;
+    $('tpr-update-available').hidden = true;
+    if (interactive) updateStatus.textContent = error.message;
+  } finally {
+    updateInProgress = false;
+  }
+}
+$('check-tpr-update').onclick = () => void checkTprUpdate(true);
+$('tpr-update-available').onclick = () => { if (!updateDialog.open) updateDialog.showModal(); };
+installUpdateButton.onclick = async () => {
+  if (!availableUpdate || updateInProgress) return;
+  updateInProgress = true;
+  installUpdateButton.disabled = true;
+  updateStatus.textContent = 'Downloading update…';
+  try {
+    await lmu.installTprUpdate(availableUpdate.version);
+  } catch (error) {
+    updateStatus.textContent = error.message;
+  } finally {
+    updateInProgress = false;
+    installUpdateButton.disabled = false;
+  }
+};
+lmu.onTprUpdateProgress?.(percent => {
+  updateStatus.textContent = percent === 100 ? 'Verifying the installer…' : 'Downloading update… ' + percent + '%';
+});
+
+let choosingLmuFolder = false;
 for (const id of ['settings-button','empty-folders']) $(id).onclick = () => {
+  if (choosingLmuFolder) return;
   settingsFields();
   if (id === 'empty-folders') $('settings-tab-folders').click();
   $('folders').showModal();
 };
-for(const button of document.querySelectorAll('[data-folder]'))button.onclick=async()=>{
+for (const button of document.querySelectorAll('[data-folder]')) button.onclick = async () => {
+  if (choosingLmuFolder) return;
+  choosingLmuFolder = true;
+  const settingsDialog = $('folders');
+  const status = $('folder-selection-status');
+  setStatus(status, '');
+  settingsDialog.close();
   try {
-    settings=await lmu.folder(button.dataset.folder);
+    const {telemetry,results} = settings;
+    Object.assign(settings, await lmu.folder(button.dataset.folder));
     settingsFields();
-    void scan();
-  }catch(error){setStatus($('status'), error.message, {error:true});}
+    if (settings.telemetry !== telemetry || settings.results !== results) void scan();
+  } catch (error) {
+    setStatus(status, error.message, {error:true,temporary:false});
+  } finally {
+    choosingLmuFolder = false;
+    if (!settingsDialog.open) settingsDialog.showModal();
+    button.focus();
+  }
 };
 const summaryPanel = $('session-summary');
 const telemetryPanels = $('telemetry-panels');
@@ -5098,6 +5925,8 @@ window.addEventListener('resize', () => {
 });
 (async()=>{
   settings=await lmu.settings();
+  loadRecordNotifications();
+  communityMinimumGameVersion = settings.communityMinimumGameVersion ?? null;
   syncDriverTrainerSetting();
   if (settings.appVersion) {
     $('app-version').textContent = 'v' + settings.appVersion;
@@ -5108,6 +5937,7 @@ window.addEventListener('resize', () => {
   enabled=new Set(settings.enabled || builtIn.Driving);
   setRecentSessionLimit(settings.limit);
   setupPresets();
+  renderRecordNotifications();
   showTrackView(true);
   renderLibrary();
   lmu.onFolderChange(scan);
@@ -5122,13 +5952,24 @@ window.addEventListener('resize', () => {
         await lmu.save({telemetryReminderSeen:true});
         settings.telemetryReminderSeen = true;
       }
-      Object.assign(settings, await lmu.folder('first-run-installation'));
+      choosingLmuFolder = true;
+      try {
+        Object.assign(settings, await lmu.folder('first-run-installation'));
+      } finally {
+        choosingLmuFolder = false;
+      }
     } catch (error) {
       setStatus($('status'), error.message, {error:true});
     }
   }
   void scan();
+  void checkTprUpdate();
   setInterval(scan,5000);
+  setInterval(() => void refreshFriendRecords(),30_000);
+  window.addEventListener('online',() => {
+    void refreshFriendRecords(true);
+    void checkTprUpdate();
+  });
 })().catch(error=>{setStatus($('status'), error.message, {error:true});});
 
 const trainerTrophies = [
@@ -5420,7 +6261,7 @@ function renderTrainerMap(stint, corner) {
   ctx.stroke();
   if (!corner) return;
   const point = points[lowerBound(points.map(point => point[2]), (corner.start + corner.end) / 2)] ?? points.at(-1);
-  ctx.fillStyle = '#c5fa78';
+  ctx.fillStyle = elementColour('accent','#c5fa78');
   ctx.beginPath();
   ctx.arc(...xy(point),8,0,Math.PI * 2);
   ctx.fill();
@@ -5520,8 +6361,8 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   }
   const byTime = stint.laps.filter(lap => Number.isFinite(lap.cornerTimes[cornerOffset]))
     .sort((a,b) => a.cornerTimes[cornerOffset] - b.cornerTimes[cornerOffset]);
-  const extremes = byTime.length >= 2 ? [byTime[0],byTime.at(-1)] : [];
-  const laps = [...extremes,...stint.laps.filter(lap => !extremes.includes(lap))];
+  const fastest = byTime[0];
+  const laps = fastest ? [fastest,...stint.laps.filter(lap => lap !== fastest)] : stint.laps;
   const key = JSON.stringify([stint.id,stint.session.recordingStamp,focus,corner.from,corner.to,
     laps.map(lap => [lap.id,lap.start,lap.end])]);
   if (trainerTrace?.key !== key) {
@@ -5535,9 +6376,9 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   const {ctx,width,height} = surface;
   const data = trainerTrace.data?.filter(lap => lap.useDistance && lap.channels[channelName]?.times.length);
   if (!data?.length) {
-    const message = trainerTrace.data ? 'Corner trace unavailable' : 'Loading corner traces…';
+    const message = !laps.length ? 'No laps remain after excluding cold tyres' : trainerTrace.data ? 'Corner trace unavailable' : 'Loading corner traces…';
     canvas.setAttribute('aria-label',message);
-    ctx.fillStyle = '#b7c8b9';
+    ctx.fillStyle = elementColour('graph-axis','#b7c8b9');
     ctx.font = '13px system-ui';
     ctx.fillText(message,12,height / 2);
     return;
@@ -5589,78 +6430,66 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   if (!readings.length) return;
   $('trainer-chart-legend').hidden = false;
   const painted = data.filter((lap,index) => traces[index].some(([,value]) => Number.isFinite(value)));
-  const highlighted = extremes.map(lap => painted.some(item => item.lap.id === lap.id));
-  $('trainer-current-legend').hidden = !highlighted[0];
-  $('trainer-previous-legend').hidden = !highlighted[1];
-  const otherCount = painted.length - highlighted.filter(Boolean).length;
+  const fastestIndex = data.findIndex(lap => lap.lap.id === fastest?.id && painted.includes(lap));
+  $('trainer-current-legend').hidden = fastestIndex < 0;
+  $('trainer-previous-legend').hidden = true;
+  const otherCount = painted.length - Number(fastestIndex >= 0);
   $('trainer-other-legend').hidden = !otherCount;
   $('trainer-other-legend').textContent = otherCount + (otherCount === 1 ? ' other lap' : ' other laps');
   comparisonLegend.hidden = !showComparison || (!loadingComparison && !previousCount);
   comparisonLegend.textContent = loadingComparison ? 'Loading Previous Stint Traces…' :
     'Previous Stint · ' + previousCount + (previousCount === 1 ? ' lap' : ' laps');
   $('trainer-plot-axis').textContent = axis;
-  const lapLabel = (lap,description) => 'Lap ' + (lap.number ?? lap.id) + ' · ' + description;
-  if (extremes.length) {
-    $('trainer-current-legend').textContent = lapLabel(extremes[0],'Fastest corner lap');
-    $('trainer-previous-legend').textContent = lapLabel(extremes[1],'Slowest corner lap');
-  }
+  if (fastest) $('trainer-current-legend').textContent = 'Lap ' + (fastest.number ?? fastest.id) + ' · Fastest corner lap';
   canvas.setAttribute('aria-label',axis + ' versus distance · ' + painted.length + ' shown out of ' + stint.laps.length + ' clean laps');
   const min = braking ? 0 : Math.floor(Math.min(...readings) / 10) * 10;
   const max = braking ? 100 : Math.max(min + 10,Math.ceil(Math.max(...readings) / 10) * 10);
   const assist = braking ? 'ABS' : 'TC';
   const assistEnabled = $(braking ? 'trainer-show-abs' : 'trainer-show-tc').checked;
-  const assistOverlays = assistEnabled ? extremes.flatMap((lap,index) => {
-    const traceIndex = data.findIndex(item => item.lap.id === lap.id);
-    const trace = data[traceIndex];
+  const assistOverlays = assistEnabled && fastestIndex >= 0 ? [fastest].flatMap(lap => {
+    const trace = data[fastestIndex];
     if (!trace?.channels[assist]?.rows?.length) return [];
     const intervals = [...activationIntervals(trace,assist,true)]
       .map(([from,to]) => [Math.max(start,trace.distanceAt(from)),Math.min(end,trace.distanceAt(to))])
       .filter(([from,to]) => to > from);
-    return [{lap,description:index ? 'slowest' : 'fastest',intervals,points:traces[traceIndex]}];
+    return [{lap,intervals,points:traces[fastestIndex]}];
   }) : [];
   const left = 62, right = width - 18, top = 10, bottom = height - 25;
   const x = distance => left + (right - left) * (distance - start) / (end - start);
   const y = value => bottom - (bottom - top) * (value - min) / (max - min);
-  const hoverTraces = extremes.flatMap((lap,index) => {
-    const traceIndex = data.findIndex(trace => trace.lap.id === lap.id);
-    if (traceIndex < 0) return [];
-    const points = traces[traceIndex];
-    return [{lap:data[traceIndex],points,distances:points.map(([distance]) => distance),slowest:index === 1}];
-  });
+  const hoverLap = data[fastestIndex];
+  const hoverPoints = traces[fastestIndex] ?? [];
+  const hoverDistances = hoverPoints.map(([distance]) => distance);
   trainerHover = {left,right,top,bottom,reading(px) {
+    if (!hoverLap) return null;
     const distance = start + (end - start) * (px - left) / (right - left);
-    const values = hoverTraces.flatMap(({lap,points,distances,slowest}) => {
-      const channel = lap.channels['Ground Speed'];
-      const time = lap.timeAt(distance);
-      const speed = !braking ? trainerTraceValue(points,distances,distance) :
-        time >= channel?.times[0] && time <= channel.times.at(-1) ?
-          convert('Ground Speed',sample(channel,time)?.[0],channel.unit) : undefined;
-      if (!Number.isFinite(speed)) return [];
-      return [{
-        text:number(speed,telemetryDecimalPlaces('Ground Speed')) + ' ' + displayUnit('','km/h'),
-        colour:slowest ? '#f5a982' : '#c5fa78',
-        dotted:slowest,
-        label:slowest ? 'Slowest corner lap' : 'Fastest corner lap'
-      }];
-    });
-    return values.length ? {x:px,values} : null;
+    const channel = hoverLap.channels['Ground Speed'];
+    const time = hoverLap.timeAt(distance);
+    const speed = !braking ? trainerTraceValue(hoverPoints,hoverDistances,distance) :
+      time >= channel?.times[0] && time <= channel.times.at(-1) ?
+        convert('Ground Speed',sample(channel,time)?.[0],channel.unit) : undefined;
+    if (!Number.isFinite(speed)) return null;
+    return {x:px,values:[{
+      text:number(speed,telemetryDecimalPlaces('Ground Speed')) + ' ' + displayUnit('','km/h'),
+      colour:elementColour('accent','#c5fa78'),
+      label:'Fastest corner lap'
+    }]};
   }};
   ctx.font = '12px system-ui';
   for (let i = 0; i <= 4; i++) {
     const value = min + (max - min) * i / 4;
     ctx.textAlign = 'right';
-    ctx.fillStyle = '#b7c8b9';
+    ctx.fillStyle = elementColour('graph-axis','#b7c8b9');
     ctx.fillText(number(value,0) + ' ' + unit,left - 7,y(value) + 4);
-    ctx.strokeStyle = '#354438';
+    ctx.strokeStyle = elementColour('graph-grid','#354438');
     ctx.beginPath(); ctx.moveTo(left,y(value)); ctx.lineTo(right,y(value)); ctx.stroke();
     ctx.textAlign = 'center';
     paintHorizontalTick(ctx,measurement((end - start) * i / 4,'m',0),left + (right - left) * i / 4,height - 8,width);
   }
   const drawTrace = (points,index) => {
-    ctx.strokeStyle = index === -2 ? '#e0787d' : index < 0 ? '#90ac98' : index ? '#f5a982' : '#c5fa78';
+    ctx.strokeStyle = index === -2 ? elementColour('prior-stint','#e0787d') : index < 0 ? elementColour('other-laps','#90ac98') : elementColour('accent','#c5fa78');
     ctx.lineWidth = index < 0 ? 1.5 : 2.5;
     ctx.globalAlpha = index === -2 ? .35 : index < 0 ? .45 : 1;
-    ctx.setLineDash(index === 1 ? [7,5] : []);
     ctx.beginPath();
     let connected = false;
     for (const [distance,value] of points) {
@@ -5673,15 +6502,12 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   };
   if (showComparison) for (const points of previousTraces) drawTrace(points,-2);
   for (const [index,points] of traces.entries()) {
-    if (!extremes.some(lap => lap.id === data[index].lap.id)) drawTrace(points,-1);
+    if (index !== fastestIndex) drawTrace(points,-1);
   }
-  for (const lap of extremes) {
-    const index = data.findIndex(item => item.lap.id === lap.id);
-    if (index >= 0) drawTrace(traces[index],lap === laps[0] ? 0 : 1);
-  }
+  if (fastestIndex >= 0) drawTrace(traces[fastestIndex],0);
   ctx.globalAlpha = 1;
   ctx.setLineDash([]);
-  ctx.strokeStyle = assist === 'ABS' ? '#ff626c' : '#45d4df';
+  ctx.strokeStyle = elementColour(assist.toLowerCase(),assist === 'ABS' ? '#ff626c' : '#45d4df');
   ctx.lineWidth = 3;
   ctx.lineCap = 'round';
   for (const overlay of assistOverlays) {
@@ -5706,9 +6532,19 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   }
   if (assistOverlays.length) {
     canvas.setAttribute('aria-label',canvas.getAttribute('aria-label') + ' · ' + assistOverlays.map(overlay =>
-      assist + ' on ' + overlay.description + ' corner lap ' + (overlay.lap.number ?? overlay.lap.id) +
+      assist + ' on fastest corner lap ' + (overlay.lap.number ?? overlay.lap.id) +
       (overlay.visible ? '' : ' (no activation in view)')).join(' · '));
   }
+}
+
+function trainerTyresAreCold(temperature) {
+  return Number.isFinite(temperature) && temperature < (settings.trainerColdTyreTemperature ?? 60);
+}
+
+function trainerExcludeColdLaps(stint) {
+  if (!stint) return undefined;
+  const temperatures = stint.session.sessionSummary?.peakTemperaturesByLap?.tyres;
+  return {...stint,laps:stint.laps.filter(lap => !trainerTyresAreCold(temperatures?.[lap.id]))};
 }
 
 function trainerCompletedLaps(session) {
@@ -5735,8 +6571,7 @@ trainerColdThreshold.onchange = () => {
 };
 
 function renderTrainerLapTimes(values, prior, manualComparison) {
-  const threshold = settings.trainerColdTyreTemperature ?? 60;
-  const isCold = lap => Number.isFinite(lap.temperature) && lap.temperature < threshold;
+  const isCold = lap => trainerTyresAreCold(lap.temperature);
   const unit = 's';
   const canvas = $('trainer-plot');
   const surface = trainerCanvas(canvas);
@@ -5761,9 +6596,9 @@ function renderTrainerLapTimes(values, prior, manualComparison) {
   ctx.textAlign = 'right';
   for (let i = 0; i <= 4; i++) {
     const y = 9 + i * (bottom - 9) / 4;
-    ctx.strokeStyle = '#354438';
+    ctx.strokeStyle = elementColour('graph-grid','#354438');
     ctx.beginPath(); ctx.moveTo(left,y); ctx.lineTo(width - 10,y); ctx.stroke();
-    ctx.fillStyle = '#b7c8b9';
+    ctx.fillStyle = elementColour('graph-axis','#b7c8b9');
     ctx.fillText(number(max - span * i / 4,unit === 's' ? 3 : 1) + ' ' + unit,left - 7,y + 4);
   }
   const step = (width - left - 12) / Math.max(values.length,prior.length);
@@ -5773,7 +6608,7 @@ function renderTrainerLapTimes(values, prior, manualComparison) {
       if (!lap) return [];
       return [{
         text:lapTime(lap.time),
-        colour:isCold(lap) ? '#91d5ff' : previous ? '#f5a982' : '#c5fa78',
+        colour:isCold(lap) ? elementColour('cold','#91d5ff') : previous ? elementColour('reference','#f5a982') : elementColour('accent','#c5fa78'),
         dotted:previous,
         label:previous ? (manualComparison ? 'Comparison Session' : 'Previous Session') : 'Current Session'
       }];
@@ -5782,19 +6617,19 @@ function renderTrainerLapTimes(values, prior, manualComparison) {
   }};
   $('trainer-previous-legend').hidden = !prior.length;
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#b7c8b9';
+  ctx.fillStyle = elementColour('graph-axis','#b7c8b9');
   const count = Math.max(values.length,prior.length);
   const labelStride = Math.max(1,Math.ceil(40 / step));
   for (let i = 0; i < count; i += labelStride) {
     ctx.fillText(String(i + 1),left + step * (i + .5),bottom + 16);
   }
-  for (const [row,color,dash] of [[values,'#c5fa78',[]],[prior,'#f5a982',[7,5]]]) {
+  for (const [row,color,dash] of [[values,elementColour('accent','#c5fa78'),[]],[prior,elementColour('reference','#f5a982'),[7,5]]]) {
     ctx.lineWidth = 2.5;
     ctx.setLineDash(dash);
     const points = row.map((lap,index) => ({
       x:left + step * (index + .5),
       y:bottom - (lap.time - min) * (bottom - 9) / span,
-      colour:isCold(lap) ? '#91d5ff' : color
+      colour:isCold(lap) ? elementColour('cold','#91d5ff') : color
     }));
     if (points.length === 1) {
       const [point] = points;
@@ -5898,20 +6733,23 @@ function renderDriverTrainer() {
   $('trainer-analysis').hidden = !stint;
   renderTrainerTrophies();
   if (!stint) { renderTrainerMap(); return; }
-  const ranked = stint.corners.map((corner,offset) => ({corner,offset,stats:timingStats(trainerValues(stint,trainerFocus,offset))}))
+  const lapTimes = trainerFocus === 2;
+  const cornerStint = lapTimes ? undefined : trainerExcludeColdLaps(stint);
+  const cornerComparison = lapTimes ? undefined : trainerExcludeColdLaps(earlier);
+  const ranked = (cornerStint?.corners ?? []).map((corner,offset) =>
+    ({corner,offset,stats:timingStats(trainerValues(cornerStint,trainerFocus,offset))}))
     .sort((a,b) => {
       const priority = item => item.stats.count >= 3 ? item.stats.spread : -1;
       return priority(b) - priority(a) || a.corner.index - b.corner.index;
     });
   const chosen = trainerFocus === 2 ? undefined : ranked.find(item => item.corner.index === trainerCorner) ?? ranked[0];
-  const lapTimes = trainerFocus === 2;
   const completed = lapTimes ? trainerCompletedLaps(stint.session) : [];
   const comparisonCompleted = lapTimes ? trainerCompletedLaps(earlier?.session) : [];
   const values = lapTimes ? completed.map(lap => lap.time) :
-    chosen ? trainerValues(stint,trainerFocus,chosen.offset) : [];
+    chosen ? trainerValues(cornerStint,trainerFocus,chosen.offset) : [];
   const priorOffset = chosen && earlier?.corners.findIndex(corner => corner.index === chosen.corner.index && Math.abs(corner.from - chosen.corner.from) < 50);
   const prior = !earlier ? [] : lapTimes ? comparisonCompleted.map(lap => lap.time) :
-    priorOffset >= 0 ? trainerValues(earlier,trainerFocus,priorOffset) : [];
+    priorOffset >= 0 ? trainerValues(cornerComparison,trainerFocus,priorOffset) : [];
   const stats = timingStats(values), previous = timingStats(prior);
   const unit = ['m','km/h','s'][trainerFocus];
   const spreadReading = (value,digits) => measurement(value,unit,digits) + ' spread';
@@ -5955,13 +6793,12 @@ function renderDriverTrainer() {
   $('trainer-tc-control').hidden = trainerFocus !== 1 || !chosen;
   $('trainer-comparison-control').hidden = lapTimes || !chosen;
   $('trainer-show-comparison').disabled = !(earlier && priorOffset >= 0);
-  $('trainer-cold-control').hidden = !lapTimes;
+  $('trainer-cold-control').hidden = false;
+  $('trainer-cold-label').textContent = 'Temperature at Which Tyres Are Considered Cold' + (lapTimes ? '' : ' (Exclude Laps)');
   $('trainer-cold-legend').hidden = true;
-  if (lapTimes) {
-    if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
-    renderTrainerLapTimes(completed,comparisonCompleted,Boolean(manual));
-  }
-  else renderTrainerCornerTrace(stint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? earlier : undefined);
+  if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
+  if (lapTimes) renderTrainerLapTimes(completed,comparisonCompleted,Boolean(manual));
+  else renderTrainerCornerTrace(cornerStint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? cornerComparison : undefined);
   renderTrainerMap(stint,chosen?.corner);
   updateTrainerHover(trainerPointer);
 }
