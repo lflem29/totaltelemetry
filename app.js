@@ -31,7 +31,8 @@ const builtInGraphKeys = new Set(chartSpecs.map(([, key]) => key));
 const builtIn = {
   Driving: ['Ground Speed','Throttle Pos','Brake Pos','Gear','Steering Pos','Engine RPM','G Force Lat','G Force Long'],
   'Tyres & Brakes': ['Brakes Temp','Brakes Force','TyresTempCentre','TyresPressure','Tyres Wear','TyresCompound','Brake Thickness'],
-  Engine: ['Engine RPM','Engine Oil Temp','Engine Water Temp','Fuel Level','Turbo Boost Pressure']
+  Engine: ['Engine RPM','Engine Oil Temp','Engine Water Temp','Fuel Level','Turbo Boost Pressure'],
+  'Ride Height': ['FrontRideHeight','RideHeights','RearRideHeight']
 };
 let settings = {};
 let sessions = [], resultGameVersions = [];
@@ -292,15 +293,15 @@ function setView(name) {
 }
 const carClasses = ['GTE', 'GT3', 'LMP3', 'LMP2', 'Hypercar'];
 const temperatureThresholds = [
-  ['tyres', 'Tyres', 90], ['brakes', 'Brakes', 700],
+  ['tyres', 'Tyres', 90], ['brakes', 'Brakes', 701],
   ['oil', 'Engine oil', 110], ['water', 'Engine water', 100]
 ];
 const classOptimalTemperatureMax = {
-  GTE: {tyres: 90, brakes: 650},
-  GT3: {tyres: 90, brakes: 650},
-  LMP3: {tyres: 92, brakes: 800},
+  GTE: {tyres: 90, brakes: 750},
+  GT3: {tyres: 90, brakes: 750},
+  LMP3: {tyres: 92, brakes: 700},
   LMP2: {tyres: 92, brakes: 800},
-  Hypercar: {tyres: 94, brakes: 800}
+  Hypercar: {tyres: 94, brakes: 850}
 };
 function hotTemperature(carClass, key) {
   const category = carClasses.includes(carClass) ? carClass : 'other';
@@ -2530,13 +2531,14 @@ for (const input of unitOptions) input.onchange = () => applyMeasurementUnits(
 
 const wholeNumberTelemetry = new Set([
   'Brakes Temp', 'frontBrakes', 'rearBrakes', 'tyres', ...Object.keys(tyreChannels),
-  'Steering Pos', 'Throttle Pos', 'Brake Pos'
+  'Steering Pos', 'Throttle Pos', 'Brake Pos', 'Clutch RPM', 'Engine Max RPM'
 ]);
 function telemetryDecimalPlaces(key, fallback = 1, overrides = settings.telemetryDecimals) {
   if (key === 'Engine RPM' || key === 'Gear') return 0;
   const places = overrides?.[key] ??
     (Object.hasOwn(tyreChannels, key) ? overrides?.tyres : undefined);
   if (Number.isInteger(places) && places >= 0 && places <= 6) return places;
+  if (['FrontRideHeight','FrontWingHeight','RearRideHeight','RideHeights'].includes(key)) return 2;
   if (/height/i.test(key)) return 5;
   if (key === 'Fuel Level' || key === 'Brake Thickness' || /^G Force\b/i.test(key)) return 2;
   return wholeNumberTelemetry.has(key) ? 0 : fallback;
@@ -3040,17 +3042,237 @@ let practiceComparison;
 function selectSummaryCategory(category) {
   summaryCategory = category;
   const driver = category === 'driver';
+  const race = category === 'race';
   $('show-driver-performance').setAttribute('aria-pressed', String(driver));
-  $('show-vehicle-performance').setAttribute('aria-pressed', String(!driver));
+  $('show-vehicle-performance').setAttribute('aria-pressed', String(!driver && !race));
+  $('show-race-summary').setAttribute('aria-pressed', String(race));
   $('driver-performance').hidden = !driver;
-  $('session-highlights').inert = driver;
-  $('choose-summary-channels').style.visibility = driver ? 'hidden' : '';
+  $('race-summary').hidden = !race;
+  $('session-highlights').inert = driver || race;
+  $('choose-summary-channels').style.visibility = driver || race ? 'hidden' : '';
   $('driver-performance').parentElement.scrollTop = 0;
   if (driver) void updatePracticeReview();
+  else if (race) renderRaceGaps();
   else redrawSummaryPlots();
 }
 $('show-driver-performance').onclick = () => selectSummaryCategory('driver');
 $('show-vehicle-performance').onclick = () => selectSummaryCategory('vehicle');
+$('show-race-summary').onclick = () => selectSummaryCategory('race');
+
+let raceRecording;
+let raceChartObserver;
+const hiddenRaceRivals = new Set();
+const raceIdentity = value => (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+function raceResultCard(player, field) {
+  const result = player?.result;
+  if (!result) return;
+  const {position, classPosition, grid, best, laps, finishTime} = result;
+  const winner = player.category && field.find(entry => entry.category === player.category && entry.result?.classPosition === 1);
+  const winnerLaps = winner?.result.laps;
+  const playerTime = finishTime || (player.lastCrossing?.[0] === laps ? player.lastCrossing?.[1] : null);
+  const winnerTime = winner?.result.finishTime || (winner?.lastCrossing?.[0] === winnerLaps ? winner?.lastCrossing?.[1] : null);
+  let classGap = '—';
+  if (winner === player) classGap = 'Class Winner';
+  else if (winnerLaps > laps && Number.isFinite(laps) && laps >= 0) {
+    const deficit = winnerLaps - laps;
+    classGap = '+' + deficit + (deficit === 1 ? ' Lap' : ' Laps');
+  } else if (winnerLaps === laps && playerTime > 0 && winnerTime > 0 && playerTime >= winnerTime) {
+    classGap = timeGapLabel(playerTime - winnerTime);
+  }
+  const places = grid > 0 && position > 0 ? grid - position : null;
+  const metrics = [
+    ['Overall Finish', position > 0 ? 'P' + position : '—'],
+    ['Class Finish', classPosition > 0 ? 'P' + classPosition : '—'],
+    ['Places Gained', places > 0 ? '+' + places : places ?? '—'],
+    ['Best Lap', lapTime(best > 0 ? best : null)],
+    ['Gap to Class Winner', classGap]
+  ];
+  const list = node('dl', undefined, 'race-result-metrics');
+  for (const [label, value] of metrics) {
+    const metric = node('div');
+    metric.append(node('dt', label), node('dd', String(value)));
+    list.append(metric);
+  }
+  $('race-result').append(node('h3', 'Race Result'), list);
+}
+
+function renderRaceStints(player) {
+  const container = $('race-stints');
+  const completed = player?.result?.laps ?? player?.lastCrossing?.[0];
+  if (!(completed > 0) || !player.lapTimes?.length) return;
+  const pits = [...new Set(player.pitLaps ?? [])].filter(n => n >= 1 && n <= completed).sort((a, b) => a - b);
+  const ends = [...new Set([...pits, completed])];
+  const table = node('table');
+  const head = table.createTHead().insertRow();
+  for (const title of ['Stint', 'Laps', 'Lap Count', 'Best Lap', 'Median Pace']) {
+    const cell = node('th', title);
+    cell.scope = 'col';
+    head.append(cell);
+  }
+  const body = table.createTBody();
+  let start = 1;
+  for (const [index, end] of ends.entries()) {
+    const laps = player.lapTimes.filter(([n]) => n >= start && n <= end && !pits.includes(n - 1)).map(([,time]) => time);
+    const times = timingStats(laps);
+    const row = body.insertRow();
+    for (const value of [index + 1, start === end ? 'L' + start : 'L' + start + '–L' + end,
+      end - start + 1, lapTime(laps.length ? Math.min(...laps) : null), lapTime(times.median)]) row.insertCell().textContent = value;
+    start = end + 1;
+  }
+  container.append(node('h3', 'Pit Stints'), table, node('p', 'Pace excludes recorded pit laps and the lap immediately after.'));
+}
+
+$('race-field').onchange = renderRaceGaps;
+$('race-chart-mode').onchange = renderRaceGaps;
+
+function renderRaceGaps() {
+  const container = $('race-gaps');
+  raceChartObserver?.disconnect();
+  const recording = selected?.path;
+  const all = (selected?.raceGaps ?? []).map((entry, index) => ({...entry, index,
+    player: raceIdentity(entry.driver) === raceIdentity(selected.driver) && raceIdentity(entry.car) === raceIdentity(selected.car)}));
+  const player = all.find(entry => entry.player);
+  const categories = new Set(all.map(entry => entry.category).filter(Boolean));
+  const fieldSelect = $('race-field');
+  const modeSelect = $('race-chart-mode');
+  const previousField = fieldSelect.value;
+  const newRace = raceRecording !== recording;
+  if (newRace) {
+    raceRecording = recording;
+    hiddenRaceRivals.clear();
+    modeSelect.value = 'gaps';
+    $('race-rivals').open = false;
+  }
+  const classAvailable = Boolean(player?.category && categories.size > 1);
+  const fieldChanged = fieldSelect.options[1]?.value !== (classAvailable ? player.category : undefined);
+  if (fieldChanged || !fieldSelect.options.length) {
+    fieldSelect.replaceChildren();
+    option(fieldSelect, 'All Classes', '');
+    if (classAvailable) option(fieldSelect, player.category, player.category);
+    fieldSelect.value = classAvailable ? player.category : '';
+  } else {
+    fieldSelect.value = newRace ? (classAvailable ? player.category : '') : previousField;
+  }
+  fieldSelect.parentElement.hidden = !classAvailable;
+  const category = fieldSelect.value;
+  const positionAvailable = all.some(entry => entry.positions?.length > 1);
+  modeSelect.options[1].disabled = !positionAvailable;
+  if (!positionAvailable) modeSelect.value = 'gaps';
+  const positions = modeSelect.value === 'positions';
+  const chartTitle = positions ? 'Overall Position by Lap' : category ? 'Race Gaps to the Class Leader' : 'Race Gaps to the Leader';
+  $('race-gaps-title').textContent = chartTitle;
+  $('race-chart-controls').hidden = all.length < 2;
+  $('race-result').replaceChildren();
+  $('race-stints').replaceChildren();
+  raceResultCard(player, all);
+  renderRaceStints(player);
+  const candidates = all.filter(entry => !category || entry.category === category);
+  const rivals = $('race-rival-options');
+  rivals.replaceChildren(...candidates.filter(entry => !entry.player).map(entry => {
+    const label = node('label');
+    const box = node('input');
+    box.type = 'checkbox';
+    box.checked = !hiddenRaceRivals.has(entry.index);
+    box.onchange = () => {
+      if (box.checked) hiddenRaceRivals.delete(entry.index);
+      else hiddenRaceRivals.add(entry.index);
+      renderRaceGaps();
+      rivals.querySelector(`[data-entry="${entry.index}"] input`)?.focus();
+    };
+    label.dataset.entry = entry.index;
+    label.append(box, entry.driver || entry.car || 'Unknown Driver');
+    return label;
+  }));
+  const field = candidates.filter(entry => entry.player || !hiddenRaceRivals.has(entry.index))
+    .map(entry => ({...entry, points: positions ? entry.positions ?? [] :
+      entry.gaps.map(([lapNumber, overall, inClass]) => [lapNumber, category ? inClass : overall])}))
+    .filter(entry => entry.points.length);
+  if (!field.length || all.length < 2 && !positions) {
+    container.replaceChildren(node('p', 'Race gaps require a matching LMU results file with lap timing for at least two cars.'));
+    return;
+  }
+  const chart = container.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', player ? chartTitle + ' · ' + player.driver + ' highlighted' : chartTitle);
+  container.replaceChildren(chart);
+  raceChartObserver = new ResizeObserver(([{contentRect}]) => {
+    const {width, height} = contentRect;
+    if (width > 75 && height > 45) drawRaceChart(chart, field, positions, width, height);
+  });
+  raceChartObserver.observe(chart);
+}
+
+function drawRaceChart(chart, field, positions, width, height) {
+  chart.replaceChildren();
+  chart.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const left = 49, right = width - 24, top = 14, bottom = height - 26;
+  let lastLap = 1, largestGap = 0;
+  for (const {points} of field) {
+    for (const [lapNumber, gap] of points) {
+      lastLap = Math.max(lastLap, lapNumber);
+      largestGap = Math.max(largestGap, gap);
+    }
+  }
+  const roughStep = Math.max(1, largestGap / 5);
+  const magnitude = 10 ** Math.floor(Math.log10(roughStep));
+  const gapStep = [1, 2, 5, 10].find(step => step * magnitude >= roughStep) * magnitude;
+  const gapTicks = Math.max(1, Math.ceil(largestGap / gapStep));
+  const x = value => left + (value - 1) / Math.max(1, lastLap - 1) * (right - left);
+  const y = value => top + (positions ? (value - 1) / Math.max(1, largestGap - 1) : value / (gapTicks * gapStep)) * (bottom - top);
+  const svg = (parent, tag, attributes, text) => {
+    const element = parent.ownerDocument.createElementNS(chart.namespaceURI, tag);
+    for (const [name, value] of Object.entries(attributes)) element.setAttribute(name, value);
+    if (text !== undefined) element.textContent = text;
+    parent.append(element);
+    return element;
+  };
+  const tickStep = positions ? Math.max(1, Math.ceil((largestGap - 1) / 5)) : gapStep;
+  const tickMax = positions ? largestGap : gapTicks * gapStep;
+  for (let gap = positions ? 1 : 0; gap <= tickMax; gap += tickStep) {
+    svg(chart, 'line', {x1:left, x2:right, y1:y(gap), y2:y(gap), class:'race-gap-grid'});
+    svg(chart, 'text', {x:left - 6, y:y(gap) + 4, 'text-anchor':'end'}, (positions ? 'P' + gap : gap + ' s'));
+  }
+  const lapStep = Math.max(1, Math.ceil((lastLap - 1) / 8));
+  const laps = [];
+  for (let n = 1; n < lastLap - lapStep / 2; n += lapStep) laps.push(n);
+  laps.push(lastLap);
+  for (const n of laps) {
+    svg(chart, 'line', {x1:x(n), x2:x(n), y1:top, y2:bottom, class:'race-gap-grid'});
+    svg(chart, 'text', {x:x(n), y:bottom + 18, 'text-anchor':'middle'}, 'L' + n);
+  }
+  const playerTrace = chart.ownerDocument.createElementNS(chart.namespaceURI, 'g');
+  field.forEach(({driver, car, points, player, pitLaps}) => {
+    const trace = player ? playerTrace : chart;
+    const colour = 'var(--accent)';
+    const label = driver || car || 'Unknown Driver';
+    let previousLap;
+    const path = points.map(([n, gap]) => {
+      const command = n === previousLap + 1 ? 'L' : 'M';
+      previousLap = n;
+      return command + x(n) + ',' + y(gap);
+    }).join(' ');
+    if (!player) {
+      const rival = svg(trace, 'path', {d:path, fill:'none', class:'race-rival-trace'});
+      svg(rival, 'title', {}, label);
+      return;
+    }
+    svg(trace, 'path', {d:path, fill:'none', stroke:'var(--panel)', 'stroke-width':5});
+    svg(trace, 'path', {d:path, fill:'none', stroke:colour, 'stroke-width':3});
+    for (const [n, gap] of points) {
+      const radius = lastLap > 80 ? 2.7 : 3.7;
+      const dot = svg(trace, 'circle', {cx:x(n), cy:y(gap), r:radius, fill:colour});
+      const reading = label + ' · Lap ' + n + ' · ' + (positions ? 'P' + gap : number(gap, 3) + ' s');
+      svg(dot, 'title', {}, reading);
+      if (pitLaps?.includes(n)) {
+        const marker = svg(trace, 'circle', {cx:x(n), cy:y(gap), r:radius + 3, fill:'none',
+          stroke:'var(--warning,#ffd078)', 'stroke-width':2});
+        svg(marker, 'title', {}, reading + ' · Pit Lap');
+      }
+    }
+  });
+  chart.append(playerTrace);
+}
 
 const practiceTabs = bindTabs('practice-tabs', () => { $('practice-content').scrollTop = 0; });
 function clearPracticePanels() {
@@ -3433,6 +3655,12 @@ function returnToDriverOverview({fullScreen, stint, condition, scrollTop}) {
 }
 
 function renderSessionSummary() {
+  const isRace = /^race/i.test(selected?.session ?? '');
+  $('show-race-summary').hidden = !isRace;
+  if (summaryCategory === 'race') {
+    if (isRace) renderRaceGaps();
+    else selectSummaryCategory('vehicle');
+  }
   void updatePracticeReview();
   updateBestLapExport();
   renderMapSectorTimes();
@@ -4533,6 +4761,10 @@ function wheelTraceControls(chartKey, channelName, colour, redraw) {
   return {controls, hiddenWheels, updateSwatches};
 }
 
+function loadedLapPrefix(separator = ' ') {
+  return secondary ? loadedTraceLabel + separator : '';
+}
+
 function buildCharts() {
   updateActiveLapComparison();
   cornerEventMarkers = [];
@@ -4560,7 +4792,7 @@ function buildCharts() {
     const mainLayout = key === 'delta' ? null : chartReadingLayout(primary, channelName);
     const referenceLayout = key !== 'delta' && secondary ? chartReadingLayout(secondary, channelName) : null;
     const readingWidth = mainLayout
-      ? loadedTraceLabel.length + 1 + mainLayout.length + (referenceLayout ? referenceTraceLabel.length + 4 + referenceLayout.length : 0)
+      ? loadedLapPrefix().length + mainLayout.length + (referenceLayout ? referenceTraceLabel.length + 4 + referenceLayout.length : 0)
       : deltaWidth;
     output.style.inlineSize = readingWidth + 'ch';
     head.append(node('h2', title));
@@ -4686,7 +4918,7 @@ function buildCharts() {
         const read = node('span', undefined, 'chart-reading');
         const main = chartReadingLayout(primary, name);
         const ref = secondary ? chartReadingLayout(secondary, name) : null;
-        read.style.inlineSize = (loadedTraceLabel.length + 1 + main.length + (ref ? referenceTraceLabel.length + 4 + ref.length : 0)) + 'ch';
+        read.style.inlineSize = (loadedLapPrefix().length + main.length + (ref ? referenceTraceLabel.length + 4 + ref.length : 0)) + 'ch';
         const fallback = mergeColors[(index + 1) % mergeColors.length], colorKey = key+'|'+name;
         text.style.color = graphColor(colorKey,fallback);
         const wheelOptions = wheelTraceControls(key, name, () => graphColor(colorKey,fallback), redrawWheels);
@@ -5126,8 +5358,8 @@ function paintCursorValues(ctx, row, name) {
         if (hiddenWheels?.has(component)) return;
         const shown = typeof value === 'boolean' ? Number(value) : convert(channelName, value, channel.unit);
         const wheel = values.length === 4 ? wheels[component] + ' ' : '';
-        const traceLabel = referenceLap ? referenceTraceLabel : loadedTraceLabel;
-        const prefix = traceLabel + ' · ' + (row.group ? telemetryName(channelName) + ' · ' : '');
+        const lapPrefix = referenceLap ? referenceTraceLabel + ' · ' : loadedLapPrefix(' · ');
+        const prefix = lapPrefix + (row.group ? telemetryName(channelName) + ' · ' : '');
         const normalColours = referenceLap ? comparison : [graphColor(row.key), ...palette.slice(1)];
         const colour = overlay ? graphColor(row.key + '|' + channelName, mergeColors[(overlayIndex + 1) % mergeColors.length])
           : normalColours[component % normalColours.length];
@@ -5255,7 +5487,7 @@ function speedPeaks() {
     return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) + ' ' + unit : '—';
   };
   const peaks = node('span', telemetryName(name, 'Top Speed') + ' · ', 'chart-reading');
-  peaks.append(node('span', loadedTraceLabel + ' ' + peak(primary), 'selected-color'));
+  peaks.append(node('span', loadedLapPrefix() + peak(primary), 'selected-color'));
   if (secondary) peaks.append(' | ', node('span', referenceTraceLabel + ' ' + peak(secondary), 'reference-color'));
   return peaks;
 }
@@ -5307,7 +5539,7 @@ function paintChart(row) {
   if (showValues && !selection && cursor >= range[0] && cursor <= range[1]) paintCursorValues(ctx, row, name);
   if(row.group) {
     for(const entry of row.readings){
-      entry.read.replaceChildren(node('span',loadedTraceLabel + ' ' +
+      entry.read.replaceChildren(node('span',loadedLapPrefix() +
         readings(primary, entry.name, false, entry.main.widths, entry.hiddenWheels),'selected-color'));
       if (entry.ref) entry.read.append(' | ',node('span',referenceTraceLabel + ' ' +
         readings(secondary, entry.name, false, entry.ref.widths, entry.hiddenWheels),'reference-color'));
@@ -5321,7 +5553,7 @@ function paintChart(row) {
     const value=delta(cursor);
     row.output.textContent=timeGapLabel(value);
   } else {
-    row.output.replaceChildren(node('span', loadedTraceLabel + ' ' + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
+    row.output.replaceChildren(node('span', loadedLapPrefix() + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
     if (secondary) row.output.append('  |  ', node('span', referenceTraceLabel + ' ' + readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels), 'reference-color'));
   }
 }
@@ -5830,6 +6062,10 @@ const builtInGraphPresets = {
   'Tyres & Brakes': {
     graphOrder:['TyresPressure','tyres','Brakes Temp','Ground Speed'],
     heights:{TyresPressure:195,tyres:195,'Brakes Temp':195}
+  },
+  'Ride Height': {
+    graphOrder:builtIn['Ride Height'],
+    heights:{}
   }
 };
 
@@ -5916,7 +6152,8 @@ $('graph-preset').onchange=()=>{
   if (key.startsWith('builtin:')) {
     const {graphOrder, heights, speedActivation} = builtInGraphPresets[key.slice(8)];
     save({
-      graphOrder, heights, extraGraphChannels:[], chartOverlays:{delta:[]},
+      graphOrder, heights, chartOverlays:{delta:[]},
+      extraGraphChannels:graphOrder.filter(name => name !== 'delta' && !builtInGraphKeys.has(name)),
       hiddenGraphs:chartSpecs.map(([,name]) => name).filter(name => !graphOrder.includes(name)),
       ...(speedActivation ? {speedActivations:{...settings.speedActivations,[speedActivation]:true}} : {})
     });

@@ -1,3 +1,1 @@
-- Updates the Telemetry Viewer layout and adds chart overlay controls and preset support.
-- Adds Compare Best Laps, a Driver filter, and improved reference controls.
-- Adds merged temperature charts, summary colours, notification chimes, and millimetres for ride height.
+Adds Race Summary with race gaps, position history and pit stints. Also adds Ride Height presets and an Audio settings tab. The first launch applies the new brake temperature defaults, then preserves any later edits.

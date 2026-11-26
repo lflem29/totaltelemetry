@@ -311,10 +311,15 @@ def read_results(path):
 
             laps = [dict(number=int(lap.get('num', '0')), et=numeric(lap.get('et')),
                          sectors=[numeric(lap.get(f's{i}')) for i in range(1, 4)],
-                         time=numeric(lap.text), pit=lap.get('pit') == '1') for lap in driver.findall('Lap')]
+                         time=numeric(lap.text), position=numeric(lap.get('p')), pit=lap.get('pit') == '1') for lap in driver.findall('Lap')]
             drivers.append(dict(driver=driver.findtext('Name', ''), car=driver.findtext('VehName', ''),
                                 model=driver.findtext('CarType', ''), carClass=driver.findtext('CarClass', ''),
-                                stage=stage.tag, laps=laps))
+                                stage=stage.tag, laps=laps,
+                                raceResult={key: numeric(driver.findtext(tag)) for key, tag in {
+                                    'position': 'Position', 'classPosition': 'ClassPosition',
+                                    'grid': 'GridPos', 'best': 'BestLapTime', 'laps': 'Laps',
+                                    'finishTime': 'FinishTime',
+                                }.items()} if stage.tag.lower().startswith('race') else None))
     return dict(path=str(path), track=track, gameVersion=root.findtext('GameVersion', '').strip(), drivers=drivers)
 
 
@@ -338,6 +343,43 @@ def car_class(value):
 
 def session_model(car):
     return re.sub(r'\s+custom team\b.*$', '', car, flags=re.IGNORECASE).strip()
+
+
+def race_gaps(drivers):
+    drivers = list(drivers)
+    leader_times, class_times = {}, {}
+    field = []
+    for driver in drivers:
+        crossings = []
+        category = car_class(driver['carClass']) or driver['carClass'].strip()
+        for lap, next_lap in zip(driver['laps'], driver['laps'][1:] + [None]):
+            number, start, duration = lap['number'], lap['et'], lap['time']
+            if number <= 0 or start is None:
+                continue
+            if duration and duration > 0:
+                finish = start + duration
+            elif next_lap and next_lap['number'] == number + 1 and next_lap['et'] is not None and next_lap['et'] > start:
+                finish = next_lap['et']
+            else:
+                continue
+            crossings.append((number, finish))
+            leader_times[number] = min(finish, leader_times.get(number, finish))
+            key = (category, number)
+            class_times[key] = min(finish, class_times.get(key, finish))
+        positions = [[lap['number'], int(position)] for lap in driver['laps']
+                     if lap['number'] > 0 and (position := lap['position']) is not None
+                     and position.is_integer() and 1 <= position <= len(drivers) and lap['et'] is not None]
+        field.append((driver, category, crossings, positions))
+
+    return [dict(driver=driver['driver'], car=driver['car'], category=category,
+                 result=driver['raceResult'], positions=positions,
+                 pitLaps=[lap['number'] for lap in driver['laps'] if lap['pit']],
+                 lapTimes=[[lap['number'], lap['time']] for lap in driver['laps']
+                           if lap['time'] and lap['time'] > 0 and not lap['pit']],
+                 gaps=[[number, round(finish - leader_times[number], 3),
+                        round(finish - class_times[category, number], 3)] for number, finish in crossings],
+                 lastCrossing=crossings[-1] if crossings else None)
+            for driver, category, crossings, positions in field]
 
 
 def correlate(recording, results):
@@ -387,7 +429,10 @@ def correlate(recording, results):
                                 for split, fallback in zip(row['sectors'], lap['sectors'])])
         else:
             lap.update(time=None, validity='no official time')
-    return dict(path=result['path'], model=driver['model'], carClass=driver['carClass'], gameVersion=result['gameVersion'])
+    match = dict(path=result['path'], model=driver['model'], carClass=driver['carClass'], gameVersion=result['gameVersion'])
+    if recording['session'].lower().startswith('race'):
+        match['raceGaps'] = race_gaps(row for row in result['drivers'] if row['stage'] == driver['stage'])
+    return match
 
 
 def directory(folder, suffix):
@@ -422,7 +467,7 @@ def index(payload):
                         or any(not {'sectors', 'topSpeed', 'pitLaneAtBoundary'} <= lap.keys() for lap in data['laps'])
                     )
                 else:
-                    needs_update = 'gameVersion' not in data or any('carClass' not in driver or any('sectors' not in lap for lap in driver['laps'])
+                    needs_update = 'gameVersion' not in data or any('carClass' not in driver or 'raceResult' not in driver or any(not {'sectors', 'position'} <= lap.keys() for lap in driver['laps'])
                                        for driver in data['drivers'])
             if not entry or entry['stamp'] != stamp or needs_update:
                 entry = dict(stamp=stamp, data=parser(path))
@@ -440,6 +485,8 @@ def index(payload):
     for item in items:
         match = correlate(item, results)
         item['results'] = match['path'] if match else None
+        if match and 'raceGaps' in match:
+            item['raceGaps'] = match['raceGaps']
         item['model'] = (match['model'] if match else '') or session_model(item['car'])
         item['carClass'] = car_class(item['carClass']) or car_class(match['carClass'] if match else '')
         item['gameVersion'] = item['gameVersion'] or (match['gameVersion'] if match else '')

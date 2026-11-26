@@ -84,11 +84,10 @@ dialog{background:var(--panel);color:var(--fg);border:1px solid var(--rule);bord
 #settings-panel-sharing{display:grid;gap:16px}
 #settings-panel-sharing h3{margin:0 0 8px}
 #settings-panel-sharing form>label{margin:0 0 7px}
-#community-server-form .check,.track-record-sharing .check{display:flex;align-items:center;gap:6px}
-#community-server-form .check input,.track-record-sharing .check input{width:auto;flex:none;margin:0}
+#community-server-form .check,.track-record-sharing .check,#settings-panel-audio .check{display:flex;align-items:center;gap:6px}
+#community-server-form .check input,.track-record-sharing .check input,#settings-panel-audio .check input{width:auto;flex:none;margin:0}
 .track-record-sharing{margin-top:12px;padding-top:12px;border-top:1px solid var(--rule)}
 .settings-footer{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:16px;border-top:1px solid var(--rule);padding-top:12px}
-.settings-footer > label{flex:0 0 100%}
 .settings-footer #reset-settings{background:var(--panel);color:var(--fg);border-color:var(--rule)}
 .settings-footer #check-tpr-update{margin-inline-start:auto}
 @media(min-width:720px){
@@ -446,6 +445,13 @@ button{text-transform:capitalize}
 .summary-performance-switch button{flex:1;padding:4px 6px;font-size:calc(14px * var(--text-scale))}
 #driver-performance{position:absolute;inset:0;display:flex;flex-direction:column;min-height:0;
   padding:0 13px 11px;font-size:calc(14px * var(--text-scale))}
+#race-summary{padding:0 13px 11px;font-size:calc(14px * var(--text-scale))}
+.session-summary-content:has(#race-summary:not([hidden])) #session-highlights{display:none}
+#race-summary h3{margin:0 0 6px;color:var(--fg)}
+#race-gaps svg{display:block;width:100%;height:clamp(200px,42vh,470px);background:var(--graph-bg,var(--panel));border:1px solid var(--rule);border-radius:5px}
+#race-gaps svg text{fill:var(--muted);font-size:11px}
+.race-gap-grid{stroke:var(--rule);stroke-width:1}
+.race-rival-trace{stroke:color-mix(in srgb,var(--interface-colour) 55%,var(--muted));stroke-width:1.35;opacity:.48}
 #practice-tabs{display:flex;gap:4px;overflow-x:auto;flex-shrink:0;padding:2px;margin:0 -2px 4px}
 #practice-tabs button{flex:1;padding:3px 6px;font-size:inherit}
 #practice-status:empty{margin:0}
@@ -724,3 +730,43 @@ button.delete-imported-lap.button-secondary:is(:hover,:focus-visible):enabled{
 
 .summary-pair-legend{display:inline-flex;flex-wrap:wrap;gap:8px;font-size:.75em}
 .summary-chart-body .summary-pair-readout{white-space:normal}
+.session-summary .race-result-metrics{grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:5px;margin-bottom:10px}
+.race-result-metrics div{padding:6px 8px;background:var(--panel);border:1px solid var(--rule);border-radius:5px}
+.race-result-metrics dt{color:var(--muted);font-weight:500}
+.race-result-metrics dd{text-align:left;margin:2px 0 0;font-weight:700;color:var(--fg)}
+.race-chart-controls{display:flex;flex-wrap:wrap;align-items:start;gap:6px 12px;margin-bottom:10px}
+.race-chart-controls label{display:flex;align-items:center;gap:5px}
+.race-chart-controls input[type=checkbox]{flex:none;margin:0;width:auto}
+.race-chart-controls select{padding:3px 6px}
+#race-rivals summary{cursor:pointer;padding:4px 0}
+#race-rival-options{max-height:150px;overflow:auto}
+#race-stints:not(:empty){margin-top:14px}
+#race-stints table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+#race-stints :is(th,td){padding:5px 6px;text-align:left;border-bottom:1px solid var(--rule)}
+#race-stints p{margin:5px 0 0;color:var(--muted)}
+
+#telemetry-panels .session-summary-content:has(#race-summary:not([hidden])) #session-highlights{display:block}
+#telemetry-panels #race-summary{position:absolute;inset:0;display:flex;flex-direction:column;overflow:auto;padding:0 13px 8px}
+#telemetry-panels #race-summary > *{flex-shrink:0}
+#telemetry-panels .session-summary-content:has(#session-charts:empty) #race-summary{position:static;display:block;padding:0}
+#telemetry-panels .session-summary-content:has(#race-summary:not([hidden])) #session-highlights:has(#session-charts:empty){display:none}
+#telemetry-panels #race-summary h3{margin-bottom:4px;font-size:1.05em}
+#telemetry-panels .race-result-metrics{grid-template-columns:repeat(auto-fit,minmax(68px,1fr));margin-bottom:6px;font-size:inherit}
+#telemetry-panels .race-result-metrics div{padding:4px 5px}
+#telemetry-panels .race-result-metrics dt{font-size:.86em;line-height:1.15}
+#telemetry-panels .race-result-metrics dd{font-size:.95em;line-height:1.2}
+#telemetry-panels .race-chart-controls{gap:4px 6px;margin-bottom:5px}
+#telemetry-panels .race-chart-controls select{max-width:100%;font-size:inherit}
+#telemetry-panels #race-gaps:has(svg){display:grid;grid-template-rows:minmax(0,1fr);flex:1 0 150px;min-height:0}
+#telemetry-panels #race-gaps svg{height:100%;min-height:150px}
+#telemetry-panels #race-stints:not(:empty){margin-top:7px}
+#telemetry-panels #race-stints :is(th,td){padding:3px 4px}
+#telemetry-panels #race-stints table,#telemetry-panels #race-stints p{font-size:.9em}
+@container (max-width:470px){
+  #telemetry-panels .race-chart-controls select{padding-inline:4px}
+  #telemetry-panels #race-gaps:has(svg){flex-basis:125px}
+  #telemetry-panels #race-gaps svg{min-height:125px}
+  #telemetry-panels #race-stints :is(th,td){padding-block:2px}
+}
+
+#telemetry-panels .session-summary-content:has(#session-charts:empty) #race-gaps svg{height:clamp(150px,30cqh,290px)}

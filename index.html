@@ -329,6 +329,7 @@
             <div class="summary-performance-switch" role="group" aria-label="Session Summary Category">
               <button id="show-driver-performance" data-ui-icon="wheel" type="button" aria-controls="driver-performance" aria-pressed="false">Driver Performance</button>
               <button id="show-vehicle-performance" data-ui-icon="gauge" type="button" aria-controls="session-highlights" aria-pressed="true">Vehicle Performance</button>
+              <button id="show-race-summary" type="button" aria-controls="race-summary" aria-pressed="false" hidden>Race Summary</button>
             </div>
             <div class="session-summary-content">
               <section id="driver-performance" aria-label="Driver Performance" hidden>
@@ -349,6 +350,17 @@
               </section>
               <section id="session-highlights" aria-label="Session Charts">
                 <div id="session-charts"></div>
+              </section>
+              <section id="race-summary" aria-label="Race Summary" hidden>
+                <div id="race-result"></div>
+                <div id="race-chart-controls" class="race-chart-controls" hidden>
+                  <label>Field <select id="race-field"></select></label>
+                  <label>Graph <select id="race-chart-mode"><option value="gaps">Race Gaps</option><option value="positions">Position History</option></select></label>
+                  <details id="race-rivals"><summary>Select Rivals</summary><div id="race-rival-options"></div></details>
+                </div>
+                <h3 id="race-gaps-title">Race Gaps to the Leader</h3>
+                <div id="race-gaps"></div>
+                <div id="race-stints"></div>
               </section>
             </div>
           </section>
@@ -379,6 +391,7 @@
   <form method="dialog"><div class="dialog-title"><h2>Settings</h2><button value="close" aria-label="Close">Close</button></div></form>
   <div id="settings-tabs" role="tablist" aria-label="Settings Sections">
     <button id="settings-tab-display" type="button" role="tab" aria-controls="settings-panel-display" aria-selected="true">Display</button>
+    <button id="settings-tab-audio" type="button" role="tab" aria-controls="settings-panel-audio" aria-selected="false" tabindex="-1">Audio</button>
     <button id="settings-tab-telemetry-data" type="button" role="tab" aria-controls="settings-panel-telemetry-data" aria-selected="false" tabindex="-1">Telemetry Data</button>
     <button id="settings-tab-folders" type="button" role="tab" aria-controls="settings-panel-folders" aria-selected="false" tabindex="-1">LMU Folders</button>
     <button id="settings-tab-sharing" type="button" role="tab" aria-controls="settings-panel-sharing" aria-selected="false" tabindex="-1">Sharing</button>
@@ -511,8 +524,10 @@
     </div>
     <p id="temperatures-settings-file-status" role="status"></p>
   </div>
-  <div class="settings-footer">
+  <div id="settings-panel-audio" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-audio" tabindex="0" hidden>
     <label class="check"><input id="notification-sound" type="checkbox"> Play a Chime for All Notifications</label>
+  </div>
+  <div class="settings-footer">
     <button id="reset-settings" type="button">Reset All Settings</button>
     <button id="check-tpr-update" data-ui-icon="update" type="button" hidden>Check for Total Telemetry Updates</button>
   </div>

@@ -684,6 +684,14 @@ if (primaryInstance) app.whenReady().then(async () => {
     delete config.textScalePercent;
     config.textScaleBaseline = 90;
   }
+  const resetBrakeThresholds = config.brakeThresholdDefaultsVersion !== 1;
+  if (resetBrakeThresholds) {
+    if (config.hotTemperatures) delete config.hotTemperatures.brakes;
+    for (const thresholds of Object.values(config.hotTemperaturesByClass ?? {})) {
+      if (thresholds) delete thresholds.brakes;
+    }
+    config.brakeThresholdDefaultsVersion = 1;
+  }
   const savedCommunity = config.communityServer;
   if (app.getName() === tprProduct && !config.tprHttpsDefaultsApplied) {
     const savedHost = savedCommunity?.host?.toLowerCase();
@@ -694,7 +702,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     }
     config.tprHttpsDefaultsApplied = true;
     save();
-  } else if (resetLegacyTextScale) {
+  } else if (resetLegacyTextScale || resetBrakeThresholds) {
     save();
   }
   const win = new BrowserWindow({
