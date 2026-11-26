@@ -14,71 +14,97 @@
       <h1>Community Server <span id="server-version"></span></h1>
       <output id="server-state">Loading…</output>
     </header>
-    <section id="tpr-updates" hidden>
-      <h2>TPR Updates</h2>
-      <button type="button" id="open-tpr-updates">Open TPR Updates Folder</button>
-      <p>Put the latest TPR desktop installer here to offer it to connected clients.</p>
-    </section>
-    <form id="server-form">
-      <fieldset id="server-settings" disabled>
-        <legend>Server Settings</legend>
-        <div class="settings-grid">
-          <label>Port<input id="port" type="number" required min="1" max="65535"></label>
-          <label>Listen On<select id="scope"><option value="network">Local Network</option><option value="local">This PC Only</option></select></label>
-          <div class="wide" id="https-settings" hidden>
-            <label class="https-option"><input id="enable-https" type="checkbox"> Enable HTTPS With Caddy</label>
-            <label>Public Hostname<input id="https-hostname" autocomplete="off" spellcheck="false" maxlength="253"></label>
-            <p>Caddy uses ports 80 and 443. The server port above is used locally when HTTPS is enabled.</p>
-          </div>
-          <label class="wide">Minimum Game Version for Track Records
-            <input id="minimum-game-version" maxlength="59" placeholder="No minimum" autocomplete="off" spellcheck="false">
-          </label>
-          <div class="wide">
-            <label for="directory">Lap Storage Folder</label>
-            <div class="field-action"><input id="directory" required readonly><button id="choose" type="button">Browse</button></div>
-          </div>
-          <div class="wide">
-            <label for="key">Shared Access Key</label>
-            <div class="field-action"><input id="key" required type="password" minlength="24" maxlength="256" autocomplete="off" spellcheck="false">
-              <button id="reveal" type="button" aria-pressed="false">Show</button><button id="generate" type="button">Generate</button><button id="use-bundled-key" hidden type="button">Use Bundled Key</button>
+    <div class="server-layout">
+      <div class="server-column">
+        <form id="server-form">
+          <fieldset id="server-settings" disabled>
+            <legend>Server Settings</legend>
+            <div class="settings-grid">
+              <label>Port<input id="port" type="number" required min="1" max="65535"></label>
+              <label id="listen-on">Listen On<select id="scope"><option value="network">Local Network</option><option value="local">This PC Only</option></select></label>
+              <div id="caddy-connections" hidden>
+                <strong>Connections Managed by Caddy</strong>
+                <p id="caddy-ports"></p>
+              </div>
+              <div class="wide" id="https-settings" hidden>
+                <label class="https-option"><input id="enable-https" type="checkbox"> Enable HTTPS With Caddy</label>
+                <label>Public Hostname<input id="https-hostname" autocomplete="off" spellcheck="false" maxlength="253"></label>
+              </div>
+              <label>Minimum Game Version for Track Records
+                <input id="minimum-game-version" maxlength="59" placeholder="No minimum" autocomplete="off" spellcheck="false">
+              </label>
+              <div class="wide">
+                <label for="directory">Lap Storage Folder</label>
+                <div class="field-action"><input id="directory" required readonly><button id="choose" type="button">Choose Folder</button></div>
+              </div>
+              <div class="wide">
+                <label for="key">Shared Access Key</label>
+                <div class="field-action"><input id="key" required type="password" minlength="24" maxlength="256" autocomplete="off" spellcheck="false">
+                  <button id="reveal" type="button" aria-pressed="false">Show</button><button id="generate" type="button">Generate</button><button id="use-bundled-key" type="button">Use Bundled Key</button>
+                </div>
+              </div>
+              <div class="wide">
+                <label for="owner-password">Owner Password</label>
+                <div class="field-action"><input id="owner-password" required type="password" minlength="12" maxlength="256" autocomplete="off" spellcheck="false">
+                  <button id="reveal-owner" type="button" aria-pressed="false">Show</button><button id="generate-owner" type="button">Generate</button>
+                </div>
+                <p>Keep this password private. It allows lap removal.</p>
+              </div>
             </div>
+          </fieldset>
+          <div class="actions">
+            <button id="start" type="submit" disabled>Start Server</button>
+            <button id="stop" type="button" disabled>Stop Server</button>
+            <p id="message" role="status"></p>
           </div>
-          <div class="wide">
-            <label for="owner-password">Owner Password</label>
-            <div class="field-action"><input id="owner-password" required type="password" minlength="12" maxlength="256" autocomplete="off" spellcheck="false">
-              <button id="reveal-owner" type="button" aria-pressed="false">Show</button><button id="generate-owner" type="button">Generate</button>
-            </div>
-            <p>Keep this password private. It allows lap removal.</p>
-          </div>
+        </form>
+      </div>
+      <section id="tpr-updates" hidden>
+        <div class="update-heading">
+          <h2>TPR Updates</h2>
+          <button type="button" id="open-tpr-updates">Open TPR Updates Folder</button>
         </div>
-      </fieldset>
-      <div class="actions">
-        <button id="start" type="submit" disabled>Start Server</button>
-        <button id="stop" type="button" disabled>Stop Server</button>
-        <p id="message" role="status"></p>
+        <form id="github-updates-form">
+          <label for="github-token">Read-Only GitHub Token</label>
+          <input id="github-token" type="password" autocomplete="off" spellcheck="false" aria-describedby="github-token-help">
+          <p id="github-token-help">Use a TPR repository token with read-only Contents access.</p>
+          <label class="https-option"><input type="checkbox" id="github-auto-pull"> Automatically Download TPR Desktop Releases</label>
+          <div class="github-update-actions">
+            <button type="submit" id="save-github-updates">Save GitHub Settings</button>
+            <button type="button" id="check-github-updates" disabled>Check for Updates</button>
+            <button type="button" id="remove-github-token" disabled>Remove Token</button>
+          </div>
+          <p id="github-update-status" role="status"></p>
+          <div id="server-release" hidden>
+            <p id="server-release-status" role="status"></p>
+            <button type="button" id="open-server-release">Open Server Release</button>
+          </div>
+        </form>
+      </section>
+      <div class="server-column server-details">
+        <section class="shared-record-summary" aria-labelledby="shared-record-title">
+          <h2 id="shared-record-title">Shared Laps</h2>
+          <div class="shared-counts">
+            <span>Shared Telemetry <output id="shared-telemetry-count">—</output></span>
+            <span>Shared Records <output id="shared-record-count">—</output></span>
+          </div>
+          <div class="shared-driver-columns"><strong id="shared-driver-label">Driver</strong><strong>Telemetry</strong><strong>Records</strong></div>
+          <ul id="shared-drivers" aria-labelledby="shared-driver-label" tabindex="0"></ul>
+        </section>
+        <section aria-labelledby="connection-title">
+          <h2 id="connection-title">Connect Total Telemetry</h2>
+          <p>Enter these details in Total Telemetry’s Sharing settings.</p>
+          <label for="address">Connection Address</label>
+          <div class="field-action">
+            <select id="address" disabled></select>
+            <button id="copy-address" type="button" disabled>Copy Address</button>
+            <button id="copy-key" type="button" disabled>Copy Key</button>
+            <button id="copy-owner" type="button" disabled>Copy Owner Password</button>
+          </div>
+          <p>Use HTTPS or a private VPN for remote access.</p>
+        </section>
       </div>
-    </form>
-    <section class="shared-record-summary" aria-labelledby="shared-record-title">
-      <h2 id="shared-record-title">Shared Laps</h2>
-      <div class="shared-counts">
-        <span>Shared Telemetry <output id="shared-telemetry-count">—</output></span>
-        <span>Shared Records <output id="shared-record-count">—</output></span>
-      </div>
-      <div class="shared-driver-columns"><strong id="shared-driver-label">Driver</strong><strong>Telemetry</strong><strong>Records</strong></div>
-      <ul id="shared-drivers" aria-labelledby="shared-driver-label" tabindex="0"></ul>
-    </section>
-    <section aria-labelledby="connection-title">
-      <h2 id="connection-title">Connect Total Telemetry</h2>
-      <p>Enter the address, port and shared key in Total Telemetry’s Sharing settings.</p>
-      <label for="address">Connection Address</label>
-      <div class="field-action">
-        <select id="address" disabled></select>
-        <button id="copy-address" type="button" disabled>Copy Address</button>
-        <button id="copy-key" type="button" disabled>Copy Key</button>
-        <button id="copy-owner" type="button" disabled>Copy Owner Password</button>
-      </div>
-      <p>Keep this app open while sharing. For remote friends, use a private VPN or HTTPS reverse proxy.</p>
-    </section>
+    </div>
   </main>
 </body>
 </html>

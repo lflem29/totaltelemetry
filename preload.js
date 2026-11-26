@@ -21,7 +21,7 @@ contextBridge.exposeInMainWorld('lmu', {
   onCommunityProgress: callback => { ipcRenderer.on('community-progress', (_, progress) => callback(progress)); },
   onCommunityActivity: callback => ipcRenderer.on('community-activity',(_,event) => callback(event)),
   manageTrackRecords: (action,id) => ipcRenderer.invoke('manage-track-records',action,id),
-  trackRecordRequest: (action,id,lapKey) => ipcRenderer.invoke('track-record-request',action,id,lapKey),
+  trackRecordRequest: (action,id,lapKey,shareWithCommunity) => ipcRenderer.invoke('track-record-request',action,id,lapKey,shareWithCommunity),
   syncTrackRecords: () => ipcRenderer.invoke('sync-track-records'),
   listCommunityLaps: filters => ipcRenderer.invoke('list-community-laps', filters),
   removeCommunityLap: id => ipcRenderer.invoke('remove-community-lap', id),

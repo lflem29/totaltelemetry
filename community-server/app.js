@@ -1,7 +1,7 @@
 'use strict';
 
 const $ = id => document.getElementById(id);
-let state, busy = false;
+let state, githubUpdate, busy = false;
 
 function showMessage(text, error = false) {
   $('message').textContent = text;
@@ -15,6 +15,7 @@ function render() {
   $('server-state').classList.toggle('running', running);
   $('server-settings').disabled = busy || !state || running;
   $('tpr-updates').hidden = !state?.updatesDirectory;
+  renderServerRelease();
   $('start').disabled = busy || !state || running;
   $('stop').disabled = busy || !running;
   for (const id of ['address','copy-address','copy-key','copy-owner']) $(id).disabled = !running;
@@ -33,7 +34,7 @@ function loadSettings() {
   $('https-settings').hidden = !state.caddyAvailable;
   $('enable-https').checked = state.httpsEnabled && state.caddyAvailable;
   $('https-hostname').value = state.httpsHostname ?? '';
-  $('enable-https').onchange();
+  renderConnectionMode();
   $('minimum-game-version').value = state.minimumGameVersion ?? '';
   $('scope').value = state.scope;
   $('directory').value = state.directory;
@@ -58,11 +59,18 @@ async function changeServer(action, success) {
   }
 }
 
-$('enable-https').onchange = () => {
+function renderConnectionMode() {
   const enabled = $('enable-https').checked;
   $('https-hostname').disabled = !enabled;
   $('scope').disabled = enabled;
-};
+  $('listen-on').hidden = enabled;
+  $('caddy-connections').hidden = !enabled;
+  const port = $('port');
+  $('caddy-ports').textContent = 'Clients connect over HTTPS on port 443. ' +
+    (port.checkValidity() && port.value ? 'Port ' + port.valueAsNumber + ' is used locally.' : 'The server port is used locally.');
+}
+$('enable-https').onchange = renderConnectionMode;
+$('port').oninput = renderConnectionMode;
 communityHost.onProxyExit?.(async message => {
   state = await communityHost.state();
   render();
@@ -77,6 +85,57 @@ $('server-form').onsubmit = event => {
 $('open-tpr-updates').onclick = async () => {
   try {
     await communityHost.openUpdates();
+  } catch (error) {
+    showMessage(error.message,true);
+  }
+};
+function renderServerRelease() {
+  const version = githubUpdate?.serverRelease;
+  $('server-release').hidden = !version;
+  $('open-server-release').disabled = busy || Boolean(state?.running);
+  $('server-release-status').textContent = version ? 'Server ' + version + ' Available. ' +
+    (state?.running ? 'Stop the server to open the release.' : 'Close the app before replacing its files.') : '';
+}
+
+function renderGithubUpdates(update, refreshSettings = false) {
+  githubUpdate = update;
+  renderServerRelease();
+  if (refreshSettings) $('github-auto-pull').checked = update.enabled;
+  $('github-token').placeholder = update.configured ? 'Token Saved' : '';
+  $('check-github-updates').disabled = !update.configured || update.busy;
+  $('remove-github-token').disabled = !update.configured;
+  $('github-update-status').textContent = update.status ||
+    (update.enabled ? 'Checking every five minutes while the server app is open.' : 'Automatic downloads are off.');
+}
+
+async function saveGithubUpdates(remove = false) {
+  const input = $('github-token');
+  $('save-github-updates').disabled = true;
+  $('remove-github-token').disabled = true;
+  try {
+    const update = await communityHost.saveGithubUpdates({
+      enabled:!remove && $('github-auto-pull').checked, token:remove ? '' : input.value.trim(), remove
+    });
+    input.value = '';
+    renderGithubUpdates(update,true);
+  } catch (error) {
+    $('github-update-status').textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /,'');
+    $('remove-github-token').disabled = !(await communityHost.githubState()).configured;
+  } finally {
+    $('save-github-updates').disabled = false;
+  }
+}
+
+communityHost.onGithubStatus?.(update => renderGithubUpdates(update));
+$('github-updates-form').onsubmit = event => {
+  event.preventDefault();
+  void saveGithubUpdates();
+};
+$('remove-github-token').onclick = () => saveGithubUpdates(true);
+$('check-github-updates').onclick = () => communityHost.checkGithubUpdates();
+$('open-server-release').onclick = async () => {
+  try {
+    await communityHost.openServerRelease();
   } catch (error) {
     showMessage(error.message,true);
   }
@@ -156,6 +215,7 @@ const initialRender = (async () => {
   try {
     state = await communityHost.state();
     loadSettings();
+    if (state.updatesDirectory) renderGithubUpdates(await communityHost.githubState(),true);
   } catch (error) {
     showMessage(error.message, true);
   }

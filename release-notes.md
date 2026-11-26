@@ -1,1 +1,3 @@
-Updates the public Windows desktop with larger Track View, Telemetry Channels, and Session Summary headings, the recalibrated text scale, and clearer wording for opening new telemetry files. Community server connection settings can be entered in Sharing.
+- Updates the Telemetry Viewer layout and adds chart overlay controls and preset support.
+- Adds Compare Best Laps, a Driver filter, and improved reference controls.
+- Adds merged temperature charts, summary colours, notification chimes, and millimetres for ride height.

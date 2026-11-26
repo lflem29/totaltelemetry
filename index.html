@@ -12,10 +12,9 @@
 <header class="masthead">
   <div class="brand"><img class="brand-icon" src="total-telemetry-icon.png" alt="" width="44" height="44"><div>Total Telemetry <span id="app-version" hidden></span><small>LE MANS ULTIMATE</small></div></div>
   <div class="masthead-actions">
-    <nav aria-label="Views"><button id="library-tab" class="active">Session Library</button><button id="viewer-tab" disabled>Telemetry Viewer</button><button id="trainer-tab" type="button" hidden>Driver Trainer</button><button id="records-tab" type="button">Track Records</button></nav>
-    <button id="export-best-lap" type="button" hidden disabled>Export the Best Lap from This Session to Share</button>
+    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave" disabled>Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button" hidden>Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
   </div>
-  <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" type="button" hidden>Update Available</button><button id="settings-button">Settings</button></div>
+  <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
 </header>
 <dialog id="server-events-dialog" aria-labelledby="server-events-title">
   <div class="dialog-title"><h2 id="server-events-title">Server Communication</h2><form method="dialog"><button>Close</button></form></div>
@@ -43,7 +42,7 @@
     <p id="trainer-status" role="status"></p>
     <div id="trainer-analysis" hidden>
       <div id="trainer-focus" role="group" aria-label="Practice Focus"><button data-focus="0" aria-pressed="true">Consistent Braking</button><button data-focus="1" aria-pressed="false">Consistent Corner Exits</button><button data-focus="2" aria-pressed="false">Consistent Lap Times</button></div>
-      <section class="trainer-chart"><div class="trainer-chart-heading"><div class="trainer-corner-heading"><div id="trainer-corner-controls" role="group" aria-label="Corner navigation" hidden><button id="trainer-prev-corner" type="button" aria-label="Previous corner">‹</button><span id="trainer-corner-label" aria-live="polite"></span><button id="trainer-next-corner" type="button" aria-label="Next corner">›</button></div><h2 id="trainer-metric"></h2></div><div class="trainer-chart-heading"><label id="trainer-cold-control" hidden><span id="trainer-cold-label">Temperature at Which Tyres Are Considered Cold</span> <input id="trainer-cold-threshold" type="number" step="any" value="60" required> <span id="trainer-cold-unit">°C</span></label><strong id="trainer-spread"></strong><label class="trainer-assist" id="trainer-abs-control" hidden><input id="trainer-show-abs" type="checkbox" checked> ABS</label><label class="trainer-assist" id="trainer-tc-control" hidden><input id="trainer-show-tc" type="checkbox" checked> TC</label><label class="trainer-assist" id="trainer-comparison-control" hidden><input id="trainer-show-comparison" type="checkbox" checked> Previous Stint Traces</label></div></div><div id="trainer-chart-legend" hidden><span id="trainer-plot-axis">Lap in Stint</span><span id="trainer-current-legend">Current Stint</span><span id="trainer-previous-legend">Previous Stint</span><span id="trainer-cold-legend" hidden>Cold Tyres</span><span id="trainer-other-legend" hidden></span><span id="trainer-comparison-legend" hidden></span></div><canvas id="trainer-plot" role="img"></canvas><span id="trainer-hover-guide" aria-hidden="true" hidden></span><div id="trainer-hover-reading" hidden></div><p id="trainer-evidence"></p><p id="trainer-priority-label" hidden>Corners Ordered by Variance: Most to Least</p><div id="trainer-priorities" role="group" aria-labelledby="trainer-priority-label"></div></section>
+      <section class="trainer-chart"><div class="trainer-chart-heading"><div class="trainer-corner-heading"><div id="trainer-corner-controls" role="group" aria-label="Corner navigation" hidden><button id="trainer-prev-corner" type="button" aria-label="Previous corner">‹</button><span id="trainer-corner-label" aria-live="polite"></span><button id="trainer-next-corner" type="button" aria-label="Next corner">›</button></div><h2 id="trainer-metric"></h2></div><div class="trainer-chart-heading"><label id="trainer-cold-control" hidden><span id="trainer-cold-label">Temperature at Which Tyres Are Considered Cold</span> <input id="trainer-cold-threshold" type="number" step="any" value="60" required> <span id="trainer-cold-unit">°C</span></label><strong id="trainer-spread"></strong><label class="trainer-assist" id="trainer-abs-control" hidden><input id="trainer-show-abs" type="checkbox" checked> ABS</label><label class="trainer-assist" id="trainer-tc-control" hidden><input id="trainer-show-tc" type="checkbox" checked> TC</label><label class="trainer-assist" id="trainer-comparison-control" hidden><input id="trainer-show-comparison" type="checkbox" checked> <span id="trainer-comparison-label">Previous Session Traces</span></label></div></div><div id="trainer-chart-legend" hidden><span id="trainer-plot-axis">Lap in Stint</span><span id="trainer-current-legend">Current Stint</span><span id="trainer-previous-legend">Previous Stint</span><span id="trainer-cold-legend" hidden>Cold Tyres</span><span id="trainer-other-legend" hidden></span><span id="trainer-comparison-legend" hidden></span></div><canvas id="trainer-plot" role="img"></canvas><span id="trainer-hover-guide" aria-hidden="true" hidden></span><div id="trainer-hover-reading" hidden></div><p id="trainer-evidence"></p><p id="trainer-priority-label" hidden>Corners Ordered by Variance: Most to Least</p><div id="trainer-priorities" role="group" aria-labelledby="trainer-priority-label"></div></section>
     </div>
     <footer class="trainer-footer"><span class="trainer-trophy-summary">You’ve Earned <strong id="trainer-awards"></strong> Out of <strong id="trainer-unlocked"></strong> Unlocked Trophies <small class="trainer-unlock-note">(Visit More Tracks to Unlock More Trophies)</small></span><progress id="trainer-awards-meter" aria-hidden="true"></progress><button id="trainer-trophies" type="button" aria-haspopup="dialog">View Trophies</button></footer>
   </section>
@@ -53,8 +52,8 @@
     <div class="library-content">
       <div class="library-sessions">
         <dl class="loaded-sessions" aria-label="Loaded Sessions">
-          <div><dt>Loaded session</dt><dd id="loaded-session">No session loaded</dd></div>
-          <div><dt>Loaded Reference Session</dt><dd id="loaded-comparison">No comparison loaded</dd></div>
+          <div><dt>Loaded Session</dt><dd class="loaded-session-actions"><button id="clear-loaded-session" type="button" class="button-secondary" hidden>Clear Loaded Session</button></dd><dd id="loaded-session">No session loaded</dd></div>
+          <div><dt>Loaded Reference Lap</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
         </dl>
         <div id="library-tabs" class="view-tabs" role="tablist" aria-label="Session Library Views">
           <button id="recent-sessions-title" type="button" role="tab" aria-selected="true" aria-controls="recent-sessions-panel">My Recent Sessions</button>
@@ -62,6 +61,12 @@
         </div>
         <section id="recent-sessions-panel" role="tabpanel" aria-labelledby="recent-sessions-title" tabindex="0">
           <div id="recent-session-filters" class="filter-bar library-filter-bar">
+            <label>Session Type<select id="recent-session-type">
+              <option value="">All Session Types</option>
+              <option value="practice">Practice</option>
+              <option value="qual">Qualifying</option>
+              <option value="race">Race</option>
+            </select></label>
             <label>Track<select name="track"></select></label>
             <label>Track Layout<select name="layout"></select></label>
             <label>Class<select name="class"></select></label>
@@ -69,36 +74,32 @@
             <label>Sort By<select name="sort">
               <option value="">Newest First</option><option value="track">Track</option><option value="class">Class</option><option value="car">Car</option>
             </select></label>
-            <div class="filter-actions recent-filter-actions">
-              <label class="recent-session-limit">Show How Many Recent Sessions
-                <select id="limit">
-                  <option value="5">5</option><option value="10" selected>10</option><option value="50">50</option><option value="100">100</option><option value="200">200</option>
-                </select>
-              </label>
-              <button id="reset-library-filters" class="button-secondary" type="button">Reset Filters</button>
+            <div id="recent-list-toolbar" class="filter-actions recent-filter-actions">
+              <label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="recent-list-actions" class="list-result-actions"><span id="recent-list-count" class="list-count" role="status" hidden></span><button id="reset-library-filters" class="button-secondary" type="button">Reset Filters</button></div>
             </div>
+            <p id="recent-load-guide" class="table-load-guide" hidden>Click a session row to open it in the Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
           </div>
           <div id="library-loading" hidden>
             <p id="library-loading-label" role="status">Loading session recordings…</p>
             <progress aria-labelledby="library-loading-label"></progress>
           </div>
-          <p id="recent-sessions-no-matches" role="status" hidden>No recent sessions match these filters.</p>
-          <div id="empty" hidden>
+          <div id="recent-empty-state" class="list-empty"><p id="recent-sessions-no-matches" role="status" hidden>No recent sessions match these filters.</p></div>
+          <div id="empty" class="list-empty" hidden>
             <h2 id="empty-title"></h2>
             <p id="empty-text"></p>
             <figure id="empty-recording-guide" class="telemetry-recording-guide" hidden>
               <img src="record-telemetry.png" alt="LMU gameplay setting showing Automatically Record Telemetry switched On">
               <figcaption>In LMU Gameplay Settings, turn on <strong>Automatically Record Telemetry</strong>.</figcaption>
             </figure>
-            <button id="empty-folders">Choose folders</button>
+            <button id="empty-folders">Choose Folder</button>
           </div>
-          <div class="table-wrap" id="session-wrap" hidden><table aria-labelledby="recent-sessions-title"><thead><tr><th>Date and time</th><th>Track</th><th class="numeric-cell">Best lap</th><th class="numeric-cell">Timed laps</th><th class="numeric-cell" title="Estimated from recorded speed over time">Distance driven</th><th scope="col" class="session-comparison">Comparison</th></tr></thead><tbody id="sessions"></tbody></table></div>
+          <div class="table-wrap lap-list-table" id="session-wrap" role="region" aria-label="My Recent Sessions Table" tabindex="0" hidden><table aria-labelledby="recent-sessions-title"><thead><tr><th>Date and Time</th><th>Track</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">Timed Laps</th><th class="numeric-cell" title="Estimated from recorded speed over time">Distance Driven</th><th scope="col" class="session-comparison">Reference</th></tr></thead><tbody id="sessions"></tbody></table></div>
           <details id="issues" hidden><summary>Files That Did Not Import</summary><ul id="issue-list"></ul></details>
         </section>
         <section id="comparison-laps" role="tabpanel" aria-labelledby="comparison-laps-title" tabindex="0" hidden>
           <div class="actions imported-laps-actions">
-            <button id="import-comparison-laps" class="button-secondary" type="button">Import Local Lap Files</button>
-            <button id="browse-community-laps" type="button">Browse the Community Server for Laps to Import</button>
+            <button id="import-comparison-laps" data-ui-icon="importLap" class="button-secondary" type="button">Import Local Lap Files</button>
+            <button id="browse-community-laps" data-ui-icon="globe" type="button">Browse the Community Server for Laps to Import</button>
           </div>
           <div id="imported-lap-filters" class="filter-bar library-filter-bar">
             <label>Track<select name="track"></select></label>
@@ -109,11 +110,12 @@
             <label>Sort By<select name="sort">
               <option value="">Newest First</option><option value="track">Track</option><option value="class">Class</option><option value="car">Car</option><option value="driver">Driver</option>
             </select></label>
-            <div class="filter-actions"><button id="reset-imported-lap-filters" class="button-secondary" type="button">Reset Filters</button></div>
+            <div id="imported-list-toolbar" class="filter-actions"><label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="imported-list-actions" class="list-result-actions"><span id="imported-list-count" class="list-count" role="status" hidden></span><button id="reset-imported-lap-filters" class="button-secondary" type="button">Reset Filters</button></div></div>
+            <p id="imported-load-guide" class="table-load-guide" hidden>Click a lap row to open it in Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
           </div>
           <p id="comparison-import-status" role="status"></p>
-          <p id="imported-laps-empty" hidden>No reference laps imported yet.</p>
-          <div class="table-wrap" id="imported-laps-table" hidden>
+          <div id="imported-empty-state" class="list-empty"><p id="imported-laps-empty" hidden>No laps imported yet.</p></div>
+          <div class="table-wrap lap-list-table" id="imported-laps-table" role="region" aria-label="Imported Laps Table" tabindex="0" hidden>
             <table aria-labelledby="comparison-laps-title">
               <thead><tr><th>Driver</th><th>Track</th><th>Layout</th><th>Car</th><th class="numeric-cell">Best Lap</th><th>Game Version</th><th>Actions</th></tr></thead>
               <tbody id="comparison-lap-list"></tbody>
@@ -145,52 +147,77 @@
     <div class="records-heading">
       <div class="actions records-heading-actions">
         <button id="record-last-session" type="button">Filter By Last Session</button>
-        <div id="record-medals" aria-label="Your Track Record Medals" hidden>
-          <span class="record-gold">Gold <strong id="record-gold">0</strong></span>
-          <span class="record-silver">Silver <strong id="record-silver">0</strong></span>
-          <span class="record-bronze">Bronze <strong id="record-bronze">0</strong></span>
+        <div class="records-ranking">
+          <div id="record-medals" role="group" aria-label="Your Track Record Medals" hidden>
+            <span class="record-gold">Gold <strong id="record-gold">0</strong></span>
+            <span class="record-silver">Silver <strong id="record-silver">0</strong></span>
+            <span class="record-bronze">Bronze <strong id="record-bronze">0</strong></span>
+          </div>
+          <label class="check"><input id="hide-friend-records" type="checkbox"> Hide Friend's Records</label>
         </div>
-        <label class="check"><input id="hide-friend-records" type="checkbox"> Hide Friend's Records</label>
       </div>
     </div>
-    <div class="records-filters" id="records-filters">
+    <div class="filter-bar library-filter-bar records-filters" id="records-filters">
       <label>Track <select id="record-track"></select></label>
       <label>Track Layout <select id="record-layout"></select></label>
       <label>Class <select id="record-class"></select></label>
       <label>Car <select id="record-car"></select></label>
+      <label>Driver <select id="record-driver"></select></label>
       <div class="record-version-filter">
         <label for="record-version">Game Version</label>
         <div class="record-version-controls">
           <select id="record-version" aria-describedby="record-version-lock"><option value="">All Versions</option></select>
-          <span id="record-version-lock" hidden>Set by Community server</span>
+          <span id="record-version-lock" hidden>Set by Community Server</span>
         </div>
       </div>
-      <button id="record-clear" type="button">Clear Filters</button>
+      <div id="records-list-toolbar" class="filter-actions"><label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="records-list-actions" class="list-result-actions"><span id="records-list-count" class="list-count" role="status" hidden></span><button id="record-clear" class="button-secondary" type="button">Reset Filters</button></div></div>
+      <p id="records-load-guide" class="table-load-guide" hidden>Click a record marked Ready to Open to view its telemetry. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
     </div>
     <div class="records-feedback">
-      <p id="records-status" role="status"></p>
+
       <p id="records-loading" role="status" hidden></p>
       <p id="friend-records-status" role="status"></p>
     </div>
-    <div id="records-table" class="table-wrap" hidden><table>
+    <div id="records-empty-state" class="list-empty"><p id="records-status" role="status"></p></div>
+    <div id="records-table" class="table-wrap lap-list-table" role="region" aria-label="Track Records Table" tabindex="0" hidden><table>
       <thead><tr><th>Class</th><th>Car</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">S1</th><th class="numeric-cell">S2</th><th class="numeric-cell">S3</th><th class="numeric-cell record-optimal">Optimal</th><th class="record-date">Date</th><th>Game Version</th><th scope="col" class="record-telemetry">Telemetry Available</th><th scope="col" class="session-comparison">Reference</th></tr></thead>
       <tbody id="record-rows"></tbody>
     </table></div>
   </section>
   <section id="viewer" hidden>
     <div class="lap-toolbar">
-      <div><h1 id="track"></h1><p id="car"></p></div>
+      <div class="viewer-session">
+        <p id="viewer-loaded-session" class="viewer-lap-details selected-color"></p>
+        <div class="viewer-lap-controls">
+          <label for="lap-select">Select Lap</label>
+          <button id="clear-viewer-session" class="button-secondary" type="button">Clear Loaded Session</button>
+        </div>
+        <select id="lap-select"></select>
+        <button id="export-best-lap" data-ui-icon="share" type="button" hidden disabled>Share Your Best Lap from This Session</button>
+      </div>
       <section class="lap-history" aria-labelledby="lap-history-title">
+        <h1 id="track"></h1>
         <div class="lap-history-heading"><h2 id="lap-history-title">Lap Times</h2><output id="lap-history-reading"></output></div>
         <canvas id="lap-history-plot" tabindex="0" aria-label="Lap Times. Use arrow keys to browse and Enter to select."></canvas>
+        <div id="reference-car-control">
+          <select id="car-select" aria-label="Compare This Lap With Your Best Lap in Another Car From the Same Class"></select>
+        </div>
       </section>
-      <label>Select Lap<select id="lap-select"></select></label>
-      <label id="reference-car-control">Select Your Fastest Lap in a Matching Class Car<select id="car-select"></select></label>
-      <div id="reference-session-control" hidden>
-        <small id="reference-session-name"></small>
-        <button id="remove-reference-session" class="button-secondary" type="button">Remove Reference Session</button>
+      <div class="viewer-reference">
+        <p id="viewer-loaded-reference" class="viewer-lap-details" role="status"></p>
+        <div id="reference-session-control" hidden>
+          <small id="reference-session-name"></small>
+        </div>
+        <div class="viewer-reference-picker">
+          <div class="viewer-lap-controls">
+            <button id="remove-reference-session" class="button-secondary" type="button" hidden>Clear Reference Lap</button>
+            <label for="reference-select">Select Reference Lap</label>
+          </div>
+          <select id="reference-select">
+            <button type="button"><selectedcontent></selectedcontent></button>
+          </select>
+        </div>
       </div>
-      <label>Select Reference Session Lap<select id="reference-select"></select></label>
     </div>
     <div class="workbench">
       <div class="plot-pane">
@@ -221,10 +248,10 @@
                 <small id="map-sector-note" hidden>Includes unconfirmed laps</small>
               </section>
             </div>
-            <div class="playbar"><button id="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Playback position"><output id="position"></output><select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
+            <div class="playbar"><button id="play" data-ui-icon="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Playback position"><output id="position"></output><select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
           </section>
           <div id="active-lap-comparison" class="active-lap-comparison" hidden>
-            <strong>Comparing Laps</strong>
+            <strong>Lap Traces</strong>
             <strong id="active-selected-lap" class="selected-color"></strong>
             <span id="active-comparison-vs">vs</span>
             <strong id="active-reference-lap" role="status"></strong>
@@ -233,33 +260,33 @@
           <div id="charts"></div>
         </div>
         <div class="plot-footer">
-          <button id="reset-zoom" class="button-secondary">Reset Zoom</button>
-          <button id="unpin" class="button-secondary" disabled>Unlock Cursor</button>
+          <button id="reset-zoom" data-ui-icon="reset" class="button-secondary">Reset Zoom</button>
+          <button id="unpin" data-ui-icon="unlock" class="button-secondary" disabled>Unlock Cursor</button>
           <div class="sector-zoom" role="group" aria-label="Zoom To Sector">
-            <button type="button" data-zoom-sector="1" title="Zoom To Sector 1" aria-label="Zoom To Sector 1" disabled>Zoom To Sector 1</button>
-            <button type="button" data-zoom-sector="2" title="Zoom To Sector 2" aria-label="Zoom To Sector 2" disabled>Zoom To Sector 2</button>
-            <button type="button" data-zoom-sector="3" title="Zoom To Sector 3" aria-label="Zoom To Sector 3" disabled>Zoom To Sector 3</button>
+            <button type="button" data-zoom-sector="1" data-ui-icon="zoomIn" title="Zoom To Sector 1" aria-label="Zoom To Sector 1" disabled>Zoom To Sector 1</button>
+            <button type="button" data-zoom-sector="2" data-ui-icon="zoomIn" title="Zoom To Sector 2" aria-label="Zoom To Sector 2" disabled>Zoom To Sector 2</button>
+            <button type="button" data-zoom-sector="3" data-ui-icon="zoomIn" title="Zoom To Sector 3" aria-label="Zoom To Sector 3" disabled>Zoom To Sector 3</button>
           </div>
           <div id="viewer-message" role="status" hidden></div>
           <div id="graph-preset-actions" class="actions">
             <select id="graph-preset" aria-label="Active telemetry graph preset"></select>
-            <button id="save-graph-preset" type="button">Save Preset</button>
+            <button id="save-graph-preset" data-ui-icon="save" type="button" aria-label="Save Preset for Telemetry Graphs">Save Preset</button>
             <button id="remove-graph-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
-            <button id="choose-graphs" type="button">Select Active Telemetry Graphs</button>
+            <button id="choose-graphs" data-ui-icon="sliders" type="button">Select Active Telemetry Graphs</button>
           </div>
         </div>
       </div>
       <aside class="telemetry">
         <div class="telemetry-head">
           <div class="telemetry-title-row" role="group" aria-label="Sidebar controls">
-            <button id="show-track-view" type="button" aria-controls="track-location" aria-pressed="true">Track View</button>
-            <button id="show-telemetry-channels" type="button" aria-controls="channel-list" aria-pressed="false">Telemetry Channels</button>
+            <button id="show-track-view" data-ui-icon="circuit" type="button" aria-controls="track-location" aria-pressed="true">Track View</button>
+            <button id="show-telemetry-channels" data-ui-icon="wave" type="button" aria-controls="channel-list" aria-pressed="false">Telemetry Channels</button>
           </div>
           <div id="telemetry-channel-actions" class="actions" hidden>
             <select id="preset" aria-label="Telemetry preset"></select>
-            <button id="save-preset" type="button">Save Preset</button>
+            <button id="save-preset" data-ui-icon="save" type="button" aria-label="Save Preset for Telemetry Channels">Save Preset</button>
             <button id="remove-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
-            <button id="choose-channels" type="button" disabled>Select Channels</button>
+            <button id="choose-channels" data-ui-icon="sliders" type="button" disabled>Select Telemetry Channels</button>
           </div>
         </div>
         <div id="telemetry-panels">
@@ -269,19 +296,19 @@
               <div class="actions">
                 <button id="track-zoom-in" type="button" aria-label="Zoom in on track">+</button>
                 <button id="track-zoom-out" type="button" aria-label="Zoom out on track">−</button>
-                <button id="track-fit" type="button">Fit Track</button>
+                <button id="track-fit" data-ui-icon="fitTrack" type="button">Fit Track</button>
                 <select id="track-camera-mode" aria-label="Track camera mode">
                   <option value="follow">Follow Car</option>
-                  <option value="corner" selected>Corner View</option>
-                  <option value="section" disabled>Selected Section</option>
+                  <option value="corner">Corner View</option>
+                  <option value="section" selected>Selected Section</option>
                 </select>
                 <label><input id="track-pedals" type="checkbox" checked> Brake and Throttle</label>
                 <span id="track-activations" class="actions" role="group" aria-label="Track driving aids"></span>
-                <button id="pop-out-track" type="button">Pop Out</button>
+                <button id="pop-out-track" data-ui-icon="pop" type="button">Pop Out</button>
               </div>
               <div class="track-location-key">
                 <span class="track-road-key" title="Approximate road surface estimated from the GPS route">Estimated Road</span>
-                <span id="track-selected-key">Selected Lap</span>
+                <span id="track-selected-key">Loaded Lap</span>
                 <span id="track-reference-key" hidden>Reference Lap</span>
                 <span id="track-pedals-key" hidden><span class="track-braking">Brake</span> / <span class="track-throttle">Throttle</span></span>
               </div>
@@ -292,16 +319,16 @@
                   aria-label="Resize Session Summary. Use arrow keys." aria-controls="session-summary"></button>
           <section id="session-summary" class="session-summary" aria-labelledby="session-summary-title">
             <div class="session-summary-header">
-              <h2 id="session-summary-title">Session Summary</h2>
+              <h2 id="session-summary-title" data-ui-icon="summary">Session Summary</h2>
               <div class="session-summary-actions">
-                <button id="choose-summary-channels" type="button" aria-haspopup="dialog">Select Channels</button>
-                <button id="toggle-summary-fullscreen" type="button" aria-haspopup="dialog">Full Screen</button>
-                <button id="pop-out-summary" type="button">Pop Out</button>
+                <button id="choose-summary-channels" data-ui-icon="sliders" type="button" aria-haspopup="dialog">Select Summary Channels</button>
+                <button id="toggle-summary-fullscreen" data-ui-icon="full" type="button" aria-haspopup="dialog">Full Screen</button>
+                <button id="pop-out-summary" data-ui-icon="pop" type="button">Pop Out</button>
               </div>
             </div>
             <div class="summary-performance-switch" role="group" aria-label="Session Summary Category">
-              <button id="show-driver-performance" type="button" aria-controls="driver-performance" aria-pressed="false">Driver Performance</button>
-              <button id="show-vehicle-performance" type="button" aria-controls="session-highlights" aria-pressed="true">Vehicle Performance</button>
+              <button id="show-driver-performance" data-ui-icon="wheel" type="button" aria-controls="driver-performance" aria-pressed="false">Driver Performance</button>
+              <button id="show-vehicle-performance" data-ui-icon="gauge" type="button" aria-controls="session-highlights" aria-pressed="true">Vehicle Performance</button>
             </div>
             <div class="session-summary-content">
               <section id="driver-performance" aria-label="Driver Performance" hidden>
@@ -350,7 +377,6 @@
 </dialog>
 <dialog id="folders">
   <form method="dialog"><div class="dialog-title"><h2>Settings</h2><button value="close" aria-label="Close">Close</button></div></form>
-  <button id="check-tpr-update" type="button" hidden>Check for TPR Updates</button>
   <div id="settings-tabs" role="tablist" aria-label="Settings Sections">
     <button id="settings-tab-display" type="button" role="tab" aria-controls="settings-panel-display" aria-selected="true">Display</button>
     <button id="settings-tab-telemetry-data" type="button" role="tab" aria-controls="settings-panel-telemetry-data" aria-selected="false" tabindex="-1">Telemetry Data</button>
@@ -374,7 +400,7 @@
         <div class="actions colour-preset-actions">
           <label for="colour-preset">Colour Preset</label>
           <select id="colour-preset"></select>
-          <button id="save-colour-preset" type="button">Save Preset</button>
+          <button id="save-colour-preset" data-ui-icon="save" type="button" aria-label="Save Preset for Interface Colours">Save Preset</button>
           <button id="remove-colour-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
         </div>
         <div class="appearance-settings">
@@ -427,15 +453,15 @@
     </form>
   </div>
   <div id="settings-panel-folders" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-folders" tabindex="0" hidden>
-      <h3 class="settings-heading">LMU folders</h3>
+      <h3 class="settings-heading">LMU Folders</h3>
       <p>Primary Driver <strong id="settings-primary-driver">Awaiting Confirmation</strong></p>
       <button id="settings-confirm-driver" type="button" hidden>Confirm Your Driver</button>
       <p>Choose the game installation to fill both paths, or select each folder separately.</p>
       <button type="button" data-folder="installation">Choose LMU installation</button>
-      <div class="folder-item"><div><strong>Telemetry</strong><p id="telemetry-path"></p></div><button type="button" data-folder="telemetry">Choose folder</button></div>
+      <div class="folder-item"><div><strong>Telemetry</strong><p id="telemetry-path"></p></div><button type="button" data-folder="telemetry">Choose Folder</button></div>
       <label class="telemetry-auto-load"><input id="auto-load-telemetry" type="checkbox" aria-describedby="auto-load-telemetry-description" checked> Open New Telemetry Files in the Telemetry Viewer</label>
       <p id="auto-load-telemetry-description">When a new file is ready, the app switches to the Telemetry Viewer and opens Vehicle Performance in Session Summary.</p>
-      <div class="folder-item"><div><strong>Session results</strong><p id="results-path"></p></div><button type="button" data-folder="results">Choose folder</button></div>
+      <div class="folder-item"><div><strong>Session Results</strong><p id="results-path"></p></div><button type="button" data-folder="results">Choose Folder</button></div>
       <p id="folder-selection-status" role="status"></p>
   </div>
   <div id="settings-panel-sharing" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-sharing" tabindex="0" hidden>
@@ -485,7 +511,11 @@
     </div>
     <p id="temperatures-settings-file-status" role="status"></p>
   </div>
-  <div class="settings-footer"><button id="reset-settings" type="button">Reset All Settings</button></div>
+  <div class="settings-footer">
+    <label class="check"><input id="notification-sound" type="checkbox"> Play a Chime for All Notifications</label>
+    <button id="reset-settings" type="button">Reset All Settings</button>
+    <button id="check-tpr-update" data-ui-icon="update" type="button" hidden>Check for Total Telemetry Updates</button>
+  </div>
 </dialog>
 <dialog id="community-laps-dialog" aria-labelledby="community-laps-title">
   <div class="community-dialog-header"><h2 id="community-laps-title">Community Laps</h2><form method="dialog" class="actions"><button id="close-community-laps" class="button-secondary">Close</button></form></div>
@@ -521,7 +551,7 @@
   </div>
 </dialog>
 <dialog id="channel-dialog">
-  <form method="dialog"><div class="dialog-title"><h2>Choose telemetry channels</h2><button value="close">Done</button></div></form>
+  <form method="dialog"><div class="dialog-title"><h2>Select Telemetry Channels</h2><button value="close">Done</button></div></form>
   <div class="actions channel-modes">
     <button id="channel-select-tab" aria-pressed="true">Select channels</button>
     <button id="channel-order-tab" aria-pressed="false">Order channels</button>
@@ -539,6 +569,8 @@
 <dialog id="graph-dialog" aria-labelledby="graph-dialog-title">
   <form id="graph-form">
     <div class="dialog-title"><h2 id="graph-dialog-title">Select Active Telemetry Graphs</h2><button type="button" id="cancel-graphs">Cancel</button></div>
+    <label class="check" hidden><input id="mergeSummaryBrakes" type="checkbox"> Merge Front and Rear Brake Temperatures</label>
+    <label class="check" hidden><input id="mergeSummaryEngineTemperatures" type="checkbox"> Merge Engine Oil and Water Temperatures</label>
     <p id="summary-channel-note" hidden>Top Speed, PRM peak, temperatures, and tyre pressures show the highest reading per lap. Virtual Energy and Fuel show usage per lap. Finish-line channels show the last reading before the crossing. ABS and TC time active is measured in seconds.</p>
     <div id="graph-picker-tabs" class="view-tabs" role="group" aria-label="Graph picker view">
       <button id="graph-select-tab" type="button" aria-pressed="true">Select Graphs</button>
@@ -558,7 +590,7 @@
 </dialog>
 <dialog id="merge-dialog">
   <form id="merge-form">
-    <div class="dialog-title"><h2>Time delta overlays</h2><button type="button" id="cancel-merge">Cancel</button></div>
+    <div class="dialog-title"><h2 id="merge-title">Chart Overlays</h2><button type="button" id="cancel-merge">Cancel</button></div>
     <input id="merge-search" type="search" placeholder="Find a channel" aria-label="Find a graph channel">
     <div id="merge-options"></div>
     <div class="actions"><span id="merge-count"></span><button id="submit-merge">Apply</button></div>

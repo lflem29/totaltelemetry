@@ -38,18 +38,27 @@ let sessions = [], resultGameVersions = [];
 let scanBusy = false, runningScanAgain = false, scanKey;
 let scanFailed = false;
 let selected, lap, reference, primary, secondary;
+const loadedTraceLabel = 'Loaded Lap';
+const referenceTraceLabel = 'Reference Lap';
 let referenceLoading = false;
 let referenceSessionPath;
 let referenceSessionLapId;
 let manualReference = undefined;
 let loadGeneration = 0, ready = false;
 let view = 'library';
+const listScrollPositions = new Map();
+const listScrollContainers = {
+  library:['library','session-wrap','imported-laps-table'],
+  records:['records','records-table']
+};
 let enabled = new Set(builtIn.Driving), chartRows = [], readoutRows = [];
 let range = [0, 1], cursor = 0, playTime = 0, pinned = false, playing = false, frame = 0;
 let selection = null;
 let pinnedGraph;
 let renderRequested = false;
+const maxChartOverlays = 3;
 let mergeChoices = new Set();
+let mergeChart;
 const mergeColors = ['#c6f36c','#74d8ff','#ffb583','#d7a5ff','#70e4c0','#ff91ad','#f4dc72','#a2b4ff'];
 const graphColor = (key, fallback = palette[0]) => settings.colors?.[key] || fallback;
 
@@ -58,6 +67,53 @@ function node(tag, text, className) {
   if (text !== undefined) el.textContent = text;
   if (className) el.className = className;
   return el;
+}
+const uiIconPaths = {
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2M3 7v12h16l3-8H7l-4 8',
+  wave: 'M2 12h4l3-8 5 16 3-8h5',
+  wheel: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-2.5 1L4 8m10.5 3L20 8m-8 6v7',
+  watch: 'M10 2h4m-2 7v4m6-8 2-2M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
+  reset: 'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3',
+  download: 'M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4',
+  pop: 'M13 5h6v6m0-6-9 9m0-9H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4',
+  full: 'M8 3H3v5m13-5h5v5m0 8v5h-5m-8 0H3v-5M3 3l6 6m12-6-6 6m6 12-6-6M3 21l6-6',
+  settings: 'M10 3h4l.6 2.6 2 .9 2.3-1.4 2 3.4-1.9 1.8v2.4l1.9 1.8-2 3.4-2.3-1.4-2 .9L14 21h-4l-.6-2.6-2-.9-2.3 1.4-2-3.4L5 12.7v-2.4L3.1 8.5l2-3.4 2.3 1.4 2-.9L10 3ZM15 12a3 3 0 1 0-6 0 3 3 0 0 0 6 0Z',
+  bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0',
+  sliders: 'M5 3v5m0 4v9m7-18v9m0 4v5m7-18v2m0 4v12M2 8h6v4H2zm7 4h6v4H9zm7-7h6v4h-6z',
+  bookmark: 'M10 3H6a1 1 0 0 0-1 1v17l7-4 7 4v-9M17 2v8m-4-4h8',
+  request: 'M8 3v10m-4-4 4 4 4-4M3 15v5h8m11-4a5 5 0 1 1-10 0 5 5 0 0 1 10 0Zm-5-3v3l2 1',
+  close: 'M6 6l12 12M18 6 6 18',
+  trash: 'M3 6h18M9 6V4h6v2m4 0-1 14H6L5 6m5 4v6m4-6v6',
+  update: 'M20 4v5h-5m5 0a8 8 0 1 0 .1 6',
+  fitTrack: 'M7 3H3v4m14-4h4v4m0 10v4h-4M7 21H3v-4m4-2V9a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1a2 2 0 0 1-2 2h-2a2 2 0 0 0-2 2v1a2 2 0 0 1-4 0Z',
+  importLap: 'M8 7V4h7l4 4v12H8v-3m7-13v4h4M3 12h10m-3-3 3 3-3 3',
+  share: 'M15.4 5.5l-6.8 4m0 5 6.8 4M21 4a3 3 0 1 0-6 0 3 3 0 1 0 6 0ZM9 12a3 3 0 1 0-6 0 3 3 0 1 0 6 0Zm12 8a3 3 0 1 0-6 0 3 3 0 1 0 6 0Z',
+  circuit: 'M4 15c0-2 2-3 3-5l2-4c1-2 4-2 5 0l1 3c.5 1 1 1 2 1h2a2 2 0 0 1 2 2v4a3 3 0 0 1-3 3H7a3 3 0 0 1-3-4Z',
+  summary: 'M9 5H6a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-3M9 3h6v4H9Zm0 14v-3m3 3v-5m3 5v-7',
+  gauge: 'M4 18a9 9 0 1 1 16 0H4Zm8-3 4-5M6 13h1m5-6v1m5 5h1',
+  save: 'M5 3h12l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 0v6h10V3M7 21v-7h10v7',
+  zoomIn: 'M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-2 5 6 6M7 10h6m-3-3v6',
+  unlock: 'M7 11V7a5 5 0 0 1 9-3m-4 11v2M6 11h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z',
+  play: 'M7 4l14 8-14 8V4Z',
+  pause: 'M7 5h3v14H7zm7 0h3v14h-3z',
+  globe: 'M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0ZM3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z'
+};
+function addButtonIcon(button, key) {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(namespace, 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(namespace, 'path');
+  path.setAttribute('d', uiIconPaths[key]);
+  icon.append(path);
+  button.classList.add('icon-button');
+  if (!button.childElementCount && button.textContent) {
+    button.replaceChildren(node('span', button.textContent, 'icon-button-label'));
+  }
+  button.prepend(icon);
+}
+for (const button of document.querySelectorAll('[data-ui-icon]')) {
+  addButtonIcon(button, button.dataset.uiIcon);
 }
 function option(select, label, value) {
   const el = node('option', label);
@@ -132,6 +188,32 @@ function lapLabel(l) {
     (l.time ? lapTime(l.time) + (l.validity === 'unconfirmed' ? ' · validity unconfirmed' : '')
       : l.kind === 'complete' ? l.validity === 'no official time' ? 'No official time' : 'No recorded time' : l.kind);
 }
+function addLoadedLapLabel(cell, sessionPath, lapId) {
+  if (!sessionPath) return;
+  const label = node('small', 'Loaded', 'loaded-lap-label');
+  label.dataset.loadedPath = sessionPath;
+  if (lapId != null) label.dataset.loadedLap = String(lapId);
+  cell.append(label);
+  updateLoadedLapLabel(label);
+}
+function updateLoadedLapLabel(label) {
+  label.hidden = !(ready && selected?.path === label.dataset.loadedPath &&
+    (label.dataset.loadedLap == null || String(lap?.id) === label.dataset.loadedLap));
+}
+function positionListActions(key, empty) {
+  const actions = $(key + '-list-actions');
+  const container = $(key + (empty ? '-empty-state' : '-list-toolbar'));
+  if (actions.parentElement === container) return;
+  const focused = actions.contains(document.activeElement) ? document.activeElement : null;
+  container.append(actions);
+  focused?.focus({preventScroll:true});
+}
+function setListCount(id, shown, total, item) {
+  const count = $(id);
+  count.hidden = !total;
+  count.textContent = 'Showing ' + shown.toLocaleString() + ' of ' + total.toLocaleString() + ' ' +
+    item + (total === 1 ? '' : 's');
+}
 function addLoadedReferenceLabel(cell, sessionPath, lapId) {
   if (!sessionPath) return;
   const label = node('small', 'Loaded Reference', 'loaded-reference-label reference-color');
@@ -147,7 +229,7 @@ function updateLoadedReferenceLabel(label) {
 function referenceLapCells(driver, track, layout, car, time, version) {
   return [node('td', driver || 'Unknown Driver'), node('td', track || 'Unknown'),
     node('td', layout || 'Unknown'), node('td', car || 'Unknown'),
-    node('td', lapTime(time), 'numeric-cell'), node('td', version || 'Unknown')];
+    node('td', lapTime(time), 'numeric-cell session-best'), node('td', version || 'Unknown')];
 }
 function renderLoadedSessions() {
   const show = (id, session, currentLap, empty) => {
@@ -163,6 +245,8 @@ function renderLoadedSessions() {
     output.replaceChildren(node('strong', session.track || session.filename), details.filter(Boolean).join(' · '));
   };
   show('loaded-session', selected, lap, 'No session loaded');
+  $('clear-loaded-session').hidden = !selected;
+  syncCompatibleReferenceFilters();
   const pending = !selected && referenceSessionPath
     ? (settings.comparisonLaps ?? []).find(session => session.path === referenceSessionPath)
       ?? sessions.find(session => session.path === referenceSessionPath)
@@ -171,11 +255,21 @@ function renderLoadedSessions() {
   const comparisonLap = secondary ? reference?.lap
     : pending?.lap ?? pending?.laps?.find(item => referenceSessionLapId == null
       ? item.time > 0 && item.time === pending.best : item.id === referenceSessionLapId);
-  show('loaded-comparison', comparisonSession, comparisonLap, 'No comparison loaded');
+  show('loaded-comparison', comparisonSession, comparisonLap, 'No reference lap loaded');
+  $('clear-loaded-reference').hidden = $('remove-reference-session').hidden = !(comparisonSession || referenceSessionPath);
   document.querySelectorAll('.loaded-reference-label').forEach(updateLoadedReferenceLabel);
+  document.querySelectorAll('.loaded-lap-label').forEach(updateLoadedLapLabel);
+  document.querySelectorAll('.reference-match-guide').forEach(guide => { guide.hidden = !ready; });
 }
 function setView(name) {
   if (name === 'trainer' && settings.driverTrainerEnabled !== true) name = 'library';
+  const changingView = name !== view;
+  if (changingView) {
+    for (const id of listScrollContainers[view] ?? []) {
+      const element = $(id);
+      if (!element.hidden) listScrollPositions.set(id,[element.scrollLeft,element.scrollTop]);
+    }
+  }
   view = name;
   $('trainer').hidden = name !== 'trainer';
   $('trainer-tab').classList.toggle('active', name === 'trainer');
@@ -187,10 +281,14 @@ function setView(name) {
   $('viewer-tab').classList.toggle('active', name === 'viewer');
   $('records-tab').classList.toggle('active', name === 'records');
   if (name !== 'viewer') stop();
-  if (name === 'library') renderLoadedSessions();
+  if (name === 'library') { renderLibrary(); renderLoadedSessions(); }
   if (name === 'records') { renderRecords(); void refreshFriendRecords(); }
   if (name === 'trainer') { renderDriverTrainer(); void scanDriverTrainer(sessions); }
   if (name === 'viewer') scheduleRender();
+  for (const id of (changingView ? listScrollContainers[name] : undefined) ?? []) {
+    const location = listScrollPositions.get(id);
+    if (location && !$(id).hidden) $(id).scrollTo(...location);
+  }
 }
 const carClasses = ['GTE', 'GT3', 'LMP3', 'LMP2', 'Hypercar'];
 const temperatureThresholds = [
@@ -248,7 +346,7 @@ const interfaceColourOptions = [
   ['rule','Borders and Dividers','#344139'], ['fg','Primary Text','#ecf2e9'],
   ['muted','Secondary Text','#a4b3a7'], ['button-ink','Primary Button Text','#ffffff'],
   ['focus','Keyboard Focus and Graph Cursor','#e8f0dd'],
-  ['accent','Selected Lap and Highlights','#c6f36c'], ['reference','Reference Lap','#f0a479'],
+  ['accent','Loaded Lap and Highlights','#c6f36c'], ['reference','Reference Lap','#f0a479'],
   ['warning','Warnings and Time Loss','#ff8787'], ['graph-grid','Graph Grid','#2a382e'],
   ['graph-axis','Graph Axes and Labels','#a4b3a7'], ['map-surface','Track Map Background','#111915'],
   ['map-brake','Track Map Braking','#ff4545'], ['map-throttle','Track Map Throttle','#32e260'],
@@ -327,6 +425,7 @@ function settingsFields() {
   $('settings-primary-driver').textContent = settings.primaryDriver || 'Awaiting Confirmation';
   $('settings-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
   $('share-track-records').checked = settings.shareTrackRecords === true;
+  $('notification-sound').checked = settings.notificationSound === true;
   $('manage-track-records').disabled = !settings.communityOwnerConfigured;
   if (!$('settings-panel-telemetry-data').hidden || $('telemetry-name-fields').childElementCount) renderTelemetryData();
   $('auto-load-telemetry').checked = settings.autoLoadTelemetry !== false;
@@ -509,23 +608,72 @@ function filterLibraryEntries(id, entries) {
   return matches;
 }
 
+const useAsReferenceLabel = 'Use as Reference';
+let compatibleReferencesOnly = false;
+const noCompatibleReferences = 'No compatible references match your filters. Uncheck Show Compatible References Only to include other results.';
+function syncCompatibleReferenceFilters() {
+  for (const input of document.querySelectorAll('.compatible-reference-filter input')) {
+    input.checked = compatibleReferencesOnly;
+    input.parentElement.hidden = !selected;
+  }
+}
+for (const input of document.querySelectorAll('.compatible-reference-filter input')) {
+  input.onchange = () => {
+    compatibleReferencesOnly = input.checked;
+    syncCompatibleReferenceFilters();
+    renderLibrary({resetRecentSessions:true});
+  };
+}
+function matchesReferenceSession(session) {
+  if (!selected) return false;
+  const dimensions = value => [value.trackName || value.track, value.trackLayout || value.track, value.carClass]
+    .map(field => field?.trim().toLowerCase());
+  const current = dimensions(selected);
+  return dimensions(session).every((field,index) => Boolean(field && field === current[index]));
+}
+
+function bindTelemetryRow(row, open) {
+  row.classList.add('session-row');
+  row.tabIndex = 0;
+  row.title = 'Open in Telemetry Viewer';
+  row.onclick = event => {
+    if (!event.target.closest('button')) void open();
+  };
+  row.onkeydown = event => {
+    if (event.target !== row || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    if (!event.repeat) void open();
+  };
+}
+
 function renderComparisonLaps() {
   const imported = [...(settings.comparisonLaps ?? [])].reverse();
-  const entries = filterLibraryEntries('imported-lap-filters', imported);
-  $('imported-laps-empty').textContent = imported.length ? 'No imported laps match these filters.' : 'No reference laps imported yet.';
+  const entries = filterLibraryEntries('imported-lap-filters', imported).filter(entry =>
+    !compatibleReferencesOnly || entry.path === selected.path || matchesReferenceSession(entry));
+  $('imported-laps-empty').textContent = !imported.length ? 'No laps imported yet.' :
+    compatibleReferencesOnly ? noCompatibleReferences : 'No imported laps match these filters.';
   $('imported-laps-table').hidden = !entries.length;
+  $('imported-load-guide').hidden = !entries.length;
+  setListCount('imported-list-count',entries.length,imported.length,'Imported Lap');
   $('imported-laps-empty').hidden = Boolean(entries.length);
+  positionListActions('imported',!entries.length);
   $('comparison-lap-list').replaceChildren(...entries.map(entry => {
     const row = node('tr');
     const actions = node('td');
-    const add = node('button', 'Use as Reference');
+    bindTelemetryRow(row,() => openImportedLap(entry));
+    const add = node('button', useAsReferenceLabel, 'reference-add');
+    addButtonIcon(add, 'bookmark');
+    add.hidden = !matchesReferenceSession(entry) || selected.path === entry.path;
     add.type = 'button';
     add.setAttribute('aria-pressed', String(referenceSessionPath === entry.path));
     add.onclick = () => selectReferenceSession(entry.path);
-    const remove = node('button', 'Remove');
+    const remove = node('button', 'Delete This Lap from My Database', 'button-secondary delete-imported-lap');
+    addButtonIcon(remove, 'trash');
     remove.type = 'button';
-    remove.setAttribute('aria-label', 'Remove comparison lap: ' + entry.car + ' at ' + entry.track);
+    remove.setAttribute('aria-label', 'Delete This Lap from My Database: ' + entry.car + ' at ' + entry.track);
     remove.onclick = async () => {
+      const details = [entry.driver || 'Unknown Driver', entry.trackName || entry.track, lapTime(entry.lap.time)].join(' · ');
+      if (!window.confirm('Delete this lap from your database?\n\n' + details)) return;
       remove.disabled = true;
       const status = $('comparison-import-status');
       try {
@@ -540,8 +688,10 @@ function renderComparisonLaps() {
     };
     actions.append(add, remove);
     addLoadedReferenceLabel(actions, entry.path, entry.lap.id);
-    row.append(...referenceLapCells(entry.driver, entry.trackName || entry.track, entry.trackLayout || entry.track,
-      entry.car, entry.lap.time, entry.gameVersion), actions);
+    const cells = referenceLapCells(entry.driver, entry.trackName || entry.track, entry.trackLayout || entry.track,
+      entry.car, entry.lap.time, entry.gameVersion);
+    addLoadedLapLabel(cells[0],entry.path,entry.lap.id);
+    row.append(...cells,actions);
     return row;
   }));
 }
@@ -612,6 +762,7 @@ function communityLapRow(lap, ownerActions) {
     (server.https ? 'https://' : 'http://') + server.host + ':' + server.port).href : undefined;
   const imported = (settings.comparisonLaps ?? []).some(entry => entry.path === source);
   const add = node('button', imported ? 'Imported' : 'Import Lap');
+  addButtonIcon(add, 'importLap');
   add.type = 'button';
   add.onclick = async () => {
     if (communityOperation) return;
@@ -619,7 +770,7 @@ function communityLapRow(lap, ownerActions) {
     try {
       settings.comparisonLaps = await lmu.importCommunityLap(lap.id);
       renderLibrary();
-      add.textContent = 'Imported';
+      add.querySelector('.icon-button-label').textContent = 'Imported';
       communityStatus.textContent = 'Lap saved to Imported Laps.';
     } catch (error) {
       communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
@@ -971,9 +1122,9 @@ function updateRequestedLapProgress(row, progress) {
   const {stage,received,total} = progress;
   const bar = row.querySelector('progress');
   const status = row.querySelector('span');
-  if (stage === 'preparing') {
+  if (stage === 'preparing' || stage === 'sharing') {
     bar.removeAttribute('value');
-    status.textContent = 'Preparing Requested Lap…';
+    status.textContent = stage === 'sharing' ? 'Sharing in Community Laps…' : 'Preparing Requested Lap…';
     return;
   }
   const percent = Math.floor(received * 100 / total);
@@ -1000,6 +1151,37 @@ function writeRecordNotifications() {
   try { localStorage.setItem(recordNotificationStorageKey(),JSON.stringify(recordNotifications)); } catch {}
   renderRecordNotifications();
 }
+let notificationAudio;
+let notificationArrival;
+function playNotificationChime() {
+  notificationAudio ??= new AudioContext();
+  if (notificationAudio.state !== 'running') return;
+  const start = notificationAudio.currentTime;
+  [660, 880, 1100].forEach((frequency, index) => {
+    const time = start + index * 0.075;
+    const tone = notificationAudio.createOscillator();
+    const gain = notificationAudio.createGain();
+    tone.frequency.value = frequency;
+    gain.gain.setValueAtTime(0, time);
+    gain.gain.linearRampToValueAtTime(0.06, time + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.001, time + 0.16);
+    tone.connect(gain).connect(notificationAudio.destination);
+    tone.start(time);
+    tone.stop(time + 0.17);
+  });
+}
+$('notification-sound').onchange = event => {
+  save({notificationSound:event.target.checked});
+  if (!event.target.checked) return;
+  notificationAudio ??= new AudioContext();
+  void notificationAudio.resume().then(playNotificationChime).catch(() => {});
+};
+document.addEventListener('click', () => {
+  if (settings.notificationSound !== true) return;
+  notificationAudio ??= new AudioContext();
+  if (notificationAudio.state === 'suspended') void notificationAudio.resume().catch(() => {});
+});
+
 function addRecordNotification(key,text,options = {}) {
   if (Object.hasOwn(recordNotifications,key)) return;
   recordNotifications[key] = {text,...options};
@@ -1009,6 +1191,14 @@ function addRecordNotification(key,text,options = {}) {
     if (dismissed) delete recordNotifications[dismissed];
   }
   writeRecordNotifications();
+  if (window.matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+    notificationArrival?.cancel();
+    const bell = $('notifications-button').querySelector('svg');
+    notificationArrival = bell.animate(
+      ['#ff8989', '#ffbf70', '#ffe675', '#a4ee8b', '#88dcff', '#dda6ff', 'inherit'].map(color => ({color})),
+      {duration:1200, easing:'ease-in-out'});
+  }
+  if (settings.notificationSound === true) playNotificationChime();
 }
 function resolveRecordNotification(key) {
   recordNotifications[key].dismissed = true;
@@ -1019,7 +1209,7 @@ function renderRecordNotifications() {
   const count = pending.length;
   $('notification-count').textContent = count === 0 ? 'No Notifications' :
     count.toLocaleString() + (count === 1 ? ' Notification' : ' Notifications');
-  $('notifications-button').dataset.pending = String(pending.some(([,entry]) => entry.requestId));
+  $('notifications-button').dataset.pending = String(count > 0);
   $('notifications-empty').hidden = !!pending.length;
   $('dismiss-all-notifications').disabled = !pending.some(([,entry]) => !entry.requestId);
   $('notification-list').replaceChildren(...pending.map(([key,entry]) => {
@@ -1035,11 +1225,19 @@ function renderRecordNotifications() {
       row.append(node('span'),bar);
       item.insertBefore(row,actions);
       updateRequestedLapProgress(row,requestedLapProgress.get(entry.requestId));
+      const share = node('input');
+      share.type = 'checkbox';
+      share.checked = entry.shareDraft ?? entry.shareWithCommunity ?? true;
+      share.disabled = pendingRecordTransfers.has(entry.requestId);
+      share.onchange = () => { entry.shareDraft = share.checked; };
+      const shareLabel = node('label', undefined, 'request-community-share');
+      shareLabel.append(share, 'Also Share This Lap in Community Laps');
+      item.insertBefore(shareLabel,actions);
       for (const [action,label] of [['accept','Accept and Upload Lap'],['deny','Deny']]) {
         const accepted = recordRequests.some(request => request.id === entry.requestId && request.status === 'accepted');
         const button = node('button',action === 'accept' && accepted ? 'Retry Upload' : label,action === 'deny' ? 'button-secondary' : '');
         button.disabled = pendingRecordTransfers.has(entry.requestId);
-        button.onclick = () => void respondToRecordRequest(action,entry.requestId,key);
+        button.onclick = () => void respondToRecordRequest(action,entry.requestId,key,share.checked);
         actions.append(button);
       }
     } else {
@@ -1073,18 +1271,36 @@ $('notifications-button').onclick = () => {
   $('notifications-dialog').showModal();
 };
 
+function latestTrackRecordRequest(friend) {
+  return recordRequests.findLast(item => !item.incoming && item.recordId === friend.id && item.record.lapKey === friend.lapKey);
+}
+
 function importedRequestedLap(request) {
   if (!request) return undefined;
   const suffix = '/v1/track-records/requests/download/' + request.id;
   return settings.comparisonLaps?.find(lap => lap.path?.endsWith(suffix));
 }
 
-async function respondToRecordRequest(action,id,key) {
+async function applyTelemetryRequestResponse(result, id) {
+  await updateRecordRequests(result?.requests ?? result);
+  if (result?.communityShared) {
+    addRecordNotification('community-shared-' + id,'Requested lap also shared in Community Laps.');
+  } else if (result?.communityShareError) {
+    addRecordNotification('community-share-error-' + id,
+      'Requested lap sent to your friend. Community sharing failed · ' + result.communityShareError);
+  }
+}
+async function respondToRecordRequest(action,id,key,shareWithCommunity) {
   if (pendingRecordTransfers.has(id)) return;
   pendingRecordTransfers.add(id);
-  renderRecordNotifications();
+  if (action === 'accept') {
+    recordNotifications[key].shareWithCommunity = shareWithCommunity === true;
+    delete recordNotifications[key].shareDraft;
+    writeRecordNotifications();
+  } else renderRecordNotifications();
   try {
-    await updateRecordRequests(await lmu.trackRecordRequest(action,id));
+    await applyTelemetryRequestResponse(await lmu.trackRecordRequest(action,id,undefined,
+      action === 'accept' && shareWithCommunity === true),id);
     if (recordNotifications[key] && !recordNotifications[key].dismissed) resolveRecordNotification(key);
   } catch (error) {
     addRecordNotification('request-error-' + id + '-' + action,error.message);
@@ -1112,9 +1328,9 @@ async function updateRecordRequests(requests) {
     if (request.incoming) {
       if (request.status === 'accepted' && !pendingRecordTransfers.has(request.id)) {
         pendingRecordTransfers.add(request.id);
-        void lmu.trackRecordRequest('accept',request.id).then(updated => {
+        void lmu.trackRecordRequest('accept',request.id,undefined,recordNotifications[key]?.shareWithCommunity === true).then(updated => {
           pendingRecordTransfers.delete(request.id);
-          return updateRecordRequests(updated);
+          return applyTelemetryRequestResponse(updated,request.id);
         }).catch(error => {
           pendingRecordTransfers.delete(request.id);
           addRecordNotification(key + '-retry','Could not finish uploading the approved lap · ' + error.message);
@@ -1208,6 +1424,7 @@ async function refreshFriendRecords(changed = false) {
     if (generation !== friendConnectionGeneration) return;
     lastServerSync = new Date();
     serverSyncError = false;
+    void checkTprUpdate();
     if ($('server-events-dialog').open) renderServerEvents();
     if (requests) await updateRecordRequests(requests);
   } catch (error) {
@@ -1278,6 +1495,17 @@ function notifyBeatenRecords(records) {
       {record:{track:record.track,layout:record.layout,carClass:record.carClass,car:record.car,gameVersion:record.gameVersion}});
   }
 }
+function trophyIcon() {
+  const cup = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  cup.setAttribute('viewBox','0 0 64 64');
+  const silhouette = document.createElementNS(cup.namespaceURI,'path');
+  silhouette.setAttribute('d','M17 8h30v6h9v9c0 9-6 15-14 16a15 15 0 0 1-7 5v7h9v6H20v-6h9v-7a15 15 0 0 1-7-5C14 38 8 32 8 23v-9h9V8Zm0 12h-3v3c0 4 2 7 5 9a24 24 0 0 1-2-12Zm30 0a24 24 0 0 1-2 12c3-2 5-5 5-9v-3h-3Z');
+  cup.append(silhouette);
+  cup.setAttribute('aria-hidden','true');
+  return cup;
+}
+for (const medal of $('record-medals').children) medal.prepend(trophyIcon());
+
 function renderRecordMedals(candidates) {
   const hidden = $('hide-friend-records').checked;
   $('record-medals').hidden = hidden;
@@ -1302,10 +1530,24 @@ function renderRecordMedals(candidates) {
   });
 }
 
+function importedFriendRecordLap(friend, request) {
+  const requested = importedRequestedLap(request);
+  if (requested) return requested;
+  const recorded = +recordingDate(friend.recorded);
+  if (!Number.isFinite(recorded)) return undefined;
+  const {driver,car,time} = friend;
+  return settings.comparisonLaps?.find(entry => entry.path && entry.lap?.kind === 'complete' &&
+    normaliseDriverName(entry.driver) === normaliseDriverName(driver) &&
+    [entry.model,entry.car].some(name => normaliseDriverName(name) === normaliseDriverName(car)) &&
+    recordContestKey(recordDimensions(entry)) === friendContestKey(friend) &&
+    +recordingDate(entry.recorded) === recorded && Math.round(entry.lap.time * 1000) === Math.round(time * 1000));
+}
+
 function renderRecords(lastSession) {
   recordsRefreshPending = false;
   const lastDimensions = lastSession && recordDimensions(lastSession);
   const candidates = localRecordCandidates();
+  const localBest = new Map();
   if (!$('hide-friend-records').checked) {
     const primary = normaliseDriverName(settings.primaryDriver);
     const verified = new Set(friendRecords.filter(record => record.requestable).map(friendDriverContestKey));
@@ -1329,6 +1571,19 @@ function renderRecords(lastSession) {
     return select.value;
   });
 
+  const driverSelect = $('record-driver');
+  const drivers = new Map();
+  for (const {session} of candidates) {
+    const key = normaliseDriverName(session.driver);
+    if (key && !drivers.has(key)) drivers.set(key,session.driver.trim());
+  }
+  const currentDriver = lastSession ? '' : driverSelect.value;
+  driverSelect.replaceChildren(new Option('All Drivers',''));
+  for (const [key,label] of [...drivers].sort((a,b) => a[1].localeCompare(b[1]))) {
+    option(driverSelect,label,key);
+  }
+  if (drivers.has(currentDriver)) driverSelect.value = currentDriver;
+
   const versionSelect = $('record-version');
   const locked = settings.shareTrackRecords === true && settings.communityConfigured;
   versionSelect.disabled = locked;
@@ -1350,17 +1605,30 @@ function renderRecords(lastSession) {
   renderRecordMedals(candidates.filter(({session}) => recordMeetsMinimum(session, minimum)));
   $('record-last-session').disabled = !sessions.length;
   const fastest = new Map();
+  const unfilteredRecords = new Set();
   for (const row of candidates) {
-    if (filters.some((value, index) => value && value !== row.dimensions[index])) continue;
+    const contest = recordContestKey(row.dimensions);
+    if (!row.friend && row.session.path && recordMeetsMinimum(row.session,minimum) &&
+        (!locked || communityMinimumGameVersion !== null) &&
+        (!localBest.has(contest) || row.bestLap.time < localBest.get(contest).bestLap.time)) {
+      localBest.set(contest,row);
+    }
+    const key = JSON.stringify([contest,row.friend ? row.session.driver.trim().toLowerCase() : null]);
+    if (!locked || recordMeetsMinimum(row.session, minimum)) unfilteredRecords.add(key);
+    if ((driverSelect.value && driverSelect.value !== normaliseDriverName(row.session.driver)) ||
+        filters.some((value, index) => value && value !== row.dimensions[index]) ||
+        !recordMeetsMinimum(row.session, minimum)) continue;
     const version = recordedGameVersion(row.session.gameVersion);
-    if (!recordMeetsMinimum(row.session, minimum)) continue;
-    const key = JSON.stringify([recordContestKey(row.dimensions),row.friend ? row.session.driver.trim().toLowerCase() : null]);
     if (!fastest.has(key) || row.bestLap.time < fastest.get(key).bestLap.time) {
       fastest.set(key, {...row, version});
     }
   }
 
-  const records = [...fastest.values()].sort((a, b) => {
+  const records = [...fastest.values()].filter(({session,friend}) => {
+    if (!compatibleReferencesOnly) return true;
+    const candidate = friend ? importedFriendRecordLap(friend,latestTrackRecordRequest(friend)) : session;
+    return candidate?.path && (candidate.path === selected.path || matchesReferenceSession(candidate));
+  }).sort((a, b) => {
     for (let index = 0; index < 3; index++) {
       const order = a.dimensions[index].localeCompare(b.dimensions[index], undefined, {sensitivity:'accent'});
       if (order) return order;
@@ -1382,26 +1650,38 @@ function renderRecords(lastSession) {
     }
 
     const row = node('tr', undefined, 'record-result');
-    const time = node('td', undefined, 'numeric-cell');
+    const time = node('td', undefined, 'numeric-cell session-best');
     const referenceCell = node('td', undefined, 'session-comparison');
     const telemetryCell = node('td', undefined, 'record-telemetry');
     if (friend) {
+      const request = latestTrackRecordRequest(friend);
+      const imported = importedFriendRecordLap(friend,request);
+      const ownRecord = localBest.get(recordContestKey(dimensions));
       time.textContent = lapTime(bestLap.time);
-      const request = recordRequests.findLast(item => !item.incoming && item.recordId === friend.id && item.record.lapKey === friend.lapKey);
-      const imported = importedRequestedLap(request);
-      telemetryCell.textContent = imported ? 'Downloaded' : request?.status === 'uploaded' ? 'Ready to Download' :
-        friend.requestable ? 'On Request' : 'Unavailable';
+      if (imported) {
+        bindTelemetryRow(row,() => openImportedLap(imported));
+        addLoadedLapLabel(time,imported.path,imported.lap.id);
+      }
+      telemetryCell.textContent = imported ? 'Ready to Open' : request?.status === 'uploaded' ? 'Ready to Download' :
+        friend.requestable ? 'Request Required' : 'Unavailable';
       if (!imported && (!friend.requestable || !privateRequestsAvailable || !settings.primaryDriver || !lmu.trackRecordRequest)) {
         referenceCell.textContent = friend.requestable && !settings.primaryDriver ? 'Confirm Your Driver' : '—';
       }
       else {
         const requestLabel = 'Request the Telemetry for This Lap from ' + friend.driver;
-        const action = node('button',imported ? '+ Add as a Reference Lap' :
+        const action = node('button',imported ? useAsReferenceLabel :
           request ? {pending:'Request Sent',accepted:'Request Accepted',denied:'Request Denied',uploaded:'Download Telemetry Lap',expired:requestLabel,revoked:'Access Revoked'}[request.status]
             : requestLabel,imported ? 'reference-add' : 'record-request');
+        const actionIcon = imported ? 'bookmark' : request?.status === 'uploaded' ? 'download' : 'request';
+        addButtonIcon(action, actionIcon);
         action.disabled = !imported && ((!!request && !['uploaded','expired'].includes(request.status)) || pendingRecordRequests.has(friend.id) || pendingRecordTransfers.has(request?.id));
         if (imported) {
-          action.onclick = () => selectReferenceSession(imported.path);
+          action.hidden = !matchesReferenceSession(imported) || selected.path === imported.path;
+          action.setAttribute('aria-pressed', String(referenceSessionPath === imported.path));
+          action.onclick = event => {
+            event.stopPropagation();
+            selectReferenceSession(imported.path);
+          };
           addLoadedReferenceLabel(referenceCell,imported.path);
         } else action.onclick = async () => {
           if (pendingRecordRequests.has(friend.id)) return;
@@ -1418,13 +1698,25 @@ function renderRecords(lastSession) {
         };
         referenceCell.prepend(action);
       }
+      if (imported && ownRecord) {
+        const compare = node('button','Compare Best Laps','reference-add');
+        compare.type = 'button';
+        addButtonIcon(compare,'wave');
+        compare.title = 'Compare your best lap with ' + friend.driver + ' at ' + track;
+        compare.onclick = event => {
+          event.stopPropagation();
+          referenceSessionPath = imported.path;
+          referenceSessionLapId = imported.lap.id;
+          void openSession(ownRecord.session,ownRecord.bestLap);
+        };
+        referenceCell.prepend(compare);
+      }
     } else {
-      const button = node('button', lapTime(bestLap.time));
-      button.type = 'button';
-      row.onclick = () => openSession(session,bestLap);
-      time.append(button);
+      time.textContent = lapTime(bestLap.time);
+      bindTelemetryRow(row,() => openSession(session,bestLap));
+      addLoadedLapLabel(time,session.path,bestLap.id);
       if (session.path) {
-        telemetryCell.append(node('span','Available'));
+        telemetryCell.append(node('span','Ready to Open'));
         if (settings.communityConfigured && lmu.exportBestLap) {
           const upload = node('button','Export to Server','button-secondary');
           upload.type = 'button';
@@ -1435,7 +1727,10 @@ function renderRecords(lastSession) {
           telemetryCell.append(upload);
         }
       } else telemetryCell.textContent = 'Unavailable';
-      const addReference = node('button', '+ Add as a Reference Lap', 'reference-add');
+      const addReference = node('button', useAsReferenceLabel, 'reference-add');
+      addButtonIcon(addReference, 'bookmark');
+      addReference.hidden = !session.path || !matchesReferenceSession(session) ||
+        (selected.path === session.path && lap?.id === bestLap.id);
       addReference.type = 'button';
       addReference.setAttribute('aria-label', addReference.textContent + ': ' + car + ' at ' + track + ' · ' + lapTime(bestLap.time));
       addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path && referenceSessionLapId === bestLap.id));
@@ -1443,7 +1738,7 @@ function renderRecords(lastSession) {
         event.stopPropagation();
         selectReferenceSession(session.path, bestLap.id);
       };
-      referenceCell.append(addReference);
+      if (session.path) referenceCell.append(addReference);
       addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
     }
     if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
@@ -1467,10 +1762,15 @@ function renderRecords(lastSession) {
   }
   $('record-rows').replaceChildren(...rows);
   $('records-table').hidden = !rows.length;
-  $('records-status').textContent = records.length ? records.length + (records.length === 1 ? ' record' : ' records')
-    : locked && communityMinimumGameVersion === null ? 'Waiting for the Community Server Game Version.' : 'No matching records.';
+  setListCount('records-list-count',records.length,unfilteredRecords.size,'Record');
+  $('records-load-guide').hidden = !rows.some(row => row.classList.contains('session-row'));
+  positionListActions('records',!records.length);
+  $('records-status').textContent = records.length ? ''
+    : locked && communityMinimumGameVersion === null ? 'Waiting for the Community Server Game Version.'
+    : compatibleReferencesOnly ? noCompatibleReferences : 'No matching records.';
 }
 
+$('record-driver').onchange = () => renderRecords();
 for (const [key] of recordFields) {
   $('record-' + key).onchange = () => {
     if (key === 'track') $('record-layout').value = '';
@@ -1488,65 +1788,99 @@ $('record-last-session').onclick = () => {
 };
 $('record-clear').onclick = () => {
   for (const [key] of recordFields) $('record-' + key).value = '';
+  $('record-driver').value = '';
   unlockedRecordVersion = '';
   renderRecords();
 };
 
-function renderLibrary() {
+const recentSessionBatchSize = 50;
+const recentSessionTable = $('session-wrap');
+const recentSessionRows = $('sessions');
+let recentSessionMatches = [];
+let recentSessionTotal = 0;
+
+function appendRecentSessionRows(count = recentSessionBatchSize) {
+  const start = recentSessionRows.rows.length;
+  recentSessionRows.append(...recentSessionMatches.slice(start, start + count).map(recentSessionRow));
+  setListCount('recent-list-count', recentSessionRows.rows.length, recentSessionTotal, 'Session');
+}
+recentSessionTable.addEventListener('scroll', () => {
+  if (recentSessionRows.rows.length < recentSessionMatches.length &&
+      recentSessionTable.scrollHeight - recentSessionTable.scrollTop - recentSessionTable.clientHeight < 200) {
+    appendRecentSessionRows();
+  }
+}, {passive:true});
+
+function renderLibrary({resetRecentSessions = false} = {}) {
   refreshRecordsFromScan();
   renderResultsDistance();
   renderComparisonLaps();
-  const limit = Number($('limit').value);
   const timedSessions = sessions.filter(session => session.timed > 0);
-  const matches = filterLibraryEntries('recent-session-filters', timedSessions);
-  const rows = matches.slice(0, limit);
-  $('recent-sessions-no-matches').hidden = !$('library-loading').hidden || !timedSessions.length || !!matches.length;
+  const sessionType = $('recent-session-type').value;
+  const matches = filterLibraryEntries('recent-session-filters', timedSessions).filter(session =>
+    (!sessionType || session.session?.trim().toLowerCase().startsWith(sessionType)) &&
+    (!compatibleReferencesOnly || session.path === selected.path || matchesReferenceSession(session)));
+  const previousScroll = resetRecentSessions ? 0 : recentSessionTable.scrollTop;
+  const rowCount = resetRecentSessions ? recentSessionBatchSize :
+    Math.max(recentSessionBatchSize, recentSessionRows.rows.length);
+  recentSessionMatches = matches;
+  recentSessionTotal = timedSessions.length;
+  const noMatches = $('recent-sessions-no-matches');
+  noMatches.hidden = !$('library-loading').hidden || !timedSessions.length || !!matches.length;
+  noMatches.textContent = compatibleReferencesOnly ? noCompatibleReferences : 'No recent sessions match these filters.';
+  positionListActions('recent',!noMatches.hidden);
   $('empty').hidden = !$('library-loading').hidden || timedSessions.length > 0;
   $('empty-recording-guide').hidden = scanKey === undefined || !settings.telemetry || timedSessions.length > 0;
-  $('session-wrap').hidden = !rows.length;
+  recentSessionTable.hidden = !matches.length;
+  $('recent-load-guide').hidden = !matches.length;
   $('empty-title').textContent = settings.telemetry ? 'Waiting for timed laps' : 'Choose your telemetry folder';
   $('empty-text').textContent = settings.telemetry ? settings.telemetry
     : 'Choose the LMU installation or set the telemetry and results folders separately.';
-  const tableRows = rows.map(session => {
-    const row = node('tr', undefined, 'session-row');
-    const timestamp = node('td', undefined, 'session-date');
-    const date = recordingDate(session.recorded);
-    if (Number.isNaN(+date)) {
-      timestamp.textContent = session.recorded;
-    } else {
-      timestamp.append(node('strong', weekdayPeriod(date)), node('small', australianDateTime.format(date)));
-    }
-    const track = node('td');
-    const button = node('button', session.track || session.filename, 'session-track-name');
-    button.type = 'button';
-    const addReference = node('button', '+ Add this Session as a Reference Session', 'reference-add');
-    addReference.type = 'button';
-    addReference.setAttribute('aria-label', addReference.textContent + ': ' + (session.track || session.filename) + ' · ' + dateLabel(session.recorded));
-    addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path));
-    addReference.onclick = event => {
-      event.stopPropagation();
-      selectReferenceSession(session.path);
-    };
-    row.onclick = () => openSession(session);
-    const layout = session.trackLayout;
-    track.append(button, node('small', [
-      layout && layout !== session.track ? layout : '', session.car, session.driver, session.session
-    ].filter(Boolean).join(' · ')));
-    const comparison = node('td', undefined, 'session-comparison');
-    comparison.append(addReference);
-    addLoadedReferenceLabel(comparison, session.path);
-    const measure = (value, unit) => Number.isFinite(value) ? measurement(value,unit,1) : '—';
-    row.append(
-      timestamp,
-      track,
-      node('td', lapTime(session.best), 'session-metric session-best numeric-cell'),
-      node('td', session.timed, 'session-metric numeric-cell'),
-      node('td', measure(session.distanceKm, 'km'), 'session-metric numeric-cell'),
-      comparison
-    );
-    return row;
-  });
-  $('sessions').replaceChildren(...tableRows);
+  recentSessionRows.replaceChildren();
+  appendRecentSessionRows(rowCount);
+  recentSessionTable.scrollTop = previousScroll;
+}
+function recentSessionRow(session) {
+  const row = node('tr');
+  const timestamp = node('td', undefined, 'session-date');
+  const date = recordingDate(session.recorded);
+  if (Number.isNaN(+date)) {
+    timestamp.textContent = session.recorded;
+  } else {
+    timestamp.append(node('strong', weekdayPeriod(date)), node('small', australianDateTime.format(date)));
+  }
+  const track = node('td');
+  const trackName = node('strong', session.track || session.filename);
+  const addReference = node('button', useAsReferenceLabel, 'reference-add');
+  addButtonIcon(addReference, 'bookmark');
+  addReference.hidden = !matchesReferenceSession(session) || (selected.path === session.path &&
+    !session.laps.some(item => item.kind === 'complete' && item.id !== lap?.id));
+  addReference.type = 'button';
+  addReference.setAttribute('aria-label', addReference.textContent + ': ' + (session.track || session.filename) + ' · ' + dateLabel(session.recorded));
+  addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path));
+  addReference.onclick = event => {
+    event.stopPropagation();
+    selectReferenceSession(session.path);
+  };
+  bindTelemetryRow(row,() => openSession(session));
+  const layout = session.trackLayout;
+  track.append(trackName, node('small', [
+    layout && layout !== session.track ? layout : '', session.car, session.driver, session.session
+  ].filter(Boolean).join(' · ')));
+  addLoadedLapLabel(track,session.path);
+  const comparison = node('td', undefined, 'session-comparison');
+  comparison.append(addReference);
+  addLoadedReferenceLabel(comparison, session.path);
+  const measure = (value, unit) => Number.isFinite(value) ? measurement(value,unit,1) : '—';
+  row.append(
+    timestamp,
+    track,
+    node('td', lapTime(session.best), 'session-metric session-best numeric-cell'),
+    node('td', session.timed, 'session-metric numeric-cell'),
+    node('td', measure(session.distanceKm, 'km'), 'session-metric numeric-cell'),
+    comparison
+  );
+  return row;
 }
 function showLibraryLoading(loading) {
   $('library-loading').hidden = !loading;
@@ -1763,7 +2097,7 @@ function savedReferenceLapKey() {
 function selectReferenceSession(path, lapId) {
   referenceSessionPath = path;
   referenceSessionLapId = lapId;
-  manualReference = savedReferenceLapKey();
+  manualReference = path ? savedReferenceLapKey() : '';
   renderLibrary();
   if (!selected) {
     renderLoadedSessions();
@@ -1777,42 +2111,50 @@ function fillReferences() {
   const carSelect = $('car-select'), refSelect = $('reference-select');
   const currentCar = carSelect.value;
   const pool = (lap.kind === 'complete' ? sessions : []).filter(s =>
-    s.track.toLowerCase() === selected.track.toLowerCase() &&
-    (s.path === selected.path || (selected.carClass && s.carClass === selected.carClass)))
+    s.path === selected.path || matchesReferenceSession(s))
     .flatMap(session => session.laps.filter(item => item.kind === 'complete' &&
       (session.path !== selected.path || item.id !== lap.id)).map(lap => ({session, lap})))
+    .concat(lap.kind === 'complete' ? (settings.comparisonLaps ?? [])
+      .filter(session => session.path !== selected.path && matchesReferenceSession(session))
+      .map(session => ({session,lap:session.lap,imported:true})) : [])
     .sort((a,b) => Number(b.lap.validity === 'official') - Number(a.lap.validity === 'official') ||
       (a.lap.time ?? Infinity) - (b.lap.time ?? Infinity));
   const imported = (settings.comparisonLaps ?? []).find(entry => entry.path === referenceSessionPath);
-  const compatible = imported && lap.kind === 'complete' &&
-    imported.track.trim().toLowerCase() === selected.track.trim().toLowerCase() &&
-    (!imported.carClass || !selected.carClass || imported.carClass === selected.carClass);
   const target = imported ?? sessions.find(session => session.path === referenceSessionPath);
   $('reference-car-control').hidden = !!referenceSessionPath;
   $('reference-session-control').hidden = !referenceSessionPath;
   const ownModel = selected.model || selected.car;
   carSelect.replaceChildren();
-  option(carSelect, 'Same car · automatic', '');
-  for (const car of [...new Set(pool.map(x => x.session.model || x.session.car))].sort()) option(carSelect, car, car);
+  option(carSelect, carSelect.getAttribute('aria-label'), '');
+  const timedLapOrder = ({lap}) => Number.isFinite(lap.time) && lap.time > 0 ? lap.time : Infinity;
+  const otherCarLaps = pool.filter(entry => !entry.imported && Number.isFinite(timedLapOrder(entry)) &&
+    (entry.session.model || entry.session.car) !== ownModel);
+  const otherCars = new Set(otherCarLaps.map(({session}) => session.model || session.car).filter(Boolean));
+  for (const car of [...otherCars].sort()) option(carSelect, car, car);
   if ([...carSelect.options].some(x => x.value === currentCar)) carSelect.value = currentCar;
-  const candidates = imported ? (compatible ? [{session:imported, lap:imported.lap, imported:true}] : []) : pool.filter(x => referenceSessionPath
+  carSelect.title = carSelect.selectedOptions[0].text;
+  const candidates = pool.filter(x => referenceSessionPath
     ? x.session.path === referenceSessionPath
-    : (x.session.model || x.session.car) === (carSelect.value || ownModel));
+    : !carSelect.value || (x.session.model || x.session.car) === carSelect.value);
   $('reference-session-name').textContent = target
-    ? [target.car, imported ? (imported.driver || 'Imported lap') : dateLabel(target.recorded),
+    ? [viewerCarDetails(target), imported ? (imported.driver || 'Imported lap') : dateLabel(target.recorded),
        candidates.length ? '' : 'No compatible laps'].filter(Boolean).join(' · ')
     : 'Reference session unavailable';
-  const automatic = candidates.find(x => x.lap.time) || null;
-  refSelect.replaceChildren();
-  const automaticLabel = automatic ? 'Automatic · ' + lapLabel(automatic.lap) : 'Automatic · no timed lap';
+  const lapsInOrder = [...candidates].sort((a, b) => timedLapOrder(a) - timedLapOrder(b));
+  const automatic = (carSelect.value && !referenceSessionPath
+    ? lapsInOrder.find(entry => !entry.imported && Number.isFinite(timedLapOrder(entry)))
+    : candidates.find(x => x.lap.time && (referenceSessionPath ||
+      (!x.imported && (x.session.model || x.session.car) === ownModel)))) || null;
+  refSelect.replaceChildren(refSelect.firstElementChild);
+  const automaticScope = referenceSessionPath ? 'Reference Session' : carSelect.value ? 'Selected Car' : 'Same Car';
+  const automaticLabel = 'Automatic · ' + automaticScope + ' · ' + (automatic ? lapLabel(automatic.lap) : 'No Timed Lap');
   option(refSelect, automaticLabel, 'auto');
-  option(refSelect, 'No comparison', '');
+  option(refSelect, 'No Reference Lap', '');
   const referenceLabel = value => lapLabel(value.lap) + ' · ' + (value.imported ? (value.session.driver || 'Imported lap') : dateLabel(value.session.recorded));
-  const lapsInOrder = [...candidates].sort((a, b) => (a.lap.number ?? Infinity) - (b.lap.number ?? Infinity));
   for (const value of lapsInOrder) {
     option(refSelect, referenceLabel(value), referenceKey(value));
   }
-  fitLapDropdown(refSelect, [automaticLabel, 'Automatic · no timed lap', 'No comparison', ...pool.map(referenceLabel), ...candidates.filter(value => value.imported).map(referenceLabel)]);
+  fitLapDropdown(refSelect, [automaticLabel, 'No Reference Lap', ...pool.map(referenceLabel)]);
   if (manualReference !== undefined && [...refSelect.options].some(x => x.value === manualReference)) {
     refSelect.value = manualReference;
     reference = candidates.find(x => referenceKey(x) === manualReference) || null;
@@ -1824,6 +2166,9 @@ function fillReferences() {
     reference = automatic;
   }
 }
+function openImportedLap(entry) {
+  return openSession({...entry, imported:true, laps:[entry.lap], best:entry.lap.time}, entry.lap);
+}
 async function openSession(value, initialLap, comparison) {
   if (!value.laps.length) return;
   selected = value;
@@ -1832,16 +2177,33 @@ async function openSession(value, initialLap, comparison) {
   trackCameraOverride = undefined;
   fitTrack();
   lap = initialLap || value.laps.find(item => item.time === value.best && item.time) || value.laps[0];
+  if (referenceSessionPath) {
+    const target = (settings.comparisonLaps ?? []).find(session => session.path === referenceSessionPath)
+      ?? sessions.find(session => session.path === referenceSessionPath);
+    if (!target || (target.path === selected.path
+      ? selected.imported || referenceSessionLapId === lap.id
+      : !matchesReferenceSession(target))) {
+      referenceSessionPath = referenceSessionLapId = undefined;
+    }
+  }
   manualReference = savedReferenceLapKey();
   $('car-select').replaceChildren();
   fillLaps();
   fillReferences();
   $('track').textContent = value.track;
-  $('car').textContent = value.car;
   $('viewer-tab').disabled = false;
   setView('viewer');
   await readPrimary();
 }
+$('clear-loaded-session').onclick = $('clear-viewer-session').onclick = () => {
+  ++loadGeneration;
+  compatibleReferencesOnly = false;
+  ready = referenceLoading = pinned = false;
+  selected = lap = reference = primary = secondary = undefined;
+  referenceSessionPath = referenceSessionLapId = manualReference = practiceComparison = undefined;
+  $('viewer-tab').disabled = true;
+  setView('library');
+};
 function message(text = '') {
   $('viewer-message').textContent = text;
   $('viewer-message').hidden = !text;
@@ -1849,7 +2211,7 @@ function message(text = '') {
 const exportBestLapButton = $('export-best-lap');
 let exportingBestLap = false;
 function updateBestLapExport() {
-  exportBestLapButton.disabled = exportingBestLap || !(selected?.best > 0);
+  exportBestLapButton.disabled = exportingBestLap || selected?.imported || !(selected?.best > 0);
 }
 const discordWebhookInput = $('discord-webhook');
 const discordWebhookStatus = $('discord-webhook-status');
@@ -1959,7 +2321,7 @@ async function readPrimary() {
   }
   message('Loading lap telemetry…');
   try {
-    const channels = await lmu.lap(selected.path, currentLap.id);
+    const channels = selected.imported ? await lmu.comparisonLap(selected.path) : await lmu.lap(selected.path, currentLap.id);
     if (token !== loadGeneration) return;
     primary = prepare(currentLap, channels);
     renderInCarSettings();
@@ -2075,6 +2437,9 @@ function turboPressureReference() {
 
 function unitConversion(name, unit) {
   const normalized = unit?.trim().toLowerCase();
+  if (/ride[\s_-]*heights?/i.test(name) && (normalized === 'm' || normalized === 'mm')) {
+    return ['mm', normalized === 'm' ? 1000 : 1];
+  }
   if (['km/h','kph','kmh','mph'].includes(normalized)) {
     const mph = usingImperial('speed');
     return [mph ? 'mph' : 'km/h', normalized === 'mph' ? (mph ? 1 : 1.609344) : (mph ? 1 / 1.609344 : 1)];
@@ -2259,6 +2624,12 @@ function orderSummaryOptions(options, keyOf) {
   const ranks = new Map((settings.summaryChannelOrder ?? []).map((key, index) => [key, index]));
   return options.sort((a, b) => (ranks.get(keyOf(a)) ?? Infinity) - (ranks.get(keyOf(b)) ?? Infinity));
 }
+const summaryTemperaturePairs = [
+  {setting:'mergeSummaryBrakes', key:'mergedBrakes', channels:['frontBrakes','rearBrakes'],
+    label:'Front and Rear Brake Temperatures', names:['Front','Rear']},
+  {setting:'mergeSummaryEngineTemperatures', key:'mergedEngineTemperatures', channels:['oil','water'],
+    label:'Engine Oil and Water Temperatures', names:['Oil','Water']}
+];
 const summaryTemperatureOptions = [
   ['tyres', 'Hottest Tyre Temperature'], ['frontBrakes', 'Front Brake Temperature'],
   ['rearBrakes', 'Rear Brake Temperature'], ['oil', 'Engine Oil Temperature'],
@@ -2342,13 +2713,16 @@ function extraSummaryName(name) {
 const summaryChartColours = {
   tyres: '#f7d27a',
   frontBrakes: '#ffac76',
-  rearBrakes: '#f5bd9a',
+  rearBrakes: '#67d8ed',
   oil: '#eaa8ed',
   water: '#8dbdff',
   air: '#9adac9',
   track: '#c6b7ff',
   virtualEnergy: '#c6f36c'
 };
+function summaryChannelColour(channel) {
+  return graphColor('summary:' + channel, summaryChartColours[channel] ?? graphColor(channel));
+}
 function attachChartResize(handle, getHeight, setHeight, persist, reset) {
   handle.title = "Double-click to restore default size";
   handle.addEventListener('dblclick', reset);
@@ -2388,45 +2762,69 @@ function redrawSummaryPlots() {
   for (const redraw of summaryPlots.values()) redraw();
 }
 
-function summaryChart(key, label, unit, readings, endpoints) {
+function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
   const section = node('div', null, 'summary-chart');
+  const pair = summaryTemperaturePairs.find(pair => pair.key === key);
+  const [firstKey,secondKey] = pair?.channels ?? [key];
   const isUsage = key === 'virtualEnergy' || key === 'Fuel Level';
-  const colour = summaryChartColours[key] ?? graphColor(key);
+  const colour = summaryChannelColour(firstKey);
   section.style.setProperty('--summary-chart-colour', colour);
-  const format = value => Number.isFinite(value) ? number(value, telemetryDecimalPlaces(summaryChannelKeys[key] ?? key, summaryDecimalDefault(key))) + (unit ? ' ' + unit : '') : '—';
+  const format = (value, channel = firstKey) => Number.isFinite(value)
+    ? number(value, telemetryDecimalPlaces(summaryChannelKeys[channel] ?? channel, summaryDecimalDefault(channel))) + (unit ? ' ' + unit : '')
+    : '—';
   const heading = node('strong', label);
   const readout = node('span', '', 'summary-chart-readout');
   const plot = node('div', null, 'summary-chart-body');
   section.append(node('div', null, 'summary-chart-header'), plot);
   section.firstElementChild.append(heading);
+  if (secondReadings) {
+    readout.classList.add('summary-pair-readout');
+    const legend = node('span', undefined, 'summary-pair-legend');
+    pair.names.forEach((name,index) => {
+      const item = node('span',name);
+      item.style.color = summaryChannelColour(pair.channels[index]);
+      legend.append(item);
+    });
+    section.firstElementChild.append(legend);
+  }
 
 
   let points = (selected?.laps ?? []).map(lap => ({
     lapNumber: lap.number,
     label: lap.number == null ? 'Opening segment' : 'Lap ' + lap.number,
-    value: readings?.[lap.id]
+    value: readings?.[lap.id],
+    second: secondReadings?.[lap.id]
   }));
   if (isUsage) {
     points = points.filter(point => Number.isFinite(point.value)).sort((a, b) => a.lapNumber - b.lapNumber);
   }
-  const readoutWidth = points.reduce((width, point) => Math.max(width, point.label.length + 3 + format(point.value).length), 0);
+  const pointLabel = point => point.label + (secondReadings
+    ? ' · ' + pair.names[0] + ' ' + format(point.value) + ' · ' + pair.names[1] + ' ' + format(point.second,secondKey)
+    : ' · ' + format(point.value));
+  const readoutWidth = points.reduce((width, point) => Math.max(width, pointLabel(point).length), 0);
   readout.style.width = 'calc(' + readoutWidth + 'ch + 12px)';
-  const thresholdKey = key === 'frontBrakes' || key === 'rearBrakes' ? 'brakes' : key;
-  const threshold = convert('',hotTemperature(selected?.carClass, thresholdKey),'°C');
-  const isHot = value => Number.isFinite(threshold) && Number.isFinite(value) && value >= threshold;
-  const values = points.map(point => point.value).filter(Number.isFinite);
-  const hasWarnings = values.some(isHot);
+  const thresholdFor = channel => convert('',hotTemperature(selected?.carClass,
+    ['frontBrakes','rearBrakes'].includes(channel) ? 'brakes' : channel),'°C');
+  const threshold = thresholdFor(firstKey);
+  const secondThreshold = pair ? thresholdFor(secondKey) : undefined;
+  const isHot = (value, limit = threshold) => Number.isFinite(limit) && Number.isFinite(value) && value >= limit;
+  const firstValues = points.map(point => point.value).filter(Number.isFinite);
+  const secondValues = points.map(point => point.second).filter(Number.isFinite);
+  const values = firstValues.concat(secondValues);
+  const hasWarnings = firstValues.some(value => isHot(value)) ||
+    secondValues.some(value => isHot(value,secondThreshold));
   heading.classList.toggle('temperature-hot', hasWarnings);
 
   if (values.length) {
     const canvas = node('canvas', null, 'summary-chart-plot');
+    if (pair) canvas.style.setProperty('--summary-plot-height-multiplier', '2');
     canvas.tabIndex = 0;
     canvas.setAttribute('aria-label', label + ' by lap. Use arrow keys to inspect.');
     plot.append(canvas);
     const ctx = canvas.getContext('2d');
     const min = Math.min(...values);
     const max = Math.max(...values);
-    const peakIndex = points.findIndex(point => point.value === max);
+    const peakIndex = points.findIndex(point => point.value === max || point.second === max);
     const span = max - min;
     const warningRadius = 4;
     const peakRingRadius = warningRadius + 2;
@@ -2439,8 +2837,8 @@ function summaryChart(key, label, unit, readings, endpoints) {
     function draw(index) {
       active = index;
       const point = points[index];
-      readout.textContent = point ? point.label + ' · ' + format(point.value) : '';
-      readout.classList.toggle('temperature-hot', isHot(point?.value));
+      readout.textContent = point ? pointLabel(point) : '';
+      readout.classList.toggle('temperature-hot', isHot(point?.value) || isHot(point?.second,secondThreshold));
       const ratio = canvas.ownerDocument.defaultView.devicePixelRatio || 1;
       const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
       if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
@@ -2449,7 +2847,8 @@ function summaryChart(key, label, unit, readings, endpoints) {
       ctx.clearRect(0, 0, width, height);
       if (point) {
         const px = x(index);
-        const py = Number.isFinite(point.value) ? y(point.value) : height / 2;
+        const value = Number.isFinite(point.value) ? point.value : point.second;
+        const py = Number.isFinite(value) ? y(value) : height / 2;
         const left = px + readout.offsetWidth + 8 <= width ? px + 8 : px - readout.offsetWidth - 8;
         readout.style.left = Math.max(0, Math.min(width - readout.offsetWidth, left)) + 'px';
         readout.style.top = Math.max(0, Math.min(height - readout.offsetHeight, py - readout.offsetHeight / 2)) + 'px';
@@ -2460,33 +2859,42 @@ function summaryChart(key, label, unit, readings, endpoints) {
         ctx.lineTo(px, height);
         ctx.stroke();
       }
-      ctx.strokeStyle = colour;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      let connected = false;
-      points.forEach(({value}, i) => {
-        if (!Number.isFinite(value)) {
-          connected = false;
-          return;
-        }
-        if (connected) ctx.lineTo(x(i), y(value));
-        else ctx.moveTo(x(i), y(value));
-        connected = true;
-      });
-      ctx.stroke();
-      points.forEach(({value}, i) => {
-        if (!Number.isFinite(value)) return;
-        const hot = isHot(value);
-        ctx.fillStyle = hot ? elementColour('warning','#ff8787') : colour;
+      const series = secondReadings
+        ? [['value',colour,threshold],['second',summaryChannelColour(secondKey),secondThreshold]]
+        : [['value',colour,threshold]];
+      for (const [field,traceColour,limit] of series) {
+        ctx.strokeStyle = traceColour;
+        ctx.setLineDash(field === 'second' ? [4,3] : []);
+        ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.arc(x(i), y(value), hot ? warningRadius : i === index ? 3.5 : 1.75, 0, Math.PI * 2);
-        ctx.fill();
-        if (hot && i === index) {
-          ctx.strokeStyle = '#fff';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-        }
-      });
+        let connected = false;
+        points.forEach((point, i) => {
+          const value = point[field];
+          if (!Number.isFinite(value)) {
+            connected = false;
+            return;
+          }
+          if (connected) ctx.lineTo(x(i), y(value));
+          else ctx.moveTo(x(i), y(value));
+          connected = true;
+        });
+        ctx.stroke();
+        points.forEach((point, i) => {
+          const value = point[field];
+          if (!Number.isFinite(value)) return;
+          const hot = isHot(value,limit);
+          ctx.fillStyle = hot ? elementColour('warning','#ff8787') : traceColour;
+          ctx.beginPath();
+          ctx.arc(x(i), y(value), hot ? warningRadius : i === index ? 3.5 : 1.75, 0, Math.PI * 2);
+          ctx.fill();
+          if (hot && i === index) {
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        });
+      }
+      ctx.setLineDash([]);
       const lowestIndex = isUsage ? points.findIndex(point => point.value === min) : -1;
       ctx.lineWidth = 1.5;
       if (peakIndex !== lowestIndex) {
@@ -3051,6 +3459,14 @@ function renderSessionSummary() {
   ].filter(([key]) => !hidden.has(key));
   chartOptions.push(...extraSummaryOptions(selected));
   orderSummaryOptions(chartOptions, ([key]) => key);
+  for (const {setting,key,channels,label} of summaryTemperaturePairs) {
+    if (!settings[setting] || channels.some(channel => hidden.has(channel))) continue;
+    const [first,second] = channels.map(channel => chartOptions.findIndex(([key]) => key === channel));
+    const [, , unit, firstValues] = chartOptions[first];
+    const [, , , secondValues] = chartOptions[second];
+    chartOptions.splice(Math.max(first,second),1);
+    chartOptions.splice(Math.min(first,second),1,[key,label,unit,firstValues,undefined,secondValues]);
+  }
   $('session-highlights').hidden = !chartOptions.length;
   summaryPlots.clear();
   $('session-charts').replaceChildren(...chartOptions.map(option => summaryChart(...option)));
@@ -3167,7 +3583,6 @@ function setTelemetryZoom(next) {
     return;
   }
   previousTrackCamera ??= {mode:trackCameraMode.value, camera:{...trackCamera}, override:trackCameraOverride};
-  selectedSectionOption.disabled = false;
   trackCameraMode.value = 'section';
   trackCameraOverride = undefined;
 }
@@ -3195,7 +3610,7 @@ function buildChannels(updateSelector = true) {
     return row;
   });
   $('channel-list').replaceChildren(...rows);
-  if (!rows.length) $('channel-list').append(node('p', 'Use Select Channels to show their values here.'));
+  if (!rows.length) $('channel-list').append(node('p', 'Use Select Telemetry Channels to show their values here.'));
   if (updateSelector && $('channel-dialog').open) {
     if ($('channel-order-pane').hidden) buildChannelSelector(); else buildChannelOrder();
   }
@@ -3269,18 +3684,20 @@ function showChannelMode(order) {
 
 function updateMergePicker() {
   const filter = $('merge-search').value.trim().toLowerCase();
-  const names = availableChannels().filter(name => (name.toLowerCase().includes(filter) || telemetryName(name).toLowerCase().includes(filter)) &&
-    [primary, secondary].some(data => data?.channels[name]?.rows.some(row => {
+  const names = [...new Set([...availableChannels(), ...mergeChoices])].filter(name => name !== mergeChart.channelName && (name.toLowerCase().includes(filter) || telemetryName(name).toLowerCase().includes(filter)) &&
+    (mergeChoices.has(name) || [primary, secondary].some(data => data?.channels[name]?.rows.some(row => {
       const channel = data.channels[name];
       return (channel.rate ? row : row.slice(1)).some(Number.isFinite);
-    })));
+    }))));
   $('merge-options').replaceChildren(...names.map(name => {
     const label = node('label');
     const box = node('input');
     box.type = 'checkbox';
     box.checked = mergeChoices.has(name);
     box.addEventListener('change', () => {
-      if (box.checked) mergeChoices.add(name); else mergeChoices.delete(name);
+      if (box.checked && mergeChoices.size < maxChartOverlays) mergeChoices.add(name);
+      else if (!box.checked) mergeChoices.delete(name);
+      box.checked = mergeChoices.has(name);
       updateMergeCount();
     });
     const unit = displayUnit(name,(primary.channels[name] || secondary?.channels[name])?.unit);
@@ -3291,11 +3708,20 @@ function updateMergePicker() {
   updateMergeCount();
 }
 function updateMergeCount() {
-  $('merge-count').textContent = mergeChoices.size + ' selected';
+  $('merge-count').textContent = mergeChoices.size + ' of ' + maxChartOverlays + ' selected';
+  for (const box of $('merge-options').querySelectorAll('input')) {
+    box.disabled = !box.checked && mergeChoices.size >= maxChartOverlays;
+  }
 }
-function openMerge() {
+function chartOverlayChannels(key) {
+  const saved = settings.chartOverlays?.[key] ?? (key === 'delta' ? settings.deltaChannels : []);
+  return Array.isArray(saved) ? [...new Set(saved)].slice(0,maxChartOverlays) : [];
+}
+function openMerge(key, title, channelName) {
   if (!ready) return;
-  mergeChoices = new Set(settings.deltaChannels || []);
+  mergeChart = {key,channelName};
+  mergeChoices = new Set(chartOverlayChannels(key).filter(name => name !== channelName));
+  $('merge-title').textContent = title + ' Overlays';
   $('merge-search').value = '';
   $('merge-dialog').showModal();
   updateMergePicker();
@@ -3305,9 +3731,14 @@ $('merge-search').oninput = updateMergePicker;
 $('cancel-merge').onclick = () => $('merge-dialog').close();
 $('merge-form').onsubmit = event => {
   event.preventDefault();
-  save({deltaChannels:[...mergeChoices]});
+  const column = $('plot-column');
+  const scrollTop = column.scrollTop;
+  const {key} = mergeChart;
+  save({chartOverlays:{...settings.chartOverlays,[key]:[...mergeChoices]}});
   $('merge-dialog').close();
   buildCharts();
+  column.scrollTop = scrollTop;
+  chartRows.find(row => row.key === key)?.edit.focus({preventScroll:true});
 };
 function colorControl(label, key, fallback, onChange) {
   const input = node('input',undefined,'chart-color');
@@ -3390,6 +3821,11 @@ function openDisplayPicker(title, key, options, apply) {
   list.classList.toggle('summary-channel-options', isSummary);
   $('graph-dialog-title').textContent = title;
   $('summary-channel-note').hidden = key !== 'hiddenSummary';
+  for (const {setting} of summaryTemperaturePairs) {
+    const input = $(setting);
+    input.parentElement.hidden = !isSummary;
+    input.checked = settings[setting] === true;
+  }
   $('graph-options-search').value = '';
   $('graph-options-empty').hidden = true;
   const hidden = key === 'hiddenSummary' ? hiddenSummaryChannels() : new Set(settings[key] ?? defaultHiddenGraphs);
@@ -3405,7 +3841,12 @@ function openDisplayPicker(title, key, options, apply) {
     if (noData) label.append(node('small','No Data','graph-option-no-data'));
     if (!isSummary) return label;
     const row = node('div', undefined, 'summary-channel-option');
-    row.append(label);
+    const swatch = node('input', undefined, 'chart-color');
+    swatch.type = 'color';
+    swatch.dataset.summaryChannel = value;
+    swatch.defaultValue = summaryChannelColour(value);
+    swatch.setAttribute('aria-label', title + ' Colour');
+    row.append(label,swatch);
     for (const [direction, symbol] of [['up', '↑'], ['down', '↓']]) {
       const button = node('button', symbol);
       button.type = 'button';
@@ -3563,7 +4004,7 @@ function openSummaryChannelPicker(event) {
   for (const name of [...names].filter(name => !defaultSummaryChannels.has(name)).sort((a, b) => a.localeCompare(b))) {
     options.push([extraSummaryName(name), name, chosen.has(name)]);
   }
-  openDisplayPicker('Choose Session Summary channels', 'hiddenSummary', orderSummaryOptions(options, ([, key]) => key), renderSessionSummary);
+  openDisplayPicker('Select Summary Channels', 'hiddenSummary', orderSummaryOptions(options, ([, key]) => key), renderSessionSummary);
 }
 $('settings-summary').onclick = openSummaryChannelPicker;
 $('choose-summary-channels').onclick = openSummaryChannelPicker;
@@ -3574,15 +4015,24 @@ $('graph-form').onsubmit=event=>{
   const hidden = isSummary ? hiddenSummaryChannels() : new Set();
   const selectionKey = isSummary ? 'extraSummaryChannels' : 'extraGraphChannels';
   const chosen = new Set(isSummary ? settings[selectionKey] : []);
-  for (const input of $('graph-options').querySelectorAll('input')) {
+  const options = $('graph-options');
+  for (const input of options.querySelectorAll('input[type="checkbox"]')) {
     const list = input.hasAttribute('data-extra-channel') ? chosen : hidden;
     const include = list === chosen ? input.checked : !input.checked;
     if (include) list.add(input.value);
     else list.delete(input.value);
   }
   const changes = {[displayPicker.key]:[...hidden], [selectionKey]:[...chosen]};
+  if (isSummary) {
+    for (const {setting} of summaryTemperaturePairs) changes[setting] = $(setting).checked;
+    const colours = [...options.querySelectorAll('[data-summary-channel]')].filter(input => input.value !== input.defaultValue);
+    if (colours.length) {
+      changes.colors = {...settings.colors};
+      for (const input of colours) changes.colors['summary:' + input.dataset.summaryChannel] = input.value;
+    }
+  }
   if (isSummary && displayPicker.reordered) {
-    const shown = [...$('graph-options').querySelectorAll('input')].map(input => input.value);
+    const shown = [...options.querySelectorAll('input[type="checkbox"]')].map(input => input.value);
     const shownKeys = new Set(shown);
     changes.summaryChannelOrder = [...shown, ...(settings.summaryChannelOrder ?? []).filter(key => !shownKeys.has(key))];
   }
@@ -3624,7 +4074,7 @@ let cornerTimeLossOpen = true;
 let cornerTimeLossHeight;
 
 function cornerComparisonLabel(currentLap, comparison) {
-  const current = currentLap.number == null ? 'Selected Lap' : 'Lap ' + currentLap.number;
+  const current = currentLap.number == null ? loadedTraceLabel : 'Lap ' + currentLap.number;
   const [, driver] = chartDriverLabels(selected?.driver, comparison.session.driver);
   const referenceLap = comparison.lap;
   const referenceLabel = referenceLap.number == null ? 'Reference Lap' : 'Lap ' + referenceLap.number;
@@ -3942,7 +4392,7 @@ function cornerTimeLossPanel() {
         if (best.lap.id === reference.lap.id) {
           actions.append(node('span', 'Comparing With Best'));
         } else if (best.lap.id === lap.id) {
-          actions.append(node('span', 'Selected Lap Is Best'));
+          actions.append(node('span', 'Loaded Lap Is Best'));
         } else {
           const representative = lap;
           const compare = node('button', 'Compare With Best');
@@ -4012,19 +4462,32 @@ function cornerTimeLossPanel() {
   return {toggle, panel};
 }
 
+function viewerCarDetails(session) {
+  return [session.model || session.car, session.carClass].filter(Boolean).join(' · ');
+}
+function viewerLapDetails(label, session, currentLap) {
+  const driverAndCar = [label, session.driver, viewerCarDetails(session)].filter(Boolean).join(' · ');
+  const dateAndLap = [dateLabel(session.recorded), lapLabel(currentLap)].filter(Boolean).join(' · ');
+  return driverAndCar + '\n' + dateAndLap;
+}
 function updateActiveLapComparison() {
   $('active-lap-comparison').hidden = !lap;
   if (!lap) return;
-  const [driver] = chartDriverLabels(selected?.driver);
-  $('active-selected-lap').textContent = driver + ' · ' + lapLabel(lap);
+  $('viewer-loaded-session').textContent = viewerLapDetails('Loaded Session', selected, lap);
+  $('active-selected-lap').textContent = [loadedTraceLabel,selected?.driver,lapLabel(lap)].filter(Boolean).join(' · ');
   const comparing = !!(reference && secondary);
+  const loadedReference = $('viewer-loaded-reference');
+  loadedReference.classList.toggle('reference-color', comparing);
+  loadedReference.textContent = comparing
+    ? viewerLapDetails('Loaded Reference', reference.session, reference.lap)
+    : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap Loaded';
   $('active-comparison-vs').hidden = !comparing && !referenceLoading;
   const referenceLabel = $('active-reference-lap');
   referenceLabel.classList.toggle('reference-color', comparing);
   referenceLabel.classList.toggle('reference-loading', referenceLoading && !comparing);
   referenceLabel.textContent = comparing
-    ? (reference.session.driver?.trim().split(/\s+/)[0] || 'Reference') + ' · ' + lapLabel(reference.lap)
-    : referenceLoading ? 'Loading Reference…' : 'No Reference Lap';
+    ? [referenceTraceLabel,reference.session.driver,lapLabel(reference.lap)].filter(Boolean).join(' · ')
+    : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap';
 }
 $('change-active-reference').onclick = () => {
   const picker = $('reference-select');
@@ -4076,27 +4539,28 @@ function buildCharts() {
   selectedCorner = undefined;
   selection = null;
   chartRows = [];
-  const overlays = settings.deltaChannels || [];
   const hidden = new Set(settings.hiddenGraphs ?? defaultHiddenGraphs);
   const chosen = new Set(settings.extraGraphChannels);
   const extra = [...chosen].filter(name => !builtInGraphKeys.has(name))
     .sort((a,b) => a.localeCompare(b)).map(name => [name,name]);
   const specs = orderTelemetryGraphs([...(secondary?.useDistance && primary.useDistance
-    ? [[...deltaGraph,overlays.length ? {channels:overlays} : null]] : []), ...chartSpecs, ...extra]
+    ? [deltaGraph] : []), ...chartSpecs, ...extra]
     .filter(([,key])=>key === 'delta' || !hidden.has(key)), ([,key]) => key);
   const activationControls = new Map(speedActivations.map(([channel]) => [channel, []]));
-  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference?.session.driver);
   const deltaWidth = number(Math.max(lap.end - lap.start, secondary ? secondary.lap.end - secondary.lap.start : 0), 3).length + 3;
-  const fragments = specs.map(([label, key, group]) => {
+  const fragments = specs.map(([label, key]) => {
     const title = key === 'delta' ? label : telemetryGraphName(key, label);
     const chart = node('section', undefined, 'chart');
     const head = node('div', undefined, 'card-head');
     const output = node('output', undefined, 'chart-reading');
     const channelName = key === 'tyres' ? tyreName() : key;
+    const configured = chartOverlayChannels(key).filter(name => name !== channelName);
+    const channels = configured.filter(name => primary.channels[name] || secondary?.channels[name]);
+    const group = channels.length ? {channels} : null;
     const mainLayout = key === 'delta' ? null : chartReadingLayout(primary, channelName);
     const referenceLayout = key !== 'delta' && secondary ? chartReadingLayout(secondary, channelName) : null;
     const readingWidth = mainLayout
-      ? selectedDriver.length + 1 + mainLayout.length + (referenceLayout ? referenceDriver.length + 4 + referenceLayout.length : 0)
+      ? loadedTraceLabel.length + 1 + mainLayout.length + (referenceLayout ? referenceTraceLabel.length + 4 + referenceLayout.length : 0)
       : deltaWidth;
     output.style.inlineSize = readingWidth + 'ch';
     head.append(node('h2', title));
@@ -4109,15 +4573,13 @@ function buildCharts() {
       scheduleRender();
     }));
     const cornerAnalysis = key === 'delta' ? cornerTimeLossPanel() : null;
-    if (cornerAnalysis) {
-      const edit = node('button',group ? 'Edit Overlays' : 'Add Channels','chart-edit button-secondary');
-      edit.onclick = openMerge;
-      head.append(edit);
-    }
-    const exportImage = node('button', undefined, 'chart-edit chart-export button-secondary');
-    const downloadIcon = node('span', '↓', 'chart-export-icon');
-    downloadIcon.setAttribute('aria-hidden', 'true');
-    exportImage.append(downloadIcon, 'Export Image');
+    const edit = node('button', configured.length ? 'Edit Overlays' : 'Add Channels', 'chart-edit button-secondary');
+    edit.type = 'button';
+    edit.setAttribute('aria-label', edit.textContent + ' for ' + title);
+    edit.onclick = () => openMerge(key, title, channelName);
+    head.append(edit);
+    const exportImage = node('button', 'Export Image', 'chart-edit chart-export button-secondary');
+    addButtonIcon(exportImage, 'download');
     exportImage.type = 'button';
     exportImage.setAttribute('aria-label', 'Export Image for ' + title);
     exportImage.onclick = async () => {
@@ -4189,7 +4651,8 @@ function buildCharts() {
     const exportActions = node('span', undefined, 'chart-export-actions');
     exportActions.append(exportImage);
     if (key !== 'delta') {
-      const close = node('button', '×', 'chart-close');
+      const close = node('button', undefined, 'chart-close');
+      addButtonIcon(close, 'close');
       close.type = 'button';
       close.title = 'Hide ' + title;
       close.setAttribute('aria-label', close.title);
@@ -4211,7 +4674,7 @@ function buildCharts() {
     canvas.setAttribute('aria-label', title);
     const resizer = node('button', undefined, 'resize');
     resizer.setAttribute('aria-label', 'Resize ' + title + ' chart. Use arrow keys.');
-    const row = {key, canvas, output, cache:null, group, hasSpeedTrace, cornerAnalysis, deltaWidth, mainLayout, referenceLayout, hiddenWheels:wheelOptions.hiddenWheels, readings:[]};
+    const row = {key, edit, canvas, output, cache:null, group, hasSpeedTrace, cornerAnalysis, deltaWidth, mainLayout, referenceLayout, hiddenWheels:wheelOptions.hiddenWheels, readings:[]};
     const legend = node('div',undefined,'merge legend');
     if (group) {
         group.channels.forEach((name,index) => {
@@ -4219,10 +4682,11 @@ function buildCharts() {
         const unit = displayUnit(name,channel?.unit) || name;
         const item = node('span');
         const text = node('span', telemetryName(name) + (channel?.unit ? ' (' + unit + ')' : ''));
+        const axisLabel = node('span');
         const read = node('span', undefined, 'chart-reading');
         const main = chartReadingLayout(primary, name);
         const ref = secondary ? chartReadingLayout(secondary, name) : null;
-        read.style.inlineSize = (main.length + (ref ? 3 + ref.length : 0)) + 'ch';
+        read.style.inlineSize = (loadedTraceLabel.length + 1 + main.length + (ref ? referenceTraceLabel.length + 4 + ref.length : 0)) + 'ch';
         const fallback = mergeColors[(index + 1) % mergeColors.length], colorKey = key+'|'+name;
         text.style.color = graphColor(colorKey,fallback);
         const wheelOptions = wheelTraceControls(key, name, () => graphColor(colorKey,fallback), redrawWheels);
@@ -4232,12 +4696,12 @@ function buildCharts() {
           row.cache = null;
           scheduleRender();
         });
-        item.append(button,' ',text,' ',read);
+        item.append(button,' ',text,' ',axisLabel,' ',read);
         if (wheelOptions.controls) item.append(' ',wheelOptions.controls);
-        row.readings.push({name,read,main,ref,hiddenWheels:wheelOptions.hiddenWheels});
+        row.readings.push({name,read,axisLabel,main,ref,hiddenWheels:wheelOptions.hiddenWheels});
         legend.append(item);
       });
-      legend.prepend(node('span','Delta uses seconds · each other unit has its own scale'));
+      if (secondary) legend.prepend(node('span',loadedTraceLabel + ' · Solid  |  ' + referenceTraceLabel + ' · Dashed'));
     }
     chartRows.push(row);
     const setHeight = height => {
@@ -4451,7 +4915,6 @@ function baseChart(row, width, height, ratio) {
   const [left,right] = xBounds(width), top = 12 * textScale(), bottom = height - 30 * textScale();
   const x = value => left + (value - range[0]) / (range[1] - range[0]) * (right-left);
   const name = row.key === 'tyres' ? tyreName() : row.key;
-  if (row.group) return mergedBase(row, {image,ctx,width,height,ratio,left,right,top,bottom,x});
   const a = name === 'delta'
     ? Array.from({length:Math.max(150, Math.ceil(right-left))}, (_,i) => i)
     : trace(primary,name);
@@ -4466,10 +4929,47 @@ function baseChart(row, width, height, ratio) {
     if (at < range[0] || at > range[1]) continue;
     for (const value of values) if (Number.isFinite(value)) { low = Math.min(low,value); high = Math.max(high,value); }
   }
+  const source = primary.channels[name] || secondary?.channels[name];
+  const baseAxis = name === 'delta' ? 'Time delta' : displayUnit(name,source?.unit) || name;
+  const scales = new Map();
+  const overlays = row.readings.map(entry => {
+    const channel = primary.channels[entry.name] || secondary?.channels[entry.name];
+    const axis = displayUnit(entry.name,channel.unit) || entry.name;
+    const traces = [primary,secondary].map(data => {
+      if (!data) return [];
+      const points = trace(data,entry.name);
+      return entry.name === 'TyresPressure' && smoothTyrePressure ? smoothPressureTrace(data,points) : points;
+    });
+    if (!scales.has(axis)) scales.set(axis,[Infinity,-Infinity]);
+    const limits = scales.get(axis);
+    for (const points of traces) for (const [at,values] of points) {
+      if (at < range[0] || at > range[1]) continue;
+      values.forEach((value,index) => {
+        if (!Number.isFinite(value) || entry.hiddenWheels?.has(index)) return;
+        limits[0] = Math.min(limits[0],value);
+        limits[1] = Math.max(limits[1],value);
+      });
+    }
+    return {entry,axis,traces};
+  });
+  if (scales.has(baseAxis)) {
+    const [lo,hi] = scales.get(baseAxis);
+    low = Math.min(low,lo);
+    high = Math.max(high,hi);
+  }
+  for (const [axis,limits] of scales) {
+    const [lo,hi] = limits;
+    if (!Number.isFinite(lo)) { scales.set(axis,[0,1]); continue; }
+    const pad = (hi-lo)*.06 || .5;
+    scales.set(axis,[lo-pad,hi+pad]);
+  }
   const smooth = name === 'TyresPressure' && smoothTyrePressure;
   const drawnFirst = smooth ? smoothPressureTrace(primary,first) : first;
   const drawnSecond = smooth && secondary ? smoothPressureTrace(secondary,second) : second;
-  if (['Throttle Pos','Brake Pos'].includes(name)) { low = 0; high = 100; }
+  if (['Throttle Pos','Brake Pos'].includes(name)) {
+    low = scales.has(baseAxis) ? Math.min(0,low) : 0;
+    high = scales.has(baseAxis) ? Math.max(100,high) : 100;
+  }
   else if (name === 'Gear') { low = Math.floor(Math.min(-1,low)); high = Math.ceil(Math.max(1,high)); }
   else if (name === 'delta') { low = Math.min(0,low); high = Math.max(0,high); }
   if (!Number.isFinite(low) || !Number.isFinite(high)) { low = 0; high = 1; }
@@ -4480,6 +4980,7 @@ function baseChart(row, width, height, ratio) {
   if (name === 'delta') [low, high] = deltaHeadingLimits(low, high, bottom - top);
   const gearPadding = splitGear ? gearOffset + .12 : 0;
   const y = value => bottom - (value-low+gearPadding)/(high-low+2*gearPadding)*(bottom-top);
+  scales.set(baseAxis,[low-gearPadding,high+gearPadding]);
   ctx.font = canvasFont();
   ctx.strokeStyle = elementColour('graph-grid',lightGraphBackground ? '#59645d55' : '#2a382e');
   ctx.fillStyle = elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7');
@@ -4512,6 +5013,44 @@ function baseChart(row, width, height, ratio) {
     ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
   }
   ctx.setLineDash([]);
+  overlays.forEach(({entry,axis,traces},index) => {
+    const [lo,hi] = scales.get(axis);
+    const scale = axis === baseAxis ? y : value => bottom-(value-lo)/(hi-lo)*(bottom-top);
+    const colour = graphColor(row.key+'|'+entry.name,mergeColors[(index+1)%mergeColors.length]);
+    traces.forEach((points,lapIndex) => {
+      ctx.strokeStyle = colour;
+      ctx.lineWidth = 1.35;
+      ctx.setLineDash(lapIndex ? [5,3] : []);
+      const count = points.find(([,values]) => values.length)?.[1].length || 0;
+      for (let component = 0; component < count; component++) {
+        if (entry.hiddenWheels?.has(component)) continue;
+        ctx.globalAlpha = Math.max(.4,1-component*.2);
+        ctx.beginPath();
+        if (entry.name === 'Gear') {
+          paintGearSegments(ctx,points,x,scale);
+        } else {
+          const data = lapIndex ? secondary : primary;
+          const stepped = !data.channels[entry.name]?.rate && entry.name !== 'TyresPressure';
+          let previous;
+          for (const [at,values] of points) {
+            const value = values[component];
+            if (!Number.isFinite(value)) { previous = undefined; continue; }
+            const px = x(at), py = scale(value);
+            if (previous === undefined) ctx.moveTo(px,py);
+            else {
+              if (stepped) ctx.lineTo(px,previous);
+              ctx.lineTo(px,py);
+            }
+            previous = py;
+          }
+        }
+        ctx.stroke();
+      }
+    });
+    entry.axisLabel.textContent = number(lo,2) + ' to ' + number(hi,2) +
+      (axis === baseAxis ? ' · Shared Axis' : '');
+  });
+  ctx.globalAlpha = 1;
   const step = source => source?.channels[name] && !source.channels[name].rate;
   for (const [points,colors,dashed,stepped] of [[drawnFirst,[graphColor(row.key), ...palette.slice(1)],false,!smooth && step(primary)],[drawnSecond,comparison,true,!smooth && step(secondary)]]) {
     const count = points.find(([,values])=>values.length)?.[1].length || 0;
@@ -4536,6 +5075,11 @@ function baseChart(row, width, height, ratio) {
     }
   }
   if (name === 'Ground Speed') paintSpeedActivations(ctx, x, y);
+  else if (row.hasSpeedTrace) {
+    const speed = primary.channels['Ground Speed'] || secondary?.channels['Ground Speed'];
+    const limits = scales.get(displayUnit('Ground Speed',speed?.unit) || 'Ground Speed');
+    if (limits) paintSpeedActivations(ctx,x,value => bottom-(value-limits[0])/(limits[1]-limits[0])*(bottom-top));
+  }
   if (name === 'delta') {
     ctx.setLineDash([3,3]);ctx.strokeStyle=(elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7'));ctx.beginPath();
     ctx.moveTo(left,y(0));ctx.lineTo(right,y(0));ctx.stroke();
@@ -4546,108 +5090,7 @@ function baseChart(row, width, height, ratio) {
     ctx.textAlign = 'center';
     ctx.fillText('No Recorded Data for the Loaded Laps',(left + right) / 2,(top + bottom) / 2,right - left);
   }
-  return {image,x,y,left,right,top,bottom,width,height,ratio,gearOffset,from:range[0],to:range[1]};
-}
-function mergedBase(row, box) {
-  const {image,ctx,width,height,ratio,left,right,top,bottom,x} = box;
-  const count = Math.max(150,Math.ceil(right-left));
-  const deltaPoints = Array.from({length:count},(_,i) => {
-    const at = range[0]+i/(count-1)*(range[1]-range[0]);
-    return [at,[delta(at)]];
-  });
-  const deltaLimit = [0,0];
-  for(const [, [value]] of deltaPoints) if(Number.isFinite(value)) {
-    deltaLimit[0]=Math.min(deltaLimit[0],value);deltaLimit[1]=Math.max(deltaLimit[1],value);
-  }
-  const series = [{name:'Time delta',points:deltaPoints,axis:'Time delta',dashed:false,chosen:graphColor('delta')}];
-  const scales = new Map([['Time delta',deltaLimit]]);
-  row.group.channels.forEach((name,index) => {
-    const channel = primary.channels[name] || secondary?.channels[name];
-    if (!channel) return;
-    const chosen = graphColor(row.key+'|'+name,mergeColors[(index+1)%mergeColors.length]);
-    const axis = displayUnit(name,channel.unit) || name;
-    if (!scales.has(axis)) scales.set(axis,[Infinity,-Infinity]);
-    const limits = scales.get(axis);
-    for (const [data,dashed] of [[primary,false],[secondary,true]]) {
-      if (!data) continue;
-      const points = trace(data,name);
-      for (const [at,values] of points) {
-        if (at<range[0] || at>range[1]) continue;
-        for (const value of values) if (Number.isFinite(value)) {
-          limits[0] = Math.min(limits[0],value);
-          limits[1] = Math.max(limits[1],value);
-        }
-      }
-      series.push({name,points,dashed,axis,chosen,hiddenWheels:row.readings[index]?.hiddenWheels});
-    }
-  });
-  for (const limits of scales.values()) {
-    if (!Number.isFinite(limits[0])) { limits[0]=0; limits[1]=1; }
-    const padding = (limits[1]-limits[0])*.06 || .5;
-    limits[0]-=padding;
-    limits[1]+=padding;
-  }
-  scales.set('Time delta', deltaHeadingLimits(...deltaLimit, bottom - top));
-  ctx.font = canvasFont();
-  for (let i=0;i<=4;i++) {
-    const px=left+(right-left)*i/4, py=top+(bottom-top)*i/4;
-    ctx.strokeStyle=(elementColour('graph-grid',lightGraphBackground ? '#59645d55' : '#2a382e'));ctx.beginPath();
-    ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.moveTo(left,py);ctx.lineTo(right,py);ctx.stroke();
-    ctx.fillStyle=(elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7'));ctx.textAlign='center';
-    const tick = range[0]+(range[1]-range[0])*i/4;
-    const label = number(primary.useDistance ? convert('',tick,'m') : tick,primary.useDistance?0:1);
-    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' ' + displayUnit('','m') : ' s') : ''),px,bottom+18*textScale(),width);
-    {
-      const [lo,hi]=scales.get('Time delta');
-      ctx.textAlign='right';ctx.fillText(number(hi-(hi-lo)*i/4,1),left-8,py+4*textScale());
-    }
-  }
-  ctx.save();ctx.beginPath();ctx.rect(left,top,right-left,bottom-top);ctx.clip();
-  const [deltaLow,deltaHigh] = scales.get('Time delta');
-  const zero=bottom+(deltaLow/(deltaHigh-deltaLow))*(bottom-top);
-  ctx.strokeStyle=(lightGraphBackground ? '#253329' : '#b5c2b4');ctx.setLineDash([3,3]);ctx.beginPath();ctx.moveTo(left,zero);ctx.lineTo(right,zero);ctx.stroke();
-  const sectors = primary.channels['Current Sector']?.rows || [];
-  for (const [t] of sectors) {
-    if (t <= lap.start+.1 || t >= lap.end-.1) continue;
-    const px=x(primary.distanceAt(t));
-    ctx.strokeStyle='#60715e';ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
-  }
-  for (const item of [...series.slice(1),series[0]]) {
-    const [lo,hi]=scales.get(item.axis);
-    const y=value=>bottom-(value-lo)/(hi-lo)*(bottom-top);
-    const count=item.points.find(([,values])=>values.length)?.[1].length || 0;
-    for(let i=0;i<count;i++){
-      if (item.hiddenWheels?.has(i)) continue;
-      ctx.strokeStyle=item.chosen;
-      ctx.globalAlpha=i===0?1:Math.max(.4,1-i*.2);
-      ctx.setLineDash(item.dashed?[5,3]:[]);
-      ctx.lineWidth=1.35;ctx.beginPath();
-      if (item.name === 'Gear') {
-        paintGearSegments(ctx,item.points,x,y);
-        ctx.stroke();
-        break;
-      }
-      let previous;
-      for(const [at,values] of item.points){
-        if(!Number.isFinite(values[i])){previous=undefined;continue;}
-        const px=x(at),py=y(values[i]);
-        if(previous===undefined)ctx.moveTo(px,py);
-        else ctx.lineTo(px,py);
-        previous=py;
-      }
-      ctx.stroke();
-    }
-  }
-  const speed = series.find(item => item.name === 'Ground Speed');
-  if (speed) {
-    const [lo, hi] = scales.get(speed.axis);
-    const y = value => bottom - (value - lo) / (hi - lo) * (bottom - top);
-    ctx.globalAlpha = 1;
-    paintSpeedActivations(ctx, x, y);
-  }
-  paintDeltaHeadings(ctx, left, right, top, bottom);
-  ctx.restore();
-  return {image,x,left,right,top,bottom,width,height,ratio,from:range[0],to:range[1],scales};
+  return {image,x,y,left,right,top,bottom,width,height,ratio,scales,gearOffset,from:range[0],to:range[1]};
 }
 function paintCursorValues(ctx, row, name) {
   const {x, y, left, right, top, bottom, scales} = row.cache;
@@ -4667,28 +5110,31 @@ function paintCursorValues(ctx, row, name) {
     const gap = delta(cursor);
     add(timeGapLabel(gap), gap, scales ? scaleFor('Time delta') : y, graphColor('delta'), row.deltaWidth);
   }
-  const channels = row.group?.channels ?? (name === 'delta' ? [] : [name]);
+  const channels = [...(name === 'delta' ? [] : [name]), ...(row.group?.channels ?? [])];
   channels.forEach((channelName, index) => {
     const source = primary.channels[channelName] || secondary?.channels[channelName];
     if (!source) return;
-    const scale = scales ? scaleFor(displayUnit(channelName, source.unit) || channelName) : y;
+    const overlayIndex = index - (name === 'delta' ? 0 : 1);
+    const overlay = overlayIndex >= 0 ? row.readings[overlayIndex] : undefined;
+    const scale = overlay ? scaleFor(displayUnit(channelName,source.unit) || channelName) : y;
     for (const [data, referenceLap] of [[primary, false], [secondary, true]]) {
       if (!data || !inExtent(data, cursor)) continue;
       const channel = data.channels[channelName];
       const values = sample(channel, data.timeAt(cursor));
-      const hiddenWheels = row.group ? row.readings[index]?.hiddenWheels : row.hiddenWheels;
+      const hiddenWheels = overlay ? overlay.hiddenWheels : row.hiddenWheels;
       values?.forEach((value, component) => {
         if (hiddenWheels?.has(component)) return;
         const shown = typeof value === 'boolean' ? Number(value) : convert(channelName, value, channel.unit);
         const wheel = values.length === 4 ? wheels[component] + ' ' : '';
-        const prefix = row.group ? telemetryName(channelName) + (referenceLap ? ' (ref) ' : ' ') : '';
+        const traceLabel = referenceLap ? referenceTraceLabel : loadedTraceLabel;
+        const prefix = traceLabel + ' · ' + (row.group ? telemetryName(channelName) + ' · ' : '');
         const normalColours = referenceLap ? comparison : [graphColor(row.key), ...palette.slice(1)];
-        const colour = row.group ? graphColor(row.key + '|' + channelName, mergeColors[(index + 1) % mergeColors.length])
+        const colour = overlay ? graphColor(row.key + '|' + channelName, mergeColors[(overlayIndex + 1) % mergeColors.length])
           : normalColours[component % normalColours.length];
-        const layout = row.group ? (referenceLap ? row.readings[index]?.ref : row.readings[index]?.main)
+        const layout = overlay ? (referenceLap ? overlay.ref : overlay.main)
           : referenceLap ? row.referenceLayout : row.mainLayout;
         const label = valueLabel(channelName, value, channel.unit);
-        const traceScale = channelName === 'Gear' && row.cache.gearOffset
+        const traceScale = !overlay && channelName === 'Gear' && row.cache.gearOffset
           ? gear => scale(gear + (referenceLap ? -row.cache.gearOffset : row.cache.gearOffset)) : scale;
         add(prefix + wheel + label, shown, traceScale, colour, prefix.length + wheel.length + (layout?.widths[component] ?? label.length), referenceLap);
       });
@@ -4802,7 +5248,6 @@ async function exportChartImage(row, title, exportImage) {
 }
 function speedPeaks() {
   const name = 'Ground Speed';
-  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference?.session.driver);
   const peak = data => {
     const max = trace(data, name).reduce((best, [, [speed]]) =>
       Number.isFinite(speed) ? Math.max(best, speed) : best, -Infinity);
@@ -4810,8 +5255,8 @@ function speedPeaks() {
     return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) + ' ' + unit : '—';
   };
   const peaks = node('span', telemetryName(name, 'Top Speed') + ' · ', 'chart-reading');
-  peaks.append(node('span', selectedDriver + ' ' + peak(primary), 'selected-color'));
-  if (secondary) peaks.append(' | ', node('span', referenceDriver + ' ' + peak(secondary), 'reference-color'));
+  peaks.append(node('span', loadedTraceLabel + ' ' + peak(primary), 'selected-color'));
+  if (secondary) peaks.append(' | ', node('span', referenceTraceLabel + ' ' + peak(secondary), 'reference-color'));
   return peaks;
 }
 function chartDriverLabels(selectedDriver, referenceDriver) {
@@ -4820,7 +5265,7 @@ function chartDriverLabels(selectedDriver, referenceDriver) {
   const sameDriver = selectedNames.join(' ').toLowerCase() === referenceNames.join(' ').toLowerCase();
   return [selectedNames[0] || 'Selected', sameDriver ? 'Reference' : referenceNames[0] || 'Reference'];
 }
-function paintChart(row, [selectedDriver, referenceDriver]) {
+function paintChart(row) {
   const display=canvasContext(row.canvas);
   if(!display)return;
   const {ctx,width,height,ratio}=display;
@@ -4861,22 +5306,23 @@ function paintChart(row, [selectedDriver, referenceDriver]) {
   const showValues = row.hovering || (pinned && pinnedGraph === row.key);
   if (showValues && !selection && cursor >= range[0] && cursor <= range[1]) paintCursorValues(ctx, row, name);
   if(row.group) {
-    const timeGap = delta(cursor);
-    row.output.textContent = timeGapLabel(timeGap);
     for(const entry of row.readings){
-      entry.read.textContent = readings(primary, entry.name, false, entry.main.widths, entry.hiddenWheels)
-        + (entry.ref ? ' | ' + readings(secondary, entry.name, false, entry.ref.widths, entry.hiddenWheels) : '');
+      entry.read.replaceChildren(node('span',loadedTraceLabel + ' ' +
+        readings(primary, entry.name, false, entry.main.widths, entry.hiddenWheels),'selected-color'));
+      if (entry.ref) entry.read.append(' | ',node('span',referenceTraceLabel + ' ' +
+        readings(secondary, entry.name, false, entry.ref.widths, entry.hiddenWheels),'reference-color'));
       const channel=primary.channels[entry.name] || secondary?.channels[entry.name];
       const unit=displayUnit(entry.name,channel?.unit) || entry.name;
       const limits=row.cache.scales.get(unit);
       entry.read.title=limits?'Axis '+number(limits[0],2)+' to '+number(limits[1],2)+' '+unit:'';
     }
-  } else if(name==='delta') {
+  }
+  if(name==='delta') {
     const value=delta(cursor);
     row.output.textContent=timeGapLabel(value);
   } else {
-    row.output.replaceChildren(node('span', selectedDriver + ' ' + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
-    if (secondary) row.output.append('  |  ', node('span', referenceDriver + ' ' + readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels), 'reference-color'));
+    row.output.replaceChildren(node('span', loadedTraceLabel + ' ' + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
+    if (secondary) row.output.append('  |  ', node('span', referenceTraceLabel + ' ' + readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels), 'reference-color'));
   }
 }
 function route(data) {
@@ -4918,7 +5364,6 @@ function trackRoutes(selectedSection) {
 const racingMap = $('racing-map');
 const trackPanel = $('track-location');
 const trackCameraMode = $('track-camera-mode');
-const selectedSectionOption = trackCameraMode.querySelector('[value="section"]');
 let previousTrackCamera;
 let trackCameraOverride;
 new ResizeObserver(scheduleRender).observe(racingMap);
@@ -4932,7 +5377,6 @@ function restoreTrackCamera() {
   Object.assign(trackCamera, previousTrackCamera.camera);
   trackCameraOverride = previousTrackCamera.override;
   previousTrackCamera = undefined;
-  selectedSectionOption.disabled = true;
 }
 function fitTrack() {
   Object.assign(trackCamera, {zoom:1, x:0, y:0});
@@ -5314,8 +5758,7 @@ function scheduleRender(){
   requestAnimationFrame(()=>{
     renderRequested=false;
     if(!ready || view!=='viewer')return;
-    const drivers = chartDriverLabels(selected?.driver, reference?.session.driver);
-    for (const row of chartRows) paintChart(row, drivers);
+    for (const row of chartRows) paintChart(row);
     for(const row of readoutRows) {
       row.a.textContent=readings(primary,row.name,true);
       row.b.textContent=readings(secondary,row.name,true);
@@ -5343,10 +5786,15 @@ function updatePin(){
   $('unpin').disabled = !pinned;
   scheduleRender();
 }
+function updatePlaybackButton(playing) {
+  const button = $('play');
+  button.querySelector('.icon-button-label').textContent = playing ? 'Pause' : 'Play';
+  button.querySelector('svg path').setAttribute('d', playing ? uiIconPaths.pause : uiIconPaths.play);
+}
 function stop() {
   playing=false;
   cancelAnimationFrame(frame);
-  $('play').textContent='Play';
+  updatePlaybackButton(false);
 }
 function play() {
   if(!ready)return;
@@ -5354,7 +5802,7 @@ function play() {
   pinned=false;updatePin();
   if(playTime>=lap.end-.01)setTime(lap.start);
   playing=true;
-  $('play').textContent='Pause';
+  updatePlaybackButton(true);
   let last=performance.now();
   function step(now){
     if(!playing)return;
@@ -5388,7 +5836,7 @@ const builtInGraphPresets = {
 const builtInColourPresets = {
   'Classic Green': {interfaceColourMode:'green'},
   'TRD IMSA': {
-    interfaceColour:'#d71920', interfaceBackgroundColour:'#080808', graphBackgroundColour:'#0b0b0b',
+    interfaceColour:'#9c1c20', interfaceBackgroundColour:'#080808', graphBackgroundColour:'#0b0b0b',
     elementColours:{header:'#050505',panel:'#121212',raised:'#1a1a1a',control:'#202020',rule:'#383838',
       fg:'#f7f7f7',muted:'#bdbdbd',accent:'#ffcf00',reference:'#ff7800',warning:'#ff6266',
       focus:'#ffcf00','graph-grid':'#292929','graph-axis':'#bdbdbd','map-surface':'#0b0b0b',trophy:'#ffcf00'}
@@ -5450,7 +5898,8 @@ $('preset').addEventListener('change',()=>{
     const preset=settings.presets[key.slice(6)];
     enabled=new Set(preset.enabled);
     save({enabled:[...enabled],heights:preset.heights,tyres:preset.tyres || 'TyresTempCentre',
-      ...(preset.colors ? {colors:preset.colors} : {}), ...(preset.deltaChannels ? {deltaChannels:preset.deltaChannels} : {}),
+      ...(preset.colors ? {colors:preset.colors} : {}),
+      ...(preset.chartOverlays || preset.deltaChannels ? {chartOverlays:preset.chartOverlays ?? {delta:preset.deltaChannels}} : {}),
       ...(preset.hiddenGraphs ? {hiddenGraphs:preset.hiddenGraphs} : {}),
       ...(preset.graphOrder ? {graphOrder:preset.graphOrder} : {}),
       ...(preset.extraGraphChannels ? {extraGraphChannels:preset.extraGraphChannels} : {}),
@@ -5467,13 +5916,13 @@ $('graph-preset').onchange=()=>{
   if (key.startsWith('builtin:')) {
     const {graphOrder, heights, speedActivation} = builtInGraphPresets[key.slice(8)];
     save({
-      graphOrder, heights, extraGraphChannels:[],
+      graphOrder, heights, extraGraphChannels:[], chartOverlays:{delta:[]},
       hiddenGraphs:chartSpecs.map(([,name]) => name).filter(name => !graphOrder.includes(name)),
       ...(speedActivation ? {speedActivations:{...settings.speedActivations,[speedActivation]:true}} : {})
     });
   } else {
-    const {hiddenGraphs, extraGraphChannels, heights, graphOrder = []} = settings.graphPresets[key.slice(6)];
-    save({hiddenGraphs, extraGraphChannels, heights, graphOrder});
+    const {hiddenGraphs, extraGraphChannels, heights, graphOrder = [], chartOverlays = {delta:[]}} = settings.graphPresets[key.slice(6)];
+    save({hiddenGraphs, extraGraphChannels, heights, graphOrder, chartOverlays});
   }
   if(ready)buildCharts();
 };
@@ -5524,7 +5973,8 @@ $('preset-form').addEventListener('submit',e=>{
     hiddenGraphs:[...(settings.hiddenGraphs ?? defaultHiddenGraphs)],
     extraGraphChannels:[...(settings.extraGraphChannels || [])],
     heights:{...settings.heights},
-    graphOrder:[...(settings.graphOrder ?? [])]
+    graphOrder:[...(settings.graphOrder ?? [])],
+    chartOverlays:{delta:chartOverlayChannels('delta'),...settings.chartOverlays}
   };
   const preset = presetTarget === 'graphPresets' ? graphLayout : {
     ...graphLayout, enabled:[...enabled], tyres:tyreName(), colors:{...settings.colors},
@@ -5577,7 +6027,7 @@ $('lap-select').onchange = () => {
   lapHistoryFocus = -1;
   selectLap(selected.laps.find(item => String(item.id) === $('lap-select').value));
 };
-$('remove-reference-session').onclick=()=>selectReferenceSession(undefined);
+$('remove-reference-session').onclick = $('clear-loaded-reference').onclick = () => selectReferenceSession(undefined);
 $('car-select').onchange=()=>{manualReference=undefined;fillReferences();void readReference();};
 $('reference-select').onchange=()=>{
   manualReference=$('reference-select').value==='auto'?undefined:$('reference-select').value;
@@ -5588,7 +6038,7 @@ $('library-tab').onclick=()=>setView('library');
 $('viewer-tab').onclick=()=>setView('viewer');
 $('records-tab').onclick=()=>setView('records');
 $('recent-session-filters').addEventListener('change', event => {
-  if (event.target instanceof HTMLSelectElement && event.target.id !== 'limit') renderLibrary();
+  if (event.target instanceof HTMLSelectElement) renderLibrary({resetRecentSessions:true});
 });
 $('imported-lap-filters').addEventListener('change', renderComparisonLaps);
 $('reset-imported-lap-filters').onclick = () => {
@@ -5596,19 +6046,8 @@ $('reset-imported-lap-filters').onclick = () => {
   renderComparisonLaps();
 };
 $('reset-library-filters').onclick = () => {
-  for (const select of $('recent-session-filters').querySelectorAll('select:not(#limit)')) select.value = '';
-  setRecentSessionLimit();
-  $('limit').dispatchEvent(new Event('change'));
-};
-function setRecentSessionLimit(value) {
-  const select = $('limit');
-  const options = [...select.options];
-  select.value = options.find(option => option.value === String(value))?.value ??
-    options.find(option => option.defaultSelected).value;
-}
-$('limit').onchange = () => {
-  save({limit:Number($('limit').value)});
-  renderLibrary();
+  for (const select of $('recent-session-filters').querySelectorAll('select')) select.value = '';
+  renderLibrary({resetRecentSessions:true});
 };
 $('interface-colour-mode').onchange = event => {
   save({interfaceColourMode:event.target.value});
@@ -5740,6 +6179,7 @@ $('reset-settings').onclick = async () => {
   }
 };
 let availableUpdate;
+let lastAnnouncedUpdateVersion;
 let updateInProgress = false;
 const updateStatus = $('tpr-update-status');
 const updateDialog = $('tpr-update-dialog');
@@ -5755,6 +6195,10 @@ async function checkTprUpdate(interactive = false) {
   }
   try {
     availableUpdate = await lmu.checkTprUpdate();
+    if (availableUpdate && lastAnnouncedUpdateVersion !== availableUpdate.version) {
+      lastAnnouncedUpdateVersion = availableUpdate.version;
+      if (settings.notificationSound === true) playNotificationChime();
+    }
     $('tpr-update-available').hidden = !availableUpdate;
     installUpdateButton.hidden = !availableUpdate;
     updateStatus.textContent = availableUpdate ? 'TPR Edition ' + availableUpdate.version + ' is ready to download.' :
@@ -5866,7 +6310,7 @@ function togglePanelPopout(key, panel, title) {
   link.onclick = () => popup.focus();
   panel.before(link);
   const button = $(key === 'track' ? 'pop-out-track' : 'pop-out-summary');
-  button.textContent = 'Dock Panel';
+  button.querySelector('.icon-button-label').textContent = 'Dock Panel';
   popoutWindows.set(key, popup);
   if (key === 'summary') {
     summaryToggle.hidden = true;
@@ -5885,7 +6329,7 @@ function togglePanelPopout(key, panel, title) {
     }
     popoutWindows.delete(key);
     link.replaceWith(panel);
-    button.textContent = 'Pop Out';
+    button.querySelector('.icon-button-label').textContent = 'Pop Out';
     if (key === 'summary') {
       summaryToggle.hidden = false;
       $('telemetry-divider').hidden = false;
@@ -5907,14 +6351,14 @@ summaryToggle.onclick = () => {
     return;
   }
   summaryDialog.append(summaryPanel);
-  summaryToggle.textContent = 'Exit Full Screen';
+  summaryToggle.querySelector('.icon-button-label').textContent = 'Exit Full Screen';
   $('pop-out-summary').hidden = true;
   summaryDialog.showModal();
   summaryToggle.focus();
 };
 summaryDialog.addEventListener('close', () => {
   telemetryPanels.append(summaryPanel);
-  summaryToggle.textContent = 'Full Screen';
+  summaryToggle.querySelector('.icon-button-label').textContent = 'Full Screen';
   $('pop-out-summary').hidden = false;
   summaryToggle.focus();
 });
@@ -5935,7 +6379,6 @@ window.addEventListener('resize', () => {
   if (Number.isFinite(settings.summaryHeight)) setSummaryHeight(settings.summaryHeight);
   applyAppearance();
   enabled=new Set(settings.enabled || builtIn.Driving);
-  setRecentSessionLimit(settings.limit);
   setupPresets();
   renderRecordNotifications();
   showTrackView(true);
@@ -6345,7 +6788,7 @@ function trainerBrakingStart(lap, corner) {
     ?? lap.extent[0];
 }
 
-function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
+function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, comparisonOffset, comparisonLabel = 'Previous Session') {
   const canvas = $('trainer-plot');
   const surface = trainerCanvas(canvas);
   if (!surface) return;
@@ -6432,13 +6875,23 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   const painted = data.filter((lap,index) => traces[index].some(([,value]) => Number.isFinite(value)));
   const fastestIndex = data.findIndex(lap => lap.lap.id === fastest?.id && painted.includes(lap));
   $('trainer-current-legend').hidden = fastestIndex < 0;
-  $('trainer-previous-legend').hidden = true;
+  const previousFastest = comparison?.laps.filter(lap => Number.isFinite(lap.cornerTimes[comparisonOffset]))
+    .sort((a,b) => a.cornerTimes[comparisonOffset] - b.cornerTimes[comparisonOffset])[0];
+  const previousFastestIndex = showComparison ? previousData.findIndex((lap,index) =>
+    lap.lap.id === previousFastest?.id && previousTraces[index].some(([,value]) => Number.isFinite(value))) : -1;
+  const previousLegend = $('trainer-previous-legend');
+  previousLegend.hidden = previousFastestIndex < 0;
+  if (previousFastestIndex >= 0) {
+    previousLegend.textContent = 'Lap ' + (previousFastest.number ?? previousFastest.id) + ' · ' + comparisonLabel + ' Fastest Corner Lap';
+  }
   const otherCount = painted.length - Number(fastestIndex >= 0);
   $('trainer-other-legend').hidden = !otherCount;
   $('trainer-other-legend').textContent = otherCount + (otherCount === 1 ? ' other lap' : ' other laps');
-  comparisonLegend.hidden = !showComparison || (!loadingComparison && !previousCount);
-  comparisonLegend.textContent = loadingComparison ? 'Loading Previous Stint Traces…' :
-    'Previous Stint · ' + previousCount + (previousCount === 1 ? ' lap' : ' laps');
+  const otherPreviousCount = previousCount - Number(previousFastestIndex >= 0);
+  comparisonLegend.hidden = !showComparison || (!loadingComparison && !otherPreviousCount);
+  comparisonLegend.textContent = loadingComparison ? 'Loading ' + comparisonLabel + ' Traces…' :
+    comparisonLabel + ' · ' + otherPreviousCount + (previousFastestIndex >= 0 ? ' other' : '') +
+    (otherPreviousCount === 1 ? ' lap' : ' laps');
   $('trainer-plot-axis').textContent = axis;
   if (fastest) $('trainer-current-legend').textContent = 'Lap ' + (fastest.number ?? fastest.id) + ' · Fastest corner lap';
   canvas.setAttribute('aria-label',axis + ' versus distance · ' + painted.length + ' shown out of ' + stint.laps.length + ' clean laps');
@@ -6446,34 +6899,37 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   const max = braking ? 100 : Math.max(min + 10,Math.ceil(Math.max(...readings) / 10) * 10);
   const assist = braking ? 'ABS' : 'TC';
   const assistEnabled = $(braking ? 'trainer-show-abs' : 'trainer-show-tc').checked;
-  const assistOverlays = assistEnabled && fastestIndex >= 0 ? [fastest].flatMap(lap => {
-    const trace = data[fastestIndex];
-    if (!trace?.channels[assist]?.rows?.length) return [];
+  const highlights = [
+    {trace:data[fastestIndex], points:traces[fastestIndex], colour:elementColour('accent','#c5fa78'),
+      dotted:false, label:'Current session fastest corner lap'},
+    {trace:previousData[previousFastestIndex], points:previousTraces[previousFastestIndex],
+      colour:elementColour('reference','#f5a982'), dotted:true, label:comparisonLabel + ' Fastest Corner Lap'}
+  ].filter(({trace}) => trace);
+  const assistOverlays = assistEnabled ? highlights.flatMap(({trace,points,label}) => {
+    if (!trace.channels[assist]?.rows?.length) return [];
     const intervals = [...activationIntervals(trace,assist,true)]
       .map(([from,to]) => [Math.max(start,trace.distanceAt(from)),Math.min(end,trace.distanceAt(to))])
       .filter(([from,to]) => to > from);
-    return [{lap,intervals,points:traces[fastestIndex]}];
+    return [{lap:trace.lap,intervals,points,label}];
   }) : [];
   const left = 62, right = width - 18, top = 10, bottom = height - 25;
   const x = distance => left + (right - left) * (distance - start) / (end - start);
   const y = value => bottom - (bottom - top) * (value - min) / (max - min);
-  const hoverLap = data[fastestIndex];
-  const hoverPoints = traces[fastestIndex] ?? [];
-  const hoverDistances = hoverPoints.map(([distance]) => distance);
+  const hoverTraces = highlights.map(trace => ({...trace,distances:trace.points.map(([distance]) => distance)}));
   trainerHover = {left,right,top,bottom,reading(px) {
-    if (!hoverLap) return null;
     const distance = start + (end - start) * (px - left) / (right - left);
-    const channel = hoverLap.channels['Ground Speed'];
-    const time = hoverLap.timeAt(distance);
-    const speed = !braking ? trainerTraceValue(hoverPoints,hoverDistances,distance) :
-      time >= channel?.times[0] && time <= channel.times.at(-1) ?
-        convert('Ground Speed',sample(channel,time)?.[0],channel.unit) : undefined;
-    if (!Number.isFinite(speed)) return null;
-    return {x:px,values:[{
-      text:number(speed,telemetryDecimalPlaces('Ground Speed')) + ' ' + displayUnit('','km/h'),
-      colour:elementColour('accent','#c5fa78'),
-      label:'Fastest corner lap'
-    }]};
+    const values = hoverTraces.flatMap(({trace,points,distances,colour,dotted,label}) => {
+      const channel = trace.channels['Ground Speed'];
+      const time = trace.timeAt(distance);
+      const speed = !braking ? trainerTraceValue(points,distances,distance) :
+        time >= channel?.times[0] && time <= channel.times.at(-1) ?
+          convert('Ground Speed',sample(channel,time)?.[0],channel.unit) : undefined;
+      return Number.isFinite(speed) ? [{
+        text:number(speed,telemetryDecimalPlaces('Ground Speed')) + ' ' + displayUnit('','km/h'),
+        colour,dotted,label
+      }] : [];
+    });
+    return values.length ? {x:px,values} : null;
   }};
   ctx.font = '12px system-ui';
   for (let i = 0; i <= 4; i++) {
@@ -6486,10 +6942,11 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
     ctx.textAlign = 'center';
     paintHorizontalTick(ctx,measurement((end - start) * i / 4,'m',0),left + (right - left) * i / 4,height - 8,width);
   }
-  const drawTrace = (points,index) => {
-    ctx.strokeStyle = index === -2 ? elementColour('prior-stint','#e0787d') : index < 0 ? elementColour('other-laps','#90ac98') : elementColour('accent','#c5fa78');
-    ctx.lineWidth = index < 0 ? 1.5 : 2.5;
-    ctx.globalAlpha = index === -2 ? .35 : index < 0 ? .45 : 1;
+  const drawTrace = (points,colour,alpha,lineWidth,dotted = false) => {
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = lineWidth;
+    ctx.globalAlpha = alpha;
+    ctx.setLineDash(dotted ? [6,4] : []);
     ctx.beginPath();
     let connected = false;
     for (const [distance,value] of points) {
@@ -6500,11 +6957,13 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
     }
     ctx.stroke();
   };
-  if (showComparison) for (const points of previousTraces) drawTrace(points,-2);
-  for (const [index,points] of traces.entries()) {
-    if (index !== fastestIndex) drawTrace(points,-1);
+  if (showComparison) for (const [index,points] of previousTraces.entries()) {
+    if (index !== previousFastestIndex) drawTrace(points,elementColour('prior-stint','#e0787d'),.35,1.5);
   }
-  if (fastestIndex >= 0) drawTrace(traces[fastestIndex],0);
+  for (const [index,points] of traces.entries()) {
+    if (index !== fastestIndex) drawTrace(points,elementColour('other-laps','#90ac98'),.45,1.5);
+  }
+  for (const {points,colour,dotted} of highlights) drawTrace(points,colour,1,2.5,dotted);
   ctx.globalAlpha = 1;
   ctx.setLineDash([]);
   ctx.strokeStyle = elementColour(assist.toLowerCase(),assist === 'ABS' ? '#ff626c' : '#45d4df');
@@ -6532,7 +6991,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison) {
   }
   if (assistOverlays.length) {
     canvas.setAttribute('aria-label',canvas.getAttribute('aria-label') + ' · ' + assistOverlays.map(overlay =>
-      assist + ' on fastest corner lap ' + (overlay.lap.number ?? overlay.lap.id) +
+      assist + ' on ' + overlay.label.toLowerCase() + ' ' + (overlay.lap.number ?? overlay.lap.id) +
       (overlay.visible ? '' : ' (no activation in view)')).join(' · '));
   }
 }
@@ -6683,12 +7142,7 @@ function renderTrainerTrophies() {
     const card = node('article',undefined,awarded ? 'earned' : '');
     const emblem = node('div',undefined,'trainer-trophy-emblem');
     emblem.setAttribute('aria-hidden','true');
-    const cup = document.createElementNS('http://www.w3.org/2000/svg','svg');
-    cup.setAttribute('viewBox','0 0 64 64');
-    const silhouette = document.createElementNS(cup.namespaceURI,'path');
-    silhouette.setAttribute('d','M17 8h30v6h9v9c0 9-6 15-14 16a15 15 0 0 1-7 5v7h9v6H20v-6h9v-7a15 15 0 0 1-7-5C14 38 8 32 8 23v-9h9V8Zm0 12h-3v3c0 4 2 7 5 9a24 24 0 0 1-2-12Zm30 0a24 24 0 0 1-2 12c3-2 5-5 5-9v-3h-3Z');
-    cup.append(silhouette);
-    emblem.append(cup);
+    emblem.append(trophyIcon());
     card.append(emblem,node('strong',name,'trainer-trophy-title'),node('p',description
       .replace('10 m',measurement(10,'m',usingImperial('distance') ? 1 : 0))
       .replace('3 km/h',measurement(3,'km/h',usingImperial('speed') ? 2 : 0))),
@@ -6792,13 +7246,14 @@ function renderDriverTrainer() {
   $('trainer-abs-control').hidden = trainerFocus !== 0 || !chosen;
   $('trainer-tc-control').hidden = trainerFocus !== 1 || !chosen;
   $('trainer-comparison-control').hidden = lapTimes || !chosen;
+  $('trainer-comparison-label').textContent = manual ? 'Comparison Traces' : 'Previous Session Traces';
   $('trainer-show-comparison').disabled = !(earlier && priorOffset >= 0);
   $('trainer-cold-control').hidden = false;
   $('trainer-cold-label').textContent = 'Temperature at Which Tyres Are Considered Cold' + (lapTimes ? '' : ' (Exclude Laps)');
   $('trainer-cold-legend').hidden = true;
   if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
   if (lapTimes) renderTrainerLapTimes(completed,comparisonCompleted,Boolean(manual));
-  else renderTrainerCornerTrace(cornerStint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? cornerComparison : undefined);
+  else renderTrainerCornerTrace(cornerStint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? cornerComparison : undefined,priorOffset,comparisonLabel);
   renderTrainerMap(stint,chosen?.corner);
   updateTrainerHover(trainerPointer);
 }

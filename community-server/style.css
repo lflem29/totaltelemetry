@@ -1,9 +1,24 @@
 :root{color-scheme:dark;--bg:#101513;--panel:#1a241e;--line:#34453a;--text:#f0f5ec;--muted:#b2c0b3;--accent:#c6f36c;font:15px/1.35 "Segoe UI",system-ui,sans-serif}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text)}
-main{max-width:740px;margin:auto;padding:12px 18px}
+main{max-width:1160px;margin:auto;padding:8px 18px}
+.server-layout{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:12px;align-items:start}
+.server-column{display:grid;gap:8px;min-width:0}
+.server-details{grid-column:2}
+@media(min-width:1040px){
+  .server-layout:has(#tpr-updates:not([hidden])){grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,1fr)}
+  .server-layout:has(#tpr-updates:not([hidden])) .server-details{grid-column:auto}
+}
+@media(min-width:800px) and (max-width:1039px){
+  .server-layout>#tpr-updates:not([hidden])+ .server-details{grid-column:2}
+  .server-layout:has(#tpr-updates:not([hidden]))> .server-column:first-child{grid-row:span 2}
+}
+@media(max-width:799px){
+  .server-layout{grid-template-columns:minmax(0,1fr)}
+  .server-details{grid-column:auto}
+}
 header,.actions,.field-action{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-header{justify-content:space-between;margin-bottom:10px}
+header{justify-content:space-between;margin-bottom:6px}
 h1,h2,p{margin:0}
 h1{font-size:29px;font-weight:650;letter-spacing:-.04em}
 #server-version{font-size:14px;color:var(--muted);letter-spacing:0;font-weight:500;white-space:nowrap}
@@ -24,7 +39,7 @@ button:disabled{opacity:.5;cursor:default}
 #start{background:#39680f;border-color:#578926}
 #server-state{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:4px 10px;color:var(--muted)}
 #server-state.running{color:var(--accent);border-color:#578926}
-.actions{margin:7px 0 9px}
+.actions{margin-top:7px}
 p{color:var(--muted)}
 section p{margin:4px 0 7px}
 section p:last-child{margin:10px 0 0}
@@ -32,7 +47,11 @@ section p:last-child{margin:10px 0 0}
 .https-option{display:flex;align-items:center;gap:6px}
 .https-option input{width:auto;margin:0}
 #https-settings p{font-size:.9em}
-.shared-record-summary{margin-block:8px}
+#github-updates-form{border-top:1px solid var(--line);padding-top:8px;margin-top:8px}
+#github-token{max-width:380px}
+.update-heading,.github-update-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.update-heading{align-items:center;justify-content:space-between;margin-top:0}
+#github-token-help,#github-update-status{font-size:.9em}
 .shared-counts{display:flex;gap:20px;margin-block:4px 8px}
 .shared-counts output{margin-inline-start:5px;color:var(--accent)}
 #shared-drivers{height:7.5em;overflow-y:auto;scrollbar-gutter:stable;margin:0;padding:0}
@@ -42,3 +61,15 @@ section p:last-child{margin:10px 0 0}
 .shared-driver-columns strong:not(:first-child),#shared-drivers strong{text-align:right}
 #shared-drivers span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #shared-drivers strong{font-variant-numeric:tabular-nums}
+
+.settings-grid>label{margin-bottom:0}
+.settings-grid>label:has(#minimum-game-version),.settings-grid>div:has(#directory){align-self:end}
+#github-updates-form p{margin-block:4px}
+#github-updates-form button{padding-inline:7px}
+#server-release-status{font-size:.9em}
+section[aria-labelledby="connection-title"] p:last-child{font-size:.9em;margin-top:6px}
+#server-release{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#server-release[hidden]{display:none}
+
+#listen-on[hidden]{display:none}
+#caddy-ports{font-size:.9em}

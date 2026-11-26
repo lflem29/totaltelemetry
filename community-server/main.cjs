@@ -132,7 +132,8 @@ else {
   app.whenReady().then(() => {
     settings = loadSettings();
     Menu.setApplicationMenu(null);
-    window = new BrowserWindow({width:740, height:640, minWidth:640, useContentSize:true, show:false, backgroundColor:'#101513',
+    const workArea = screen.getPrimaryDisplay().workArea;
+    window = new BrowserWindow({width:Math.min(1100, workArea.width - 24), height:Math.min(640, workArea.height - 48), minWidth:Math.min(640, workArea.width - 24), useContentSize:true, show:false, backgroundColor:'#101513',
       title:'Total Telemetry Community Server', webPreferences:{preload:path.join(__dirname, 'preload.cjs'),
         sandbox:true, contextIsolation:true, nodeIntegration:false}});
     window.webContents.setWindowOpenHandler(() => ({action:'deny'}));

@@ -109,7 +109,7 @@ function communityOrigin({host, port, https}) {
 }
 const {key:bundledCommunityKey, ...originalCommunityServer} = communityDefaults;
 const bundledCommunityServer = app.getName() === 'Total Telemetry TPR Edition'
-  ? {host:originalCommunityServer.host,port:443,https:true} : originalCommunityServer;
+  ? {host:'127.0.0.1',port:443,https:true} : originalCommunityServer;
 
 function usesBundledCommunityKey(server) {
   return [bundledCommunityServer,originalCommunityServer].some(endpoint =>
@@ -444,6 +444,7 @@ const settingsColour = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.t
 const temperatureMap = settingsMap(value => value === null || settingsNumber(value));
 const measurementUnitKeys = ['speed','distance','temperature','pressure','fuel'];
 const displayFields = {
+  notificationSound:value => typeof value === 'boolean',
   autoLoadTelemetry:value => typeof value === 'boolean',
   elementColours:settingsMap(settingsColour),
   turboPressureReference:value => value === 'absolute' || value === 'gauge',
@@ -452,7 +453,9 @@ const displayFields = {
   driverTrainerEnabled:value => typeof value === 'boolean', trainerColdTyreTemperature:settingsNumber,
   heights:settingsMap(settingsNumber), enabled:settingsList, tyres:settingsText,
   colors:settingsMap(settingsColour), speedActivations:settingsMap(value => typeof value === 'boolean'),
-  deltaChannels:settingsList, graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
+  mergeSummaryBrakes:value => typeof value === 'boolean',
+  mergeSummaryEngineTemperatures:value => typeof value === 'boolean',
+  deltaChannels:settingsList, chartOverlays:settingsMap(value => settingsList(value) && value.length <= 3), graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
   interfaceColour:settingsColour, interfaceColourMode:value => ['green', 'orange', 'custom'].includes(value),
   interfaceBackgroundColour:settingsColour, graphBackgroundColour:settingsColour,
   textScalePercent:value => Number.isInteger(value) && value >= 75 && value <= 150,
@@ -470,7 +473,8 @@ const settingsFileFields = new Map([
         displayFields[key](value))),
     graphPresets:settingsMap(preset => isSettingsObject(preset) &&
       settingsList(preset.hiddenGraphs) && settingsList(preset.extraGraphChannels) &&
-      displayFields.heights(preset.heights) && (preset.graphOrder === undefined || settingsList(preset.graphOrder)))}],
+      displayFields.heights(preset.heights) && (preset.graphOrder === undefined || settingsList(preset.graphOrder)) &&
+      (preset.chartOverlays === undefined || displayFields.chartOverlays(preset.chartOverlays)))}],
   ['temperatures', {hotTemperatures:temperatureMap, hotTemperaturesByClass:settingsMap(temperatureMap)}]
 ]);
 
@@ -674,6 +678,12 @@ if (primaryInstance) app.whenReady().then(async () => {
   fs.mkdirSync(app.getPath('userData'), {recursive: true});
   configPath = path.join(app.getPath('userData'), 'settings.json');
   try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch {}
+  const resetLegacyTextScale = config.textScaleBaseline !== 90;
+  if (resetLegacyTextScale) {
+    // The old 90% scale is now the renderer's 100% default.
+    delete config.textScalePercent;
+    config.textScaleBaseline = 90;
+  }
   const savedCommunity = config.communityServer;
   if (app.getName() === tprProduct && !config.tprHttpsDefaultsApplied) {
     const savedHost = savedCommunity?.host?.toLowerCase();
@@ -683,6 +693,8 @@ if (primaryInstance) app.whenReady().then(async () => {
       config.communityServer = {...bundledCommunityServer};
     }
     config.tprHttpsDefaultsApplied = true;
+    save();
+  } else if (resetLegacyTextScale) {
     save();
   }
   const win = new BrowserWindow({
@@ -768,7 +780,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['shareTrackRecords', 'autoLoadTelemetry', 'driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
     save();
     return publicSettings();
@@ -1025,7 +1037,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     return JSON.parse((await readCommunityBody(response,2*1024*1024)).toString('utf8'));
   });
 
-  ipcMain.handle('track-record-request', async ({sender},action,id,lapKey) => {
+  ipcMain.handle('track-record-request', async ({sender},action,id,lapKey,shareWithCommunity) => {
     if (sender !== win.webContents) throw new Error('Open Track Records in the main window.');
     const connection = configuredCommunity();
     if (trackRecordSyncState?.origin !== connection.origin || trackRecordSyncState.token !== connection.token ||
@@ -1113,7 +1125,18 @@ if (primaryInstance) app.whenReady().then(async () => {
         body,duplex:'half',headers:{'Content-Type':'application/zip','Content-Length':String(archive.size)}
       });
       await upload.body?.cancel();
-      return requestList(server);
+      if (shareWithCommunity !== true) return requestList(server);
+      let communityShareError;
+      try {
+        if (identity.client !== config.trackRecordClientId || !config.primaryDriver) {
+          throw new Error('The confirmed driver was reset.');
+        }
+        communityProgress(sender,operation,'sharing');
+        await uploadCommunityLap(connection,source,session,lap,sender);
+      } catch (error) {
+        communityShareError = error.message;
+      }
+      return {requests:await requestList(server),communityShared:!communityShareError,communityShareError};
     } catch (error) {
       transferError = error;
       throw error;
