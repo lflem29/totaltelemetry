@@ -15,6 +15,7 @@
     <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave">Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button" hidden>Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
   </div>
   <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
+  <span id="header-car-lane" aria-hidden="true"><span id="header-race-car"></span></span>
 </header>
 <dialog id="trophy-standings" aria-labelledby="trophy-standings-title">
   <div class="dialog-title"><h2 id="trophy-standings-title">Trophy Standings</h2><form method="dialog"><button class="button-secondary">Close</button></form></div>
@@ -68,7 +69,7 @@
     <h1 id="aero-title">Aero Visualiser</h1>
     <div class="visualiser-laps"><p id="aero-loaded" class="selected-color"></p><p id="aero-reference" class="reference-color"></p></div>
     <div class="suspension-controls">
-      <label><input id="aero-show-reference" type="checkbox" checked> Show Reference</label>
+      <label><input id="aero-show-reference" type="checkbox" checked> Show Reference in Aero</label>
       <span>Solid · Loaded / Dashed or hollow · Reference</span>
     </div>
     <section class="suspension-plot">
@@ -124,7 +125,7 @@
     <h1 id="suspension-title">Suspension Visualiser</h1>
     <div class="visualiser-laps"><p id="suspension-loaded" class="selected-color"></p><p id="suspension-reference" class="reference-color"></p></div>
     <div class="suspension-controls">
-      <label><input id="suspension-show-reference" type="checkbox" checked> Show Reference</label>
+      <label><input id="suspension-show-reference" type="checkbox" checked> Show Reference in Suspension</label>
       <span>Solid · Loaded / Dashed · Reference</span>
     </div>
     <div class="suspension-key">

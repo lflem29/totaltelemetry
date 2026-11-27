@@ -213,9 +213,11 @@ function suggestedDriver() {
     total.laps += session.laps.filter(lap => lap.kind === 'complete' && lap.time > 0).length;
     drivers.set(id,total);
   }
-  const previous = resultRecordIndex.find(session => driverIdentity(session.driver) === driverIdentity(config.previousRecordDriver));
-  if (previous && !drivers.get(driverIdentity(config.previousRecordDriver))?.laps) {
-    return {name:config.previousRecordDriver};
+  const previous = config.previousRecordDriver;
+  const previousKey = driverIdentity(previous);
+  const previousLaps = drivers.get(previousKey)?.laps;
+  if (previousKey && (previousLaps || resultRecordIndex.some(session => driverIdentity(session.driver) === previousKey))) {
+    return {name:previous,laps:previousLaps || undefined};
   }
   return [...drivers.values()].filter(item => item.laps > 0).sort((a,b) => b.laps - a.laps || a.name.localeCompare(b.name))[0];
 }
@@ -407,6 +409,7 @@ async function uploadCommunityLap(server, source, session, lap, sender) {
     }
   });
   await response.body?.cancel();
+  return details;
 }
 
 let config = {};
@@ -1185,17 +1188,18 @@ if (primaryInstance) app.whenReady().then(async () => {
       });
       await upload.body?.cancel();
       if (shareWithCommunity !== true) return requestList(server);
-      let communityShareError;
+      let communityLap, communityShareError;
       try {
         if (identity.client !== config.trackRecordClientId || !config.primaryDriver) {
           throw new Error('The confirmed driver was reset.');
         }
         communityProgress(sender,operation,'sharing');
-        await uploadCommunityLap(connection,source,session,lap,sender);
+        communityLap = await uploadCommunityLap(connection,source,session,lap,sender);
       } catch (error) {
         communityShareError = error.message;
       }
-      return {requests:await requestList(server),communityShared:!communityShareError,communityShareError};
+      const requests = await requestList(server).catch(() => null);
+      return {requests,communityShared:Boolean(communityLap),communityLap,communityShareError};
     } catch (error) {
       transferError = error;
       throw error;

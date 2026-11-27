@@ -1,3 +1,4 @@
-- Offers a colour preset preview on the first launch of each new version. Choose a preset or keep your current scheme.
-- Reclaims space between telemetry graphs and the sidebar divider.
-- Adds Trophy Standings, official XML-only Track Records, floating scrollbars, stable Settings sizing and larger colour swatches.
+- Adds the pixel McLaren to the header on a random 30-second to five-minute timer. It uses the existing gap between Track Records and the connection status.
+- Restores pending lap requests after switching Community Servers and hides Export to Server as soon as a requested lap is shared publicly.
+- Refines Track Records filters, keeps trophy counts in sync with Trophy Standings, and restores the suggested driver after an app reset when the files confirm it.
+- Improves graph styling and clears floating scrollbars when switching views.

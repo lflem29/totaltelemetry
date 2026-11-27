@@ -318,6 +318,7 @@ function setView(name) {
   $('trainer-tab').classList.toggle('active', name === 'trainer');
   $('library').hidden = name !== 'library';
   const showTelemetry = name === 'viewer' && Boolean(lap);
+  if (changingView || (name === 'viewer' && !showTelemetry)) hideScrollThumbs(document.body);
   $('viewer').hidden = !showTelemetry;
   $('viewer-empty').hidden = name !== 'viewer' || showTelemetry;
   $('records').hidden = name !== 'records';
@@ -330,7 +331,10 @@ function setView(name) {
   if (name === 'records') {
     renderRecords();
     void refreshFriendRecords();
-    if (changingView) void refreshSharedRecordLaps();
+    if (changingView) {
+      void refreshSharedRecordLaps();
+      void refreshTrophyStandings().catch(() => {});
+    }
   }
   if (name === 'trainer') { renderDriverTrainer(); void scanDriverTrainer(sessions); }
   if (showTelemetry) scheduleRender();
@@ -588,12 +592,13 @@ $('primary-driver-confirm').onclick = async () => {
   button.disabled = true;
   try {
     Object.assign(settings,await lmu.confirmPrimaryDriver(primaryDriverSuggestion.name));
+    friendConnectionGeneration++;
+    recordRequests = [];
     $('confirm-primary-driver').close();
     loadRecordNotifications();
     settingsFields();
     renderResultsDistance();
     refreshRecordsFromScan();
-    friendConnectionGeneration++;
     void refreshFriendRecords(true);
   } catch (error) {
     $('primary-driver-status').textContent = error.message;
@@ -945,6 +950,7 @@ $('community-server-form').onsubmit = async event => {
     if (view === 'records') void refreshSharedRecordLaps();
     communityMinimumGameVersion = updated.communityMinimumGameVersion ?? null;
     recordRequests = [];
+    renderRecordNotifications();
     serverConnectionState = 'disconnected';
     serverSyncUntil = 0;
     lastServerSync = null;
@@ -1263,8 +1269,13 @@ function resolveRecordNotification(key) {
   recordNotifications[key].dismissed = true;
   writeRecordNotifications();
 }
+function isOpenIncomingRequest(request) {
+  return request.incoming && (request.status === 'pending' || request.status === 'accepted');
+}
 function renderRecordNotifications() {
-  const pending = Object.entries(recordNotifications).filter(([,entry]) => !entry.dismissed).reverse();
+  const incoming = new Map(recordRequests.filter(isOpenIncomingRequest).map(request => [request.id,request]));
+  const pending = Object.entries(recordNotifications).filter(([,entry]) =>
+    !entry.dismissed && (!entry.requestId || incoming.has(entry.requestId))).reverse();
   const count = pending.length;
   $('notification-count').textContent = count === 0 ? 'No Notifications' :
     count.toLocaleString() + (count === 1 ? ' Notification' : ' Notifications');
@@ -1292,8 +1303,8 @@ function renderRecordNotifications() {
       const shareLabel = node('label', undefined, 'request-community-share');
       shareLabel.append(share, 'Also Share This Lap in Community Laps');
       item.insertBefore(shareLabel,actions);
+      const accepted = incoming.get(entry.requestId).status === 'accepted';
       for (const [action,label] of [['accept','Accept and Upload Lap'],['deny','Deny']]) {
-        const accepted = recordRequests.some(request => request.id === entry.requestId && request.status === 'accepted');
         const button = node('button',action === 'accept' && accepted ? 'Retry Upload' : label,action === 'deny' ? 'button-secondary' : '');
         button.disabled = pendingRecordTransfers.has(entry.requestId);
         button.onclick = () => void respondToRecordRequest(action,entry.requestId,key,share.checked);
@@ -1340,17 +1351,27 @@ function importedRequestedLap(request) {
   return settings.comparisonLaps?.find(lap => lap.path?.endsWith(suffix));
 }
 
-async function applyTelemetryRequestResponse(result, id) {
-  await updateRecordRequests(result?.requests ?? result);
+async function applyTelemetryRequestResponse(result, id, connection) {
+  if (connection !== friendConnectionGeneration) return;
   if (result?.communityShared) {
+    if (result.communityLap) rememberSharedRecordLap(result.communityLap,result.communityLap);
+    else if (view === 'records') void refreshSharedRecordLaps(true);
     addRecordNotification('community-shared-' + id,'Requested lap also shared in Community Laps.');
   } else if (result?.communityShareError) {
     addRecordNotification('community-share-error-' + id,
       'Requested lap sent to your friend. Community sharing failed · ' + result.communityShareError);
   }
+  let requests = result?.requests ?? result;
+  if (result?.requests === null) {
+    // A completed upload stays resolved if the follow-up request list could not be loaded.
+    requests = recordRequests.map(request => request.id === id && isOpenIncomingRequest(request)
+      ? {...request,status:'uploaded'} : request);
+  }
+  await updateRecordRequests(requests);
 }
 async function respondToRecordRequest(action,id,key,shareWithCommunity) {
   if (pendingRecordTransfers.has(id)) return;
+  const connection = friendConnectionGeneration;
   pendingRecordTransfers.add(id);
   if (action === 'accept') {
     recordNotifications[key].shareWithCommunity = shareWithCommunity === true;
@@ -1358,12 +1379,16 @@ async function respondToRecordRequest(action,id,key,shareWithCommunity) {
     writeRecordNotifications();
   } else renderRecordNotifications();
   try {
-    await applyTelemetryRequestResponse(await lmu.trackRecordRequest(action,id,undefined,
-      action === 'accept' && shareWithCommunity === true),id);
-    if (recordNotifications[key] && !recordNotifications[key].dismissed) resolveRecordNotification(key);
+    const result = await lmu.trackRecordRequest(action,id,undefined,action === 'accept' && shareWithCommunity === true);
+    await applyTelemetryRequestResponse(result,id,connection);
+    if (connection === friendConnectionGeneration && recordNotifications[key] && !recordNotifications[key].dismissed) {
+      resolveRecordNotification(key);
+    }
   } catch (error) {
-    addRecordNotification('request-error-' + id + '-' + action,error.message);
-    void refreshFriendRecords(true);
+    if (connection === friendConnectionGeneration) {
+      addRecordNotification('request-error-' + id + '-' + action,error.message);
+      void refreshFriendRecords(true);
+    }
   } finally {
     pendingRecordTransfers.delete(id);
     renderRecordNotifications();
@@ -1372,14 +1397,10 @@ async function respondToRecordRequest(action,id,key,shareWithCommunity) {
 
 async function updateRecordRequests(requests) {
   if (!Array.isArray(requests)) return;
+  const connection = friendConnectionGeneration;
   recordRequests = requests;
-  const knownRequests = new Set(requests.map(request => request.id));
-  for (const [key,entry] of Object.entries(recordNotifications)) {
-    if (entry.requestId && !entry.dismissed && !knownRequests.has(entry.requestId) && !pendingRecordTransfers.has(entry.requestId)) {
-      resolveRecordNotification(key);
-    }
-  }
   for (const request of requests) {
+    if (connection !== friendConnectionGeneration) break;
     const record = request.record;
     const description = [record.driver,record.track,record.layout !== record.track ? record.layout : '',
       record.carClass,record.car,lapTime(record.time),dateLabel(record.recorded,australianDate)].filter(Boolean).join(' · ');
@@ -1387,16 +1408,23 @@ async function updateRecordRequests(requests) {
     if (request.incoming) {
       if (request.status === 'accepted' && !pendingRecordTransfers.has(request.id)) {
         pendingRecordTransfers.add(request.id);
-        void lmu.trackRecordRequest('accept',request.id,undefined,recordNotifications[key]?.shareWithCommunity === true).then(updated => {
-          pendingRecordTransfers.delete(request.id);
-          return applyTelemetryRequestResponse(updated,request.id);
-        }).catch(error => {
-          pendingRecordTransfers.delete(request.id);
-          addRecordNotification(key + '-retry','Could not finish uploading the approved lap · ' + error.message);
-          renderRecordNotifications();
-        });
+        void lmu.trackRecordRequest('accept',request.id,undefined,recordNotifications[key]?.shareWithCommunity === true)
+          .then(result => applyTelemetryRequestResponse(result,request.id,connection))
+          .catch(error => {
+            if (connection === friendConnectionGeneration) {
+              addRecordNotification(key + '-retry','Could not finish uploading the approved lap · ' + error.message);
+            }
+          }).finally(() => {
+            pendingRecordTransfers.delete(request.id);
+            renderRecordNotifications();
+          });
       }
-      if (['pending','accepted'].includes(request.status)) {
+      if (isOpenIncomingRequest(request)) {
+        // Restore requests dismissed by older versions when the server still lists them as open.
+        if (recordNotifications[key]?.dismissed) {
+          delete recordNotifications[key].dismissed;
+          writeRecordNotifications();
+        }
         addRecordNotification(key,(request.requesterName || 'A friend') + ' requested one lap of your telemetry · ' + description,{requestId:request.id});
       } else if (recordNotifications[key] && !recordNotifications[key].dismissed) {
         resolveRecordNotification(key);
@@ -1469,6 +1497,7 @@ async function refreshFriendRecords(changed = false) {
       refreshRecordsFromScan();
     }
     rememberFriendRecordTimes(records);
+    if (view === 'records') void refreshTrophyStandings().catch(() => {});
     let syncStatus = '';
     if (!privateRequestsAvailable) syncStatus = 'Update the Community Server to share Track Records and request telemetry.';
     else if (settings.shareTrackRecords && !settings.primaryDriver) syncStatus = 'Confirm your primary driver to share Track Records.';
@@ -1610,9 +1639,7 @@ function calculateTrophyStandings(records, ownKey) {
   return {standing,chance};
 }
 
-function showTrophyStandings(records) {
-  const ownKey = normaliseDriverName(settings.primaryDriver);
-  const {standing,chance} = calculateTrophyStandings(records,ownKey);
+function showTrophyStandings({ownKey,standing,chance}) {
   $('trophy-content').hidden = !standing.length;
   $('trophy-status').textContent = standing.length ? '' : 'No eligible shared lap times yet.';
   $('trophy-status').hidden = Boolean(standing.length);
@@ -1658,12 +1685,31 @@ function showTrophyStandings(records) {
     $('trophy-close-contest').textContent = [record.track,record.layout !== record.track ? record.layout : '',
       record.carClass,number(gap,3) + ' s off ' + trophyMedals[rank].toLowerCase()].filter(Boolean).join(' · ');
     $('trophy-view-contest').onclick = () => {
-      $('record-driver').value = '';
+      compatibleReferencesOnly = false;
+      syncCompatibleReferenceFilters();
       $('hide-friend-records').checked = false;
       trophyDialog.close();
       renderRecords({trackName:record.track,trackLayout:record.layout,carClass:record.carClass});
     };
   }
+}
+
+let trophySnapshot;
+let trophyRequest;
+async function refreshTrophyStandings() {
+  const generation = friendConnectionGeneration;
+  if (trophyRequest?.generation === generation) return trophyRequest.promise;
+  if (!lmu.readTrophyStandings) return;
+  const promise = lmu.readTrophyStandings().then(records => {
+    if (generation !== friendConnectionGeneration) return;
+    const ownKey = normaliseDriverName(settings.primaryDriver);
+    trophySnapshot = {generation,ownKey,...calculateTrophyStandings(records,ownKey)};
+    renderRecordMedals();
+    if (trophyDialog.open) showTrophyStandings(trophySnapshot);
+  });
+  trophyRequest = {generation,promise};
+  try { await promise; }
+  finally { if (trophyRequest?.promise === promise) trophyRequest = undefined; }
 }
 
 let trophyLoad = 0;
@@ -1675,38 +1721,21 @@ trophyButton.onclick = async () => {
   $('trophy-content').hidden = true;
   trophyDialog.showModal();
   try {
-    const records = await lmu.readTrophyStandings();
-    if (load === trophyLoad && connection === friendConnectionGeneration && trophyDialog.open) showTrophyStandings(records);
+    await refreshTrophyStandings();
   } catch (error) {
-    if (load === trophyLoad && trophyDialog.open) {
+    if (load === trophyLoad && connection === friendConnectionGeneration && trophyDialog.open) {
       $('trophy-status').textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /,'');
     }
   }
 };
 
-function renderRecordMedals(candidates) {
-  const hidden = $('hide-friend-records').checked;
-  $('record-medals').hidden = hidden;
-  if (hidden) return;
-  const groups = new Map();
-  for (const {session,bestLap,dimensions,friend} of candidates) {
-    const key = recordContestKey(dimensions);
-    if (!groups.has(key)) groups.set(key,new Map());
-    const group = groups.get(key);
-    if (session.resultOnly && !settings.primaryDriver && !sessions.some(item =>
-      normaliseDriverName(item.driver) === normaliseDriverName(session.driver))) continue;
-    const driver = friend ? session.driver.trim().toLowerCase() : '';
-    group.set(driver,Math.min(group.get(driver) ?? Infinity,bestLap.time));
-  }
-  const medals = [0,0,0];
-  for (const group of groups.values()) {
-    if (!group.has('') || group.size < 2) continue;
-    const local = group.get('');
-    const rank = [...group.values()].filter(time => time < local).length;
-    if (rank < medals.length) medals[rank]++;
-  }
+function renderRecordMedals() {
+  const current = trophySnapshot?.generation === friendConnectionGeneration ? trophySnapshot : null;
+  const own = current?.standing.find(driver => driver.key === current.ownKey);
+  $('record-medals').hidden = !own || $('hide-friend-records').checked;
+  if (!own) return;
   ['gold','silver','bronze'].forEach((medal,index) => {
-    $('record-' + medal).textContent = medals[index];
+    $('record-' + medal).textContent = own.medals[index];
   });
 }
 
@@ -1755,6 +1784,14 @@ async function refreshSharedRecordLaps(force = false) {
   refreshRecordsFromScan();
 }
 
+function rememberSharedRecordLap(session, lap) {
+  sharedRecordLookup++;
+  sharedRecordLookupActive = false;
+  sharedRecordLaps.add(sharedRecordLapKey(session,lap));
+  refreshRecordsFromScan();
+  if (view === 'records') void refreshSharedRecordLaps();
+}
+
 function renderRecords(lastSession) {
   recordsRefreshPending = false;
   const lastDimensions = lastSession && recordDimensions(lastSession);
@@ -1766,7 +1803,7 @@ function renderRecords(lastSession) {
     const verified = new Set(friendRecords.filter(record => record.requestable).map(friendDriverContestKey));
     for (const friend of friendRecords) {
       if ((primary && normaliseDriverName(friend.driver) === primary) ||
-          (!friend.requestable && verified.has(friendDriverContestKey(friend)))) continue;
+          (!friend.requestable && !friend.resultOnly && verified.has(friendDriverContestKey(friend)))) continue;
       const session = {...friend,trackName:friend.track,trackLayout:friend.layout,trackLayoutVersion:friend.layoutVersion};
       const bestLap = {time:friend.time,sectors:friend.sectors,validity:friend.validity};
       candidates.push({session,bestLap,dimensions:recordDimensions(session),friend});
@@ -1815,7 +1852,7 @@ function renderRecords(lastSession) {
 
   const minimum = versionSelect.value;
   if (locked && communityMinimumGameVersion === null) candidates.length = 0;
-  renderRecordMedals(candidates.filter(({session}) => recordMeetsMinimum(session, minimum)));
+  renderRecordMedals();
   $('record-last-session').disabled = !sessions.length;
   const fastest = new Map();
   const unfilteredRecords = new Set();
@@ -1834,17 +1871,19 @@ function renderRecords(lastSession) {
     if ((driverSelect.value && driverSelect.value !== normaliseDriverName(row.session.driver)) ||
         filters.some((value, index) => value && value !== row.dimensions[index]) ||
         !recordMeetsMinimum(row.session, minimum)) continue;
-    const version = recordedGameVersion(row.session.gameVersion);
-    if (!fastest.has(key) || row.bestLap.time < fastest.get(key).bestLap.time) {
-      fastest.set(key, {...row, version});
+    if (compatibleReferencesOnly) {
+      const candidate = row.friend ? importedFriendRecordLap(row.friend,latestTrackRecordRequest(row.friend)) : row.session;
+      if (!candidate?.path || (candidate.path !== selected?.path && !matchesReferenceSession(candidate))) continue;
+    }
+    const previous = fastest.get(key);
+    const hasTelemetry = row.session.path || row.friend?.requestable;
+    if (!previous || row.bestLap.time < previous.bestLap.time ||
+        (row.bestLap.time === previous.bestLap.time && hasTelemetry && !previous.session.path && !previous.friend?.requestable)) {
+      fastest.set(key, {...row, version:recordedGameVersion(row.session.gameVersion)});
     }
   }
 
-  const records = [...fastest.values()].filter(({session,friend}) => {
-    if (!compatibleReferencesOnly) return true;
-    const candidate = friend ? importedFriendRecordLap(friend,latestTrackRecordRequest(friend)) : session;
-    return candidate?.path && (candidate.path === selected.path || matchesReferenceSession(candidate));
-  }).sort((a, b) => {
+  const records = [...fastest.values()].sort((a, b) => {
     for (let index = 0; index < 2; index++) {
       const order = a.dimensions[index].localeCompare(b.dimensions[index], undefined, {sensitivity:'accent'});
       if (order) return order;
@@ -1901,16 +1940,23 @@ function renderRecords(lastSession) {
           addLoadedReferenceLabel(referenceCell,imported.path);
         } else action.onclick = async () => {
           if (pendingRecordRequests.has(friend.id)) return;
+          const connection = friendConnectionGeneration;
           pendingRecordRequests.add(friend.id);
           action.disabled = true;
           try {
             if (request?.status === 'uploaded') {
               settings.comparisonLaps = await lmu.trackRecordRequest('download',request.id);
               renderLibrary();
-            } else await updateRecordRequests(await lmu.trackRecordRequest('request',friend.id,friend.lapKey));
+            } else {
+              const requests = await lmu.trackRecordRequest('request',friend.id,friend.lapKey);
+              if (connection === friendConnectionGeneration) await updateRecordRequests(requests);
+            }
+          } catch (error) {
+            if (connection === friendConnectionGeneration) $('friend-records-status').textContent = error.message;
+          } finally {
+            pendingRecordRequests.delete(friend.id);
+            refreshRecordsFromScan();
           }
-          catch (error) { $('friend-records-status').textContent = error.message; }
-          finally { pendingRecordRequests.delete(friend.id); refreshRecordsFromScan(); }
         };
         referenceCell.prepend(action);
       }
@@ -1926,6 +1972,8 @@ function renderRecords(lastSession) {
           void openSession(ownRecord.session,ownRecord.bestLap);
         };
         referenceCell.prepend(compare);
+      } else if (imported && ownRecord?.session.resultOnly) {
+        referenceCell.prepend(node('small','Your best lap has no telemetry'));
       }
     } else {
       time.textContent = lapTime(bestLap.time);
@@ -2517,11 +2565,7 @@ async function exportBestLap(target) {
     const filename = await lmu.exportBestLap(exportSessionPath, target, exportRecordLapId);
     if (!filename) return;
     if (target === 'community' && connection === friendConnectionGeneration && session && exportedLap) {
-      sharedRecordLookup++;
-      sharedRecordLookupActive = false;
-      sharedRecordLaps.add(sharedRecordLapKey(session,exportedLap));
-      refreshRecordsFromScan();
-      if (view === 'records') void refreshSharedRecordLaps();
+      rememberSharedRecordLap(session,exportedLap);
     }
     bestLapExportDialog.close();
     setStatus($('status'), (target === 'discord' ? 'Sent to Discord · ' : target === 'community' ? 'Uploaded to Community Server · ' : 'Exported ') + filename);
@@ -5941,7 +5985,7 @@ function baseChart(row, width, height, ratio) {
   for (const [t] of sectors) {
     if (t <= lap.start+.1 || t >= lap.end-.1) continue;
     const px = x(primary.distanceAt(t));
-    ctx.strokeStyle='#60715e'; ctx.setLineDash([3,4]); ctx.beginPath();
+    ctx.strokeStyle=elementColour('graph-axis',lightGraphBackground ? '#59645d' : '#60715e'); ctx.setLineDash([3,4]); ctx.beginPath();
     ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
   }
   ctx.setLineDash([]);
@@ -6095,7 +6139,7 @@ function paintCursorValues(ctx, row, name) {
       const px = at + ribbonWidth + 7 <= right ? at + 7 : Math.max(left, at - ribbonWidth - 7);
       const pyLabel = Math.min(bottom - (ordered.length - index) * step, Math.max(next, py - height / 2));
       next = pyLabel + step;
-      ctx.fillStyle = '#152019';
+      ctx.fillStyle = elementColour('panel','#171e1a');
       ctx.strokeStyle = colour;
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -6103,7 +6147,7 @@ function paintCursorValues(ctx, row, name) {
       ctx.fill();
       ctx.setLineDash(referenceLap ? [1, 2] : []);
       ctx.stroke();
-      ctx.fillStyle = '#f2f6ef';
+      ctx.fillStyle = elementColour('fg','#ecf2e9');
       ctx.fillText(label, px + 6, pyLabel + height / 2, Math.max(1, ribbonWidth - 12));
     });
   }
@@ -6274,7 +6318,11 @@ function paintChart(row) {
   }
   if(selection?.row===row) {
     const a=Math.max(left,Math.min(right,x(selection.initial))),b=Math.max(left,Math.min(right,x(selection.x)));
-    ctx.fillStyle='#c6f36c30';ctx.fillRect(Math.min(a,b),top,Math.abs(b-a),bottom-top);
+    ctx.save();
+    ctx.fillStyle = palette[0];
+    ctx.globalAlpha = .19;
+    ctx.fillRect(Math.min(a,b),top,Math.abs(b-a),bottom-top);
+    ctx.restore();
   }
   const name=row.key==='tyres'?tyreName():row.key;
   const showValues = row.hovering || (pinned && pinnedGraph === row.key);
@@ -7258,6 +7306,7 @@ $('pin-session-details').onclick = event => {
   button.setAttribute('aria-pressed', String(locked));
   button.title = locked ? 'Unpin Session Details' : 'Pin Session Details';
   const scrollTop = graphScrollContainer().scrollTop;
+  hideScrollThumbs(document.body);
   $('plot-column').classList.toggle('session-details-pinned', locked);
   graphScrollContainer().scrollTop = scrollTop;
 };
@@ -7307,6 +7356,67 @@ $('viewer-import-lap').onclick = () => {
   importComparisonButton.click();
 };
 $('records-tab').onclick=()=>setView('records');
+
+function initHeaderCarAnimation() {
+  const lane = $('header-car-lane');
+  const header = lane.parentElement;
+  const car = $('header-race-car');
+  const records = $('records-tab');
+  const connection = $('server-connection');
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const minimumDelay = 30_000;
+  const maximumDelay = 300_000;
+  let timer, animation;
+
+  function driveAcrossHeader() {
+    if (headerStatus.textContent || document.querySelector('dialog:modal')) return;
+    const recordsBounds = records.getBoundingClientRect();
+    const connectionBounds = connection.getBoundingClientRect();
+    const middle = (connectionBounds.top + connectionBounds.bottom) / 2;
+    const start = recordsBounds.right + 10;
+    const width = connectionBounds.left - 10 - start;
+    if (width <= 0 || middle <= recordsBounds.top || middle >= recordsBounds.bottom) return;
+
+    const headerBounds = header.getBoundingClientRect();
+    lane.style.left = `${start - headerBounds.left}px`;
+    lane.style.top = `${middle - headerBounds.top}px`;
+    lane.style.width = `${width}px`;
+    const carWidth = car.offsetWidth;
+    if (width < carWidth + 24) return;
+    animation = car.animate([
+      {transform:`translate(${-carWidth}px, -50%)`, opacity:1},
+      {transform:`translate(${width}px, -50%)`, opacity:1}
+    ],{duration:Math.max(1500, Math.min(3200, (width + carWidth) * 5)), easing:'linear'});
+    const wheels = car.animate([{backgroundPositionX:'0%'},{backgroundPositionX:'100%'}],
+      {duration:16 / 28 * 1000,iterations:Infinity,easing:'steps(16, jump-none)'});
+    const stopWheels = () => wheels.cancel();
+    void animation.finished.then(stopWheels,stopWheels);
+  }
+
+  function schedulePass() {
+    if (document.hidden || reducedMotion.matches) return;
+    const delay = minimumDelay + Math.floor(Math.random() * (maximumDelay - minimumDelay + 1));
+    timer = window.setTimeout(() => {
+      if (document.hidden || reducedMotion.matches) return;
+      driveAcrossHeader();
+      schedulePass();
+    },delay);
+  }
+
+  function resetSchedule() {
+    window.clearTimeout(timer);
+    animation?.cancel();
+    schedulePass();
+  }
+
+  document.addEventListener('visibilitychange',resetSchedule);
+  reducedMotion.addEventListener('change',resetSchedule);
+  const layoutObserver = new ResizeObserver(() => animation?.cancel());
+  for (const control of [header,records.parentElement,connection,headerStatus]) layoutObserver.observe(control);
+  schedulePass();
+}
+initHeaderCarAnimation();
+
 $('recent-session-filters').addEventListener('change', event => {
   if (event.target instanceof HTMLSelectElement) renderLibrary({resetRecentSessions:true});
 });
@@ -7602,6 +7712,9 @@ function closePanelPopout(key) {
   else popoutWindows.get(key)?.close();
 }
 const scrollThumbs = new WeakMap();
+function hideScrollThumbs(host) {
+  for (const {element} of scrollThumbs.get(host) ?? []) element.hidden = true;
+}
 function createScrollThumb(host, axis) {
   const element = host.ownerDocument.createElement('div');
   element.className = 'scroll-thumb scroll-thumb-' + axis.name;
@@ -7640,7 +7753,7 @@ function showScrollThumbs(scroller) {
         content:'scrollWidth',length:'width',position:'left'})
     ];
     scrollThumbs.set(host,thumbs);
-    win.addEventListener('resize', () => { for (const {element} of thumbs) element.hidden = true; });
+    win.addEventListener('resize', () => hideScrollThumbs(host));
   }
   if (thumbs.some(thumb => thumb.drag && thumb.scroller !== scroller)) return;
   const bounds = scroller === doc.scrollingElement
@@ -7732,6 +7845,7 @@ function togglePanelPopout(key, panel, title) {
   }
   const popup = openPanelWindow(key,title);
   if (!popup) return;
+  hideScrollThumbs(document.body);
   const doc = popup.document;
   const link = node('button', 'Bring ' + title + ' to Front', 'popout-link button-secondary');
   link.id = key + '-popout-link';
