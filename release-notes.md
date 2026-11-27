@@ -1,1 +1,3 @@
-Adds opt-in Aero and Suspension Visualisers under Settings → Beta. Both pop-outs follow the selected laps and zoom. Aero includes dynamic rake and a Lexus RC F GT3 side profile. Suspension includes travel and calculated velocity plots, histograms, and configurable compression and floor-clearance markers.
+- Offers a colour preset preview on the first launch of each new version. Choose a preset or keep your current scheme.
+- Reclaims space between telemetry graphs and the sidebar divider.
+- Adds Trophy Standings, official XML-only Track Records, floating scrollbars, stable Settings sizing and larger colour swatches.

@@ -2,6 +2,7 @@
 import bisect
 from contextlib import contextmanager
 import csv
+from datetime import datetime
 import hashlib
 import io
 import json
@@ -319,12 +320,20 @@ def read_results(path):
             drivers.append(dict(driver=driver.findtext('Name', ''), car=driver.findtext('VehName', ''),
                                 model=driver.findtext('CarType', ''), carClass=driver.findtext('CarClass', ''),
                                 stage=stage.tag, laps=laps,
+                                qualifyingPosition=driver.findtext('ClassPosition') if stage.tag.lower().startswith('qual') else None,
                                 raceResult={key: numeric(driver.findtext(tag)) for key, tag in {
                                     'position': 'Position', 'classPosition': 'ClassPosition',
                                     'grid': 'GridPos', 'best': 'BestLapTime', 'laps': 'Laps',
                                     'finishTime': 'FinishTime',
                                 }.items()} if stage.tag.lower().startswith('race') else None))
-    return dict(path=str(path), track=track, gameVersion=root.findtext('GameVersion', '').strip(), drivers=drivers)
+    event_start = root.findtext('DateTime', '').strip()
+    event = (event_start, root.findtext('Setting', ''), root.findtext('ServerName', ''))
+    try:
+        recorded = datetime.strptime(root.findtext('TimeString', '').strip(), '%Y/%m/%d %H:%M:%S').isoformat()
+    except ValueError:
+        recorded = ''
+    return dict(path=str(path), track=track, venue=root.findtext('TrackVenue', '').strip(),
+                recorded=recorded, event=event, gameVersion=root.findtext('GameVersion', '').strip(), drivers=drivers)
 
 
 def normalize(value):
@@ -433,14 +442,72 @@ def correlate(recording, results):
                                 for split, fallback in zip(row['sectors'], lap['sectors'])])
         else:
             lap.update(time=None, validity='no official time')
-    match = dict(path=result['path'], model=driver['model'], carClass=driver['carClass'], gameVersion=result['gameVersion'])
+    match = dict(path=result['path'], model=driver['model'], carClass=driver['carClass'], gameVersion=result['gameVersion'], event=tuple(result['event']),
+                 qualifyingPosition=driver['qualifyingPosition'])
     if recording['session'].lower().startswith('race'):
         match['raceGaps'] = race_gaps(row for row in result['drivers'] if row['stage'] == driver['stage'])
     return match
 
 
+def qualifying_position(race, race_match, prior, prior_match):
+    if not prior_match or not prior['session'].lower().startswith('qual'):
+        return None
+    identity = ('driver', 'car', 'track', 'trackLayoutVersion', 'carClass')
+    if not race['carClass'] or any(normalize(race[key]) != normalize(prior[key]) for key in identity):
+        return None
+    if race_match['path'] != prior_match['path']:
+        if not race_match['event'][0] or race_match['event'] != prior_match['event']:
+            return None
+    position = prior_match['qualifyingPosition']
+    return int(position) if position and position.strip().isdigit() and int(position) > 0 else None
+
+
 def directory(folder, suffix):
     return sorted(p for p in Path(folder).glob('*') if p.is_file() and p.suffix.lower() == suffix) if folder else []
+
+
+def results_track_records(results, recordings, primary_driver):
+    driver_filter = normalize(primary_driver or '')
+    matched_tracks = {}
+    for item in recordings:
+        if item['results']:
+            dimensions = (item['trackName'] or item['track'], item['trackLayout'] or item['track'])
+            matched_tracks.setdefault(item['results'], set()).add(dimensions)
+
+    records = {}
+    for result in results:
+        if not result['track'].strip():
+            continue
+        dimensions = matched_tracks.get(result['path'], set())
+        track, layout = (next(iter(dimensions)) if len(dimensions) == 1
+                         else (result['venue'] or result['track'], result['track']))
+        for driver in result['drivers']:
+            name = driver['driver'].strip()
+            model = driver['model'].strip() or session_model(driver['car']).strip()
+            if not name or not model or (driver_filter and normalize(name) != driver_filter):
+                continue
+            timed = [lap for lap in driver['laps']
+                     if lap['number'] > 0 and not lap['pit'] and lap['time'] and 0 < lap['time'] <= 86400]
+            if not timed:
+                continue
+            best = min(timed, key=lambda lap: lap['time'])
+            category = car_class(driver['carClass'])
+            key = (track, layout, normalize(name), model, category, result['gameVersion'])
+            if key in records and records[key]['laps'][0]['time'] <= best['time']:
+                continue
+
+            def split(lap, index):
+                value = lap['sectors'][index]
+                return value if value is not None and 0 < value < lap['time'] else None
+            sectors = [split(best, index) for index in range(3)]
+            best_sectors = [min((value for lap in timed if (value := split(lap, index)) is not None), default=None)
+                            for index in range(3)]
+            records[key] = dict(trackName=track, trackLayout=layout, driver=name, model=model,
+                                carClass=category, gameVersion=result['gameVersion'], recorded=result['recorded'],
+                                resultOnly=True, bestSectors=best_sectors,
+                                laps=[dict(number=best['number'], kind='complete', validity='official',
+                                           time=best['time'], sectors=sectors)])
+    return list(records.values())
 
 
 def index(payload):
@@ -471,7 +538,7 @@ def index(payload):
                         or any(not {'sectors', 'topSpeed', 'pitLaneAtBoundary'} <= lap.keys() for lap in data['laps'])
                     )
                 else:
-                    needs_update = 'gameVersion' not in data or any('carClass' not in driver or 'raceResult' not in driver or any(not {'sectors', 'position'} <= lap.keys() for lap in driver['laps'])
+                    needs_update = not {'event', 'venue', 'recorded', 'gameVersion'} <= data.keys() or any('carClass' not in driver or 'raceResult' not in driver or any(not {'sectors', 'position'} <= lap.keys() for lap in driver['laps'])
                                        for driver in data['drivers'])
             if not entry or entry['stamp'] != stamp or needs_update:
                 entry = dict(stamp=stamp, data=parser(path))
@@ -486,8 +553,10 @@ def index(payload):
 
     results = [data for path in directory(payload.get('results'), '.xml') if (data := load(path, read_results))]
     items = [data for path in directory(payload.get('telemetry'), '.duckdb') if (data := load(path, inspect))]
+    matches = {}
     for item in items:
         match = correlate(item, results)
+        matches[item['path']] = match
         item['results'] = match['path'] if match else None
         if match and 'raceGaps' in match:
             item['raceGaps'] = match['raceGaps']
@@ -497,6 +566,11 @@ def index(payload):
         times = [lap['time'] for lap in item['laps'] if lap['time']]
         item['best'] = min(times, default=None)
         item['timed'] = len(times)
+    prior = None
+    for item in sorted(items, key=lambda item: item['recorded']):
+        if prior and 'raceGaps' in item and prior['recorded'] < item['recorded']:
+            item['qualifyingPosition'] = qualifying_position(item, matches[item['path']], prior, matches[prior['path']])
+        prior = item
     # Attach a known model to other recordings of the same exact vehicle.
     known = {normalize(item['car']): item['model'] for item in items if item['results']}
     for item in items:
@@ -506,6 +580,7 @@ def index(payload):
         temporary.write_text(json.dumps(cached, allow_nan=False), encoding='utf8')
         os.replace(temporary, cache_path)
     return dict(sessions=sorted(items, key=lambda x: x['recorded'], reverse=True), errors=errors,
+                resultRecords=results_track_records(results, items, payload.get('primaryDriver')),
                 resultGameVersions=sorted({result['gameVersion'] for result in results if result['gameVersion']}))
 
 

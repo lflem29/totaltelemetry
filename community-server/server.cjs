@@ -129,7 +129,9 @@ function timingRecord(raw) {
   if (!record.driver || !record.track || !record.layout || !record.car ||
       !Number.isFinite(Date.parse(record.recorded)) || !validTime(raw.time)) throw new Error('Invalid timing record.');
   const sectors = key => [0,1,2].map(index => validTime(raw[key]?.[index]) ? raw[key][index] : null);
-  return {...record,lapKey:recordLapKeyPattern.test(raw.lapKey ?? '') ? raw.lapKey : '',time:raw.time,sectors:sectors('sectors'),bestSectors:sectors('bestSectors'),
+  const lapKey = recordLapKeyPattern.test(raw.lapKey ?? '') ? raw.lapKey : '';
+  return {...record,lapKey,...(!lapKey && raw.resultOnly === true && {resultOnly:true}),
+    time:raw.time,sectors:sectors('sectors'),bestSectors:sectors('bestSectors'),
     validity:raw.validity === 'official' ? 'official' : 'unconfirmed'};
 }
 
@@ -156,7 +158,10 @@ function trackRecordGroups(records) {
   const groups = new Map();
   for (const [id,entry] of Object.entries(records)) {
     const {record} = entry;
-    const key = record.lapKey && !entry.removed ? JSON.stringify([
+    const key = entry.removed ? id : record.resultOnly ? JSON.stringify([
+      'results',record.driver.toLowerCase(),record.track,record.layout,record.carClass,
+      record.car,record.gameVersion,record.time,Date.parse(record.recorded)
+    ]) : record.lapKey ? JSON.stringify([
       record.driver.trim().toLowerCase(),record.lapKey,record.track,record.layout,record.carClass,
       record.car,record.gameVersion,record.time,Date.parse(record.recorded)
     ]) : id;
@@ -382,11 +387,12 @@ function trackRecordsStore(root, minimumGameVersion) {
       const changes = {};
       let revision = store.revision;
       for (const record of verified ? data.records : []) {
-        if (record.driver !== identity.driver || !record.lapKey) continue;
+        if (record.driver !== identity.driver || (!record.lapKey && !record.resultOnly)) continue;
         if (record.validity !== 'official' || !meetsMinimumGameVersion(record.gameVersion, minimumGameVersion)) continue;
         const key = sharedRecordId(data.client,record);
         const previous = changes[key] ?? store.records[key];
-        if (!previous || !meetsMinimumGameVersion(previous.record.gameVersion, minimumGameVersion) || previous.record.time > record.time) {
+        if (!previous || !meetsMinimumGameVersion(previous.record.gameVersion, minimumGameVersion) || previous.record.time > record.time ||
+            (previous.record.time === record.time && previous.record.resultOnly && record.lapKey)) {
           changes[key] = {client:data.client,revision:++revision,record};
         }
       }
@@ -482,7 +488,7 @@ async function serve(request, response, {root, expected, owner, syncTrackRecords
     return syncTrackRecords(request,response,['owner-' + (recordOwnerRoute[1] || 'list'),recordOwnerRoute[2]]);
   }
   if (url.pathname === '/v1/track-records' && request.method === 'GET') {
-    return reply(response,200,{privateRecordProtocol:1});
+    return reply(response,200,{privateRecordProtocol:1,resultOnlyTrackRecords:true});
   }
   if (url.pathname === '/v1/track-records' && request.method === 'POST') return syncTrackRecords(request,response);
   if (url.pathname === '/v1/track-records/requests' && request.method === 'GET') return syncTrackRecords(request,response,['list']);
@@ -577,7 +583,7 @@ async function sharedLapSummary(directory) {
     drivers:[...drivers.values()].sort((a,b) => a.name.localeCompare(b.name))};
 }
 
-module.exports = {createCommunityServer,sharedLapSummary};
+module.exports = {createCommunityServer,sharedLapSummary,installerPattern,maxInstallerBytes};
 
 if (require.main === module) {
   const host = process.env.TT_COMMUNITY_BIND || '127.0.0.1';

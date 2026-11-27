@@ -213,6 +213,10 @@ function suggestedDriver() {
     total.laps += session.laps.filter(lap => lap.kind === 'complete' && lap.time > 0).length;
     drivers.set(id,total);
   }
+  const previous = resultRecordIndex.find(session => driverIdentity(session.driver) === driverIdentity(config.previousRecordDriver));
+  if (previous && !drivers.get(driverIdentity(config.previousRecordDriver))?.laps) {
+    return {name:config.previousRecordDriver};
+  }
   return [...drivers.values()].filter(item => item.laps > 0).sort((a,b) => b.laps - a.laps || a.name.localeCompare(b.name))[0];
 }
 
@@ -259,9 +263,9 @@ function recordedTrackRecordDate(session) {
   return '';
 }
 
-function localTrackRecords(minimumGameVersion, eligibility) {
+function localTrackRecords(minimumGameVersion, eligibility, supportsResultOnly) {
   const records = new Map();
-  for (const session of sessionIndex) {
+  for (const session of supportsResultOnly ? [...sessionIndex,...resultRecordIndex] : sessionIndex) {
     if (driverIdentity(session.driver) !== driverIdentity(config.primaryDriver)) continue;
     const fields = {
       driver:config.primaryDriver, track:session.trackName || session.track, layout:session.trackLayout || session.track,
@@ -280,14 +284,15 @@ function localTrackRecords(minimumGameVersion, eligibility) {
     }
     const key = JSON.stringify([fields.driver,fields.track,fields.layout,fields.carClass || 'Unknown'].map(value => value.toLowerCase()));
     if (records.has(key) && records.get(key).time <= lap.time) continue;
-    const bestSectors = [0,1,2].map(index => {
+    const bestSectors = session.bestSectors ?? [0,1,2].map(index => {
       const best = laps.reduce((min,entry) => {
         const time = entry.sectors?.[index];
         return Number.isFinite(time) && time > 0 ? Math.min(min,time) : min;
       },Infinity);
       return Number.isFinite(best) ? best : null;
     });
-    records.set(key,{...fields,lapKey:recordLapKey(session,lap),time:lap.time,sectors:lap.sectors?.slice(0,3),bestSectors,validity:lap.validity});
+    records.set(key,{...fields,lapKey:session.resultOnly ? '' : recordLapKey(session,lap),
+      ...(session.resultOnly && {resultOnly:true}),time:lap.time,sectors:lap.sectors?.slice(0,3),bestSectors,validity:lap.validity});
   }
   return records;
 }
@@ -320,15 +325,18 @@ async function refreshTrackRecords() {
   const unsent = () => {
     if (!identity || config.trackRecordClientId !== identity.client || !shareTrackRecords()) return [];
     eligibility = {excludedSessions:0,eligibleRecords:0};
-    const records = localTrackRecords(state.minimumGameVersion,eligibility);
+    const records = localTrackRecords(state.minimumGameVersion,eligibility,capabilities.resultOnlyTrackRecords === true);
     eligibility.eligibleRecords = records.size;
-    return [...records].filter(([key,record]) => (state.sent.get(key) ?? Infinity) > record.time);
+    return [...records].filter(([key,record]) => {
+      const sent = state.sent.get(key);
+      return !sent || sent.time > record.time || (sent.time === record.time && !sent.lapKey && record.lapKey);
+    });
   };
   let pending = [];
   let more = false;
   do {
     const active = !identity || (config.primaryDriver && config.trackRecordClientId === identity.client);
-    if (!active) return {records:[],minimumGameVersion:null};
+    if (!active || trackRecordSyncState !== state) return {records:[],minimumGameVersion:null};
     const batch = shareTrackRecords() ? pending.splice(0,200) : [];
     if (!shareTrackRecords()) pending.length = 0;
     const response = await communityFetch(server,'',{
@@ -337,6 +345,7 @@ async function refreshTrackRecords() {
         records:batch.map(([,record]) => record)})
     },'/v1/track-records');
     const data = JSON.parse((await readCommunityBody(response,1024*1024)).toString('utf8'));
+    if (trackRecordSyncState !== state) return {records:[],minimumGameVersion:null};
     if (typeof data.epoch !== 'string' || !Number.isSafeInteger(data.cursor) || data.cursor < 0 ||
         !Array.isArray(data.records) || (data.more && data.epoch === state.epoch && data.cursor <= state.cursor)) {
       throw new Error('Invalid Track Records response.');
@@ -356,7 +365,7 @@ async function refreshTrackRecords() {
       save();
     }
     if (!policyChanged && !epochChanged) {
-      for (const [key,record] of batch) state.sent.set(key,record.time);
+      for (const [key,record] of batch) state.sent.set(key,record);
     }
     if (policyChanged || epochChanged || !batch.length) pending = unsent();
     for (const record of data.records) {
@@ -402,6 +411,7 @@ async function uploadCommunityLap(server, source, session, lap, sender) {
 
 let config = {};
 let sessionIndex = [];
+let resultRecordIndex = [];
 let activeScan;
 let generation = 0;
 let configPath;
@@ -455,6 +465,7 @@ const displayFields = {
   colors:settingsMap(settingsColour), speedActivations:settingsMap(value => typeof value === 'boolean'),
   mergeSummaryBrakes:value => typeof value === 'boolean',
   mergeSummaryEngineTemperatures:value => typeof value === 'boolean',
+  cornerTimeLossOpen:value => typeof value === 'boolean',
   deltaChannels:settingsList, chartOverlays:settingsMap(value => settingsList(value) && value.length <= 3), graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
   interfaceColour:settingsColour, interfaceColourMode:value => ['green', 'orange', 'custom'].includes(value),
   interfaceBackgroundColour:settingsColour, graphBackgroundColour:settingsColour,
@@ -721,8 +732,9 @@ if (primaryInstance) app.whenReady().then(async () => {
   const panelTitles = {track:'Track View', summary:'Session Summary', graphs:'Telemetry Graphs', aero:'Aero Visualiser', suspension:'Suspension Visualiser'};
   win.webContents.setWindowOpenHandler(({url, frameName}) => {
     if (url !== 'about:blank' || !Object.hasOwn(panelTitles, frameName)) return {action:'deny'};
+    const {width, height} = win.getBounds();
     return {action:'allow', overrideBrowserWindowOptions:{
-      ...windowPlacement(frameName, 720, 640, 360, 260),
+      ...windowPlacement(frameName, Math.round(width * .75), Math.round(height * .75), 360, 260),
       icon: windowIcon,
       title: 'Total Telemetry · ' + panelTitles[frameName],
       backgroundColor:'#101513',
@@ -749,6 +761,15 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   win.webContents.on('will-navigate', event => event.preventDefault());
 
+  ipcMain.handle('focus-panel', ({sender, senderFrame}, key) => {
+    if (sender !== win.webContents || senderFrame !== win.webContents.mainFrame) return;
+    const child = popouts.get(key);
+    if (!child || child.isDestroyed()) return;
+    if (child.isMinimized()) child.restore();
+    if (!child.isVisible()) child.show();
+    child.moveTop();
+    child.focus();
+  });
   ipcMain.handle('dock-panel', (event, key) => {
     if (event.sender !== win.webContents) return;
     const child = popouts.get(key);
@@ -789,8 +810,9 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'cornerTimeLossOpen', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
+    if (changes.colourSchemePromptVersion === app.getVersion()) config.colourSchemePromptVersion = app.getVersion();
     save();
     return publicSettings();
   });
@@ -861,15 +883,16 @@ if (primaryInstance) app.whenReady().then(async () => {
       buttons: ['Cancel', 'Reset all settings'], defaultId: 0, cancelId: 0
     });
     if (result.response !== 1 || win.isDestroyed()) return;
-    const {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied} = config;
+    const {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied, colourSchemePromptVersion} = config;
     const {trackRecordClientId,trackRecordSecretEncrypted,primaryDriver,previousRecordDriver} = config;
-    const retained = {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied,
+    const retained = {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied, colourSchemePromptVersion,
       trackRecordClientId,trackRecordSecretEncrypted,previousRecordDriver:primaryDriver || previousRecordDriver};
     save(retained);
     config = retained;
     trackRecordSyncState = undefined;
     generation++;
     sessionIndex = [];
+    resultRecordIndex = [];
     watchFolders(win);
     win.webContents.reload();
   });
@@ -952,10 +975,11 @@ if (primaryInstance) app.whenReady().then(async () => {
   ipcMain.handle('scan', async () => {
     if (activeScan) return activeScan;
     const token = generation;
-    activeScan = backend('index', {telemetry: config.telemetry, results: config.results,
+    activeScan = backend('index', {telemetry: config.telemetry, results: config.results, primaryDriver: config.primaryDriver,
       cache: path.join(app.getPath('userData'), 'lap-index-v1.json')}).then(result => {
       if (token !== generation) return {stale: true};
       sessionIndex = result.sessions;
+      resultRecordIndex = result.resultRecords ?? [];
       return {...result,suggestedDriver:config.primaryDriver ? null : suggestedDriver()};
     }).finally(() => { activeScan = null; });
     return activeScan;
@@ -1015,6 +1039,32 @@ if (primaryInstance) app.whenReady().then(async () => {
   ipcMain.handle('sync-track-records', ({sender}) => {
     if (sender !== win.webContents) throw new Error('Track Records are available from the main window.');
     return syncTrackRecords();
+  });
+  ipcMain.handle('read-trophy-standings', async ({sender}) => {
+    if (sender !== win.webContents) throw new Error('Trophy Standings are available from the main window.');
+    if (!publicSettings().communityConfigured) throw new Error('Connect a Community Server to see Trophy Standings.');
+    const server = configuredCommunity();
+    const records = new Map();
+    let epoch = null, cursor = 0;
+    let more;
+    do {
+      const response = await communityFetch(server,'',{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({client:null,epoch,cursor,records:[]})
+      },'/v1/track-records');
+      const page = JSON.parse((await readCommunityBody(response,1024*1024)).toString('utf8'));
+      if (typeof page.epoch !== 'string' || !Number.isSafeInteger(page.cursor) || page.cursor < 0 ||
+          !Array.isArray(page.records) || (page.more && page.epoch === epoch && page.cursor <= cursor)) {
+        throw new Error('Invalid Track Records response.');
+      }
+      if (page.epoch !== epoch || page.reset) records.clear();
+      for (const record of page.records) {
+        if (record.removed) records.delete(record.id);
+        else records.set(record.id,record);
+      }
+      ({epoch,cursor,more} = page);
+    } while (more);
+    return [...records.values()];
   });
   const recordRequestDownloads = new Set();
   const recordRequestUploads = new Set();
@@ -1164,7 +1214,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     for (const key of fields) {
       if (typeof filters[key] === 'string' && filters[key].trim()) params.set(key, filters[key].trim().slice(0, 160));
     }
-    communityProgress(sender, 'list', 'Connecting to the community server…');
+    if (!filters.background) communityProgress(sender, 'list', 'Connecting to the community server…');
     const server = configuredCommunity();
     let response;
     try {
@@ -1174,7 +1224,8 @@ if (primaryInstance) app.whenReady().then(async () => {
       response = await communityFetch(server, '');
     }
     const readList = async result => JSON.parse((await readCommunityBody(result, 2 * 1024 * 1024,
-      (received, total) => communityProgress(sender, 'list', 'Loading community laps…', received, total))).toString('utf8'));
+      filters.background ? undefined : (received, total) =>
+        communityProgress(sender, 'list', 'Loading community laps…', received, total))).toString('utf8'));
     const data = await readList(response);
     const clean = items => items.filter(item => item && typeof item.id === 'string' && communityId.test(item.id) &&
       Number.isFinite(item.time) && item.time > 0).map(item => ({

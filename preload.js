@@ -1,5 +1,6 @@
 const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('lmu', {
+  focusPanel: key => ipcRenderer.invoke('focus-panel', key),
   dockPanel: key => ipcRenderer.invoke('dock-panel', key),
   settings: () => ipcRenderer.invoke('settings'),
   save: changes => ipcRenderer.invoke('save-settings', changes),
@@ -22,6 +23,7 @@ contextBridge.exposeInMainWorld('lmu', {
   onCommunityActivity: callback => ipcRenderer.on('community-activity',(_,event) => callback(event)),
   manageTrackRecords: (action,id) => ipcRenderer.invoke('manage-track-records',action,id),
   trackRecordRequest: (action,id,lapKey,shareWithCommunity) => ipcRenderer.invoke('track-record-request',action,id,lapKey,shareWithCommunity),
+  readTrophyStandings: () => ipcRenderer.invoke('read-trophy-standings'),
   syncTrackRecords: () => ipcRenderer.invoke('sync-track-records'),
   listCommunityLaps: filters => ipcRenderer.invoke('list-community-laps', filters),
   removeCommunityLap: id => ipcRenderer.invoke('remove-community-lap', id),
