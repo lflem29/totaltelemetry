@@ -41,8 +41,9 @@ def main():
     args = parser.parse_args()
 
     documents = subprocess.check_output(
-        ['gh','api','--paginate','--slurp', f'repos/{args.repo}/releases?per_page=100'], text=True)
-    releases = [release for page in json.loads(documents) for release in page]
+        ['gh','api','--paginate',f'repos/{args.repo}/releases?per_page=100',
+         '--jq','.[] | {tag_name,draft,prerelease,assets:[.assets[] | {state,size}]}'], text=True)
+    releases = [json.loads(line) for line in documents.splitlines()]
     keep, prune = releases_to_prune(releases,EDITION_PREFIXES[args.repo],args.published_tag)
     print('Keep: ' + ', '.join(keep), flush=True)
     print(('Delete: ' if args.apply else 'Would delete: ') + (', '.join(prune) or 'none'), flush=True)
