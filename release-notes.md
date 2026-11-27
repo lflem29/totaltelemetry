@@ -1,4 +1,4 @@
-- Adds the pixel McLaren to the header on a random 30-second to five-minute timer. It uses the existing gap between Track Records and the connection status.
-- Restores pending lap requests after switching Community Servers and hides Export to Server as soon as a requested lap is shared publicly.
-- Refines Track Records filters, keeps trophy counts in sync with Trophy Standings, and restores the suggested driver after an app reset when the files confirm it.
-- Improves graph styling and clears floating scrollbars when switching views.
+- Switch telemetry graphs between Distance and Time. Compare elapsed time at the same track position or distance at the same elapsed time.
+- See the live lap position and the selected section length beside the playback time.
+- Speeds up reference-lap loading and reuses recently loaded telemetry.
+- All 62 cars from the 2026 Le Mans spotter guide can drive across the header, with random intervals of 10 to 60 seconds.

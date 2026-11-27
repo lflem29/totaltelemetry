@@ -531,18 +531,72 @@ function rememberWindow(key, win) {
     [key]: {bounds:win.getNormalBounds(), maximized:win.isMaximized()}};
 }
 
-function backend(command, payload) {
+function backend(command, payload, decode = JSON.parse) {
   const runtime = path.join(__dirname, 'runtime', 'python.exe');
   const python = process.platform === 'win32' ? runtime : 'python3';
   return new Promise((resolve, reject) => {
     const child = execFile(python, [path.join(__dirname, 'telemetry.py'), command],
       {maxBuffer: 160 * 1024 * 1024, windowsHide: true}, (error, output, stderr) => {
         if (error) return reject(new Error(stderr.trim() || error.message));
-        try { resolve(JSON.parse(output)); } catch (err) { reject(err); }
+        try { resolve(decode(output)); } catch (err) { reject(err); }
       });
     child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify(payload));
   });
+}
+
+const recentLapOutput = new Map();
+const pendingLapReads = new Map();
+const maxLapCacheBytes = 48 * 1024 * 1024;
+let lapCacheBytes = 0;
+
+async function lapCacheKey(command, payload) {
+  try {
+    const [stats, journal] = await Promise.all([
+      fs.promises.stat(payload.path, {bigint:true}),
+      command === 'lap' ? fs.promises.stat(payload.path + '.wal').catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      }) : undefined
+    ]);
+    if (journal || !stats.isFile()) return undefined;
+    const version = [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(':');
+    return JSON.stringify([command, payload, version]);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readTelemetryLap(command, payload, cacheable = true) {
+  const key = cacheable && await lapCacheKey(command, payload);
+  if (!key) return backend(command, payload);
+  const cached = recentLapOutput.get(key);
+  if (cached !== undefined) {
+    recentLapOutput.delete(key);
+    recentLapOutput.set(key, cached);
+    return JSON.parse(cached);
+  }
+  let reading = pendingLapReads.get(key);
+  if (!reading) {
+    reading = backend(command, payload, output => output);
+    pendingLapReads.set(key, reading);
+  }
+  try {
+    const output = await reading;
+    const data = JSON.parse(output);
+    // The backend serializes this JSON as ASCII, so its length is its size in bytes.
+    if (pendingLapReads.get(key) === reading && output.length <= maxLapCacheBytes) {
+      while (recentLapOutput.size >= 3 || lapCacheBytes + output.length > maxLapCacheBytes) {
+        const oldest = recentLapOutput.keys().next().value;
+        lapCacheBytes -= recentLapOutput.get(oldest).length;
+        recentLapOutput.delete(oldest);
+      }
+      recentLapOutput.set(key, output);
+      lapCacheBytes += output.length;
+    }
+    return data;
+  } finally {
+    if (pendingLapReads.get(key) === reading) pendingLapReads.delete(key);
+  }
 }
 
 function comparisonStoragePath(filename) {
@@ -896,6 +950,9 @@ if (primaryInstance) app.whenReady().then(async () => {
     generation++;
     sessionIndex = [];
     resultRecordIndex = [];
+    recentLapOutput.clear();
+    pendingLapReads.clear();
+    lapCacheBytes = 0;
     watchFolders(win);
     win.webContents.reload();
   });
@@ -1404,14 +1461,14 @@ if (primaryInstance) app.whenReady().then(async () => {
     const entry = config.comparisonLaps?.find(item => item.path === source);
     if (!entry) throw new Error('This comparison lap is no longer imported.');
     const storedPath = entry.storedFile ? comparisonStoragePath(entry.storedFile) : source;
-    const lap = await backend('import-comparison-lap', {path:storedPath, includeChannels:true});
+    const lap = await readTelemetryLap('import-comparison-lap', {path:storedPath, includeChannels:true});
     return lap.channels;
   });
   ipcMain.handle('read-lap', (_, sessionPath, lapId) => {
     const session = sessionIndex.find(item => item.path === sessionPath);
     const lap = session?.laps.find(item => item.id === lapId);
     if (!lap) throw new Error('Lap is no longer in the library.');
-    return backend('lap', {path: session.path, start: lap.start, end: lap.end});
+    return readTelemetryLap('lap', {path:session.path, start:lap.start, end:lap.end}, lap.kind === 'complete');
   });
   for (const entry of config.comparisonLaps ?? []) {
     if (entry.storedFile) continue;

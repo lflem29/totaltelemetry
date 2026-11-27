@@ -14,6 +14,7 @@ import sys
 import tempfile
 import zipfile
 from itertools import chain
+from operator import itemgetter
 import xml.etree.ElementTree as ET
 
 import duckdb
@@ -1050,13 +1051,24 @@ def import_comparison_lap(payload):
     fields = ('track', 'car', 'lap', 'lap_time_s', 'validity')
     required = {*fields, 'elapsed_s', 'channel', 'unit', 'component', 'value'}
     with open_comparison_lap(path) as file:
-        reader = csv.DictReader(file)
-        if not required <= set(reader.fieldnames or ()):
+        reader = csv.reader(file)
+        columns = next(reader, [])
+        index = {name: position for position, name in enumerate(columns)}
+        if not required <= index.keys():
             raise ValueError('This is not a Total Telemetry lap CSV.')
-        first = next(reader, None)
-        if not first:
+        rows = (row for row in reader if row)
+        first = next(rows, None)
+        if first is None:
             raise ValueError('This CSV contains no lap telemetry.')
-        metadata = tuple(first[key] for key in fields)
+        column_count = len(columns)
+        if len(first) < column_count:
+            first.extend([None] * (column_count - len(first)))
+        first_metadata = dict(zip(columns, first))
+        get_metadata = itemgetter(*(index[key] for key in fields))
+        read_sample = itemgetter(index['elapsed_s'], index['channel'], index['component'])
+        unit_column, value_column = index['unit'], index['value']
+        rate_column = index.get('sample_rate_hz')
+        metadata = get_metadata(first)
         track, car, lap, lap_time, validity = metadata
         duration = numeric(lap_time)
         if not track or not car or duration is None or duration <= 0:
@@ -1066,12 +1078,14 @@ def import_comparison_lap(payload):
         except ValueError:
             raise ValueError('The exported lap number is invalid.') from None
         end = duration
-        for row in chain([first], reader):
-            if tuple(row[key] for key in fields) != metadata:
+        for row in chain((first,), rows):
+            if len(row) < column_count:
+                row.extend([None] * (column_count - len(row)))
+            if get_metadata(row) != metadata:
                 raise ValueError('A comparison CSV must contain one lap.')
-            time = numeric(row['elapsed_s'])
-            component = numeric(row['component'])
-            name = row['channel']
+            elapsed, name, component_text = read_sample(row)
+            time = numeric(elapsed)
+            component = numeric(component_text)
             if time is None or time < 0 or component is None or not component.is_integer() or not 1 <= component <= 16 or not name:
                 raise ValueError('The CSV contains invalid telemetry samples.')
             end = max(end, time + .000001)
@@ -1082,24 +1096,28 @@ def import_comparison_lap(payload):
             if component != (1 if new_sample else previous_component + 1):
                 raise ValueError('The CSV telemetry components are out of order.')
             last_samples[name] = (time, component)
-            if channels is not None:
-                channel = channels.get(name)
-                if channel is None:
-                    rate = numeric(row.get('sample_rate_hz'))
-                    channel = channels[name] = {'unit':row['unit'], 'rows':[]}
-                    if rate and rate > 0:
-                        channel.update(rate=rate, origin=time)
-                rows = channel['rows']
-                if new_sample:
-                    rows.append([] if 'rate' in channel else [time])
-                text = row['value']
-                value = {'True': True, 'False': False}.get(text, numeric(text))
-                rows[-1].append(text if value is None and text else value)
+            if channels is None:
+                continue
+            channel = channels.get(name)
+            if channel is None:
+                rate = numeric(row[rate_column]) if rate_column is not None else None
+                channel = channels[name] = {'unit':row[unit_column], 'rows':[]}
+                if rate and rate > 0:
+                    channel.update(rate=rate, origin=time)
+            samples = channel['rows']
+            if new_sample:
+                samples.append([] if 'rate' in channel else [time])
+            text = row[value_column]
+            if text in ('True', 'False'):
+                value = text == 'True'
+            else:
+                value = numeric(text)
+            samples[-1].append(text if value is None and text else value)
     if 'Lap Dist' not in last_samples:
         raise ValueError('This CSV has no lap-distance data for comparison.')
-    result = {'track':track, 'car':car, 'driver':first.get('driver') or '', 'carClass':car_class(first.get('car_class') or ''),
-              'trackName':first.get('track_name') or track, 'trackLayout':first.get('track_layout') or track,
-              'gameVersion':first.get('game_version') or '',
+    result = {'track':track, 'car':car, 'driver':first_metadata.get('driver') or '', 'carClass':car_class(first_metadata.get('car_class') or ''),
+              'trackName':first_metadata.get('track_name') or track, 'trackLayout':first_metadata.get('track_layout') or track,
+              'gameVersion':first_metadata.get('game_version') or '',
               'lap':{'id':0, 'number':number, 'time':duration, 'validity':validity,
                      'start':0, 'end':end, 'kind':'complete'}}
     if channels is not None:

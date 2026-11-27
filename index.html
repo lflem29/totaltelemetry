@@ -382,6 +382,10 @@
         <div id="telemetry-graphs-toolbar" class="plot-footer">
           <button id="reset-zoom" data-ui-icon="reset" class="button-secondary">Reset Zoom</button>
           <button id="unpin" data-ui-icon="unlock" class="button-secondary" disabled>Unlock Cursor</button>
+          <div class="graph-axis-switch" role="group" aria-label="Telemetry graph horizontal axis">
+            <button type="button" data-graph-axis="distance" data-ui-icon="ruler" title="Plot by distance" aria-pressed="true" disabled>Distance</button>
+            <button type="button" data-graph-axis="time" data-ui-icon="clock" title="Plot by elapsed time" aria-pressed="false" disabled>Time</button>
+          </div>
           <div class="sector-zoom" role="group" aria-label="Zoom To Sector">
             <button type="button" data-zoom-sector="1" data-ui-icon="zoomIn" title="Zoom To Sector 1" aria-label="Zoom To Sector 1" disabled>Zoom To Sector 1</button>
             <button type="button" data-zoom-sector="2" data-ui-icon="zoomIn" title="Zoom To Sector 2" aria-label="Zoom To Sector 2" disabled>Zoom To Sector 2</button>

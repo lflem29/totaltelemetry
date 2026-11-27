@@ -16,7 +16,6 @@ const tyreChannels = {
   'TyresTempCentre': 'Centre Tread', 'TyresTempLeft': 'Left Tread', 'TyresTempRight': 'Right Tread',
   'TyresRubberTemp': 'Tyre Temperature', 'TyresCarcassTemp': 'Carcass', 'TyresRimTemp': 'Rim Temperature'
 };
-const deltaGraph = ['Time Delta','delta'];
 const speedActivations = [
   ['ABS', '#ff626c', '#a8192d'],
   ['TC', '#45d4df', '#007482']
@@ -58,6 +57,7 @@ const listScrollContainers = {
 };
 let enabled = new Set(builtIn.Driving), chartRows = [], readoutRows = [];
 let range = [0, 1], cursor = 0, playTime = 0, pinned = false, playing = false, frame = 0;
+let graphAxis = 'distance';
 let selection = null;
 let pinnedGraph;
 let renderRequested = false;
@@ -78,6 +78,8 @@ const uiIconPaths = {
   wave: 'M2 12h4l3-8 5 16 3-8h5',
   wheel: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-2.5 1L4 8m10.5 3L20 8m-8 6v7',
   watch: 'M10 2h4m-2 7v4m6-8 2-2M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
+  ruler: 'M3 8h18v8H3zM7 8v4m5-4v6m5-6v4',
+  clock: 'M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0Zm-9-5v5l3 2',
   reset: 'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3',
   download: 'M12 3v12m-5-5 5 5 5-5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4',
   pop: 'M13 5h6v6m0-6-9 9m0-9H6a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2v-4',
@@ -2583,6 +2585,17 @@ async function exportBestLap(target) {
 bestLapExportLocal.onclick = () => exportBestLap('local');
 bestLapExportDiscord.onclick = () => exportBestLap('discord');
 bestLapExportCommunity.onclick = () => exportBestLap('community');
+
+function readLapTelemetry(session, lap, imported = session.imported) {
+  return imported ? lmu.comparisonLap(session.path) : lmu.lap(session.path, lap.id);
+}
+async function readReferenceTelemetry({session, lap, imported}) {
+  try {
+    return {channels:await readLapTelemetry(session, lap, imported)};
+  } catch (error) {
+    return {error};
+  }
+}
 async function readPrimary() {
   const token = ++loadGeneration;
   const currentLap = lap;
@@ -2607,49 +2620,55 @@ async function readPrimary() {
   }
   message('Loading lap telemetry…');
   try {
-    const channels = selected.imported ? await lmu.comparisonLap(selected.path) : await lmu.lap(selected.path, currentLap.id);
+    const reading = readLapTelemetry(selected, currentLap);
+    const preloaded = reference && {chosen:reference, reading:readReferenceTelemetry(reference)};
+    const channels = await reading;
     if (token !== loadGeneration) return;
     primary = prepare(currentLap, channels);
     renderInCarSettings();
     updateSectorZoom(primary);
     playTime = currentLap.start;
-    cursor = primary.distanceAt(playTime);
+    cursor = graphPosition(primary, playTime);
     ready = true;
     resetZoom();
-    await readReference();
+    await readReference(preloaded);
   } catch (error) {
     if (token === loadGeneration) message(error.message);
   }
 }
-async function readReference() {
+async function readReference(preloaded) {
   if (!ready) return;
   const token = ++loadGeneration;
   const chosen = reference;
+  const reading = chosen && (preloaded?.chosen === chosen ? preloaded.reading : readReferenceTelemetry(chosen));
+  const redrawPrimary = Boolean(secondary) || !$('charts').childElementCount;
   referenceLoading = Boolean(chosen);
   secondary = null;
   renderLoadedSessions();
-  buildCharts();
-  buildChannels();
+  if (redrawPrimary) {
+    buildCharts();
+    buildChannels();
+  } else {
+    updateActiveLapComparison();
+  }
   updateContext();
   message();
-  if (!chosen) return;
+  if (!reading) return;
   try {
-    const channels = chosen.imported ? await lmu.comparisonLap(chosen.session.path) : await lmu.lap(chosen.session.path, chosen.lap.id);
+    const {channels, error} = await reading;
     if (token !== loadGeneration) return;
+    if (error) throw error;
     const prepared = prepare(chosen.lap, channels);
-    if (!prepared.useDistance || !primary.useDistance) {
-      message('Distance alignment is unavailable for these laps.');
-      return;
-    }
     secondary = prepared;
+    referenceLoading = false;
     renderLoadedSessions();
     buildCharts();
     buildChannels();
-    message();
+    message(referenceAlignmentMessage());
   } catch (error) {
     if (token === loadGeneration) message(error.message);
   } finally {
-    if (token === loadGeneration) {
+    if (token === loadGeneration && referenceLoading) {
       referenceLoading = false;
       updateActiveLapComparison();
     }
@@ -2710,6 +2729,19 @@ function sample(channel, time) {
   return channel.rows[index];
 }
 function inExtent(data, x) { return x >= data.extent[0] && x <= data.extent[1]; }
+function usesDistanceAxis() { return graphAxis === 'distance' && primary?.useDistance !== false; }
+function graphPosition(data, time) { return usesDistanceAxis() ? data.distanceAt(time) : time - data.lap.start; }
+function graphTime(data, position) { return usesDistanceAxis() ? data.timeAt(position) : data.lap.start + position; }
+function graphExtent(data) { return usesDistanceAxis() ? data.extent : [0, data.lap.end - data.lap.start]; }
+function inGraphExtent(data, position) {
+  return usesDistanceAxis() ? data.useDistance && inExtent(data, position)
+    : position >= 0 && position <= data.lap.end - data.lap.start;
+}
+function referenceAlignmentMessage() {
+  if (!secondary || !$('show-track-reference').checked || secondary.useDistance && primary?.useDistance) return '';
+  return usesDistanceAxis() ? 'Reference distance is unavailable. Choose Time to compare the traces.'
+    : 'Distance Delta requires lap-distance data for both laps.';
+}
 function tyreName() { return settings.tyres || 'TyresTempCentre'; }
 const metricUnits = {speed:'metric',distance:'metric',temperature:'metric',pressure:'metric',fuel:'metric'};
 const imperialUnits = Object.fromEntries(Object.keys(metricUnits).map(key => [key,'imperial']));
@@ -2831,17 +2863,18 @@ function telemetryDecimalPlaces(key, fallback = 1, overrides = settings.telemetr
 function summaryDecimalDefault(key) {
   return ['virtualEnergy', 'Fuel Level', 'absActiveTime', 'tcActiveTime'].includes(key) ? 2 : 1;
 }
-function valueLabel(name, value, sourceUnit) {
+function valueLabel(name, value, sourceUnit, conversion, places) {
   if (value === null || value === undefined) return '—';
   if (name === 'Gear') return value === 0 ? 'N' : value === -1 ? 'R' : String(value);
   if (typeof value === 'boolean') return value ? 'On' : 'Off';
-  const unit = displayUnit(name, sourceUnit);
-  const formatted = typeof value === 'number' ? number(convert(name, value, sourceUnit), telemetryDecimalPlaces(name)) : String(value);
+  const [unit, factor, offset = 0] = conversion ?? unitConversion(name, sourceUnit);
+  const converted = Number.isFinite(value) ? value * factor + offset : value;
+  const formatted = typeof value === 'number' ? number(converted, places ?? telemetryDecimalPlaces(name)) : String(value);
   return formatted + (unit ? ' ' + unit : '');
 }
 function readings(data, name, stacked = false, widths, hiddenWheels) {
   const channel = data?.channels[name];
-  const values = data && inExtent(data, cursor) ? sample(channel, data.timeAt(cursor)) : null;
+  const values = data && inGraphExtent(data, cursor) ? sample(channel, graphTime(data, cursor)) : null;
   if (!values && !widths) return '—';
   const components = widths ?? values;
   const formatted = components.flatMap((_, index) => {
@@ -2857,9 +2890,11 @@ function chartReadingLayout(data, name) {
   const offset = channel?.rate ? 0 : 1;
   const count = Math.max(1, (channel?.rows[0]?.length ?? offset) - offset);
   const widths = Array(count).fill(1);
+  const conversion = unitConversion(name, channel?.unit);
+  const places = telemetryDecimalPlaces(name);
   for (const row of channel?.rows ?? []) {
     for (let index = 0; index < count; index++) {
-      widths[index] = Math.max(widths[index], valueLabel(name, row[index + offset], channel.unit).length);
+      widths[index] = Math.max(widths[index], valueLabel(name, row[index + offset], channel.unit, conversion, places).length);
     }
   }
   return {widths, length:widths.reduce((total, width) => total + width, 0)
@@ -2868,6 +2903,21 @@ function chartReadingLayout(data, name) {
 function delta(x) {
   if (!primary?.useDistance || !secondary?.useDistance || !inExtent(primary,x) || !inExtent(secondary,x)) return NaN;
   return primary.timeAt(x) - primary.lap.start - (secondary.timeAt(x) - secondary.lap.start);
+}
+function deltaTitle() { return usesDistanceAxis() ? 'Time Delta' : 'Distance Delta'; }
+function canPlotDelta(referenceData = secondary) { return Boolean(primary?.useDistance && referenceData?.useDistance); }
+function graphDelta(position) {
+  if (usesDistanceAxis()) return delta(position);
+  if (!canPlotDelta() || !inGraphExtent(primary, position) || !inGraphExtent(secondary, position)) return NaN;
+  const loadedDistance = primary.distanceAt(graphTime(primary, position));
+  const referenceDistance = secondary.distanceAt(graphTime(secondary, position));
+  return convert('', referenceDistance - loadedDistance, 'm');
+}
+function graphDeltaLabel(value) {
+  if (usesDistanceAxis()) return timeGapLabel(value);
+  if (!Number.isFinite(value)) return '—';
+  const rounded = Math.round(value * 10) / 10;
+  return (rounded > 0 ? '+' : '') + number(rounded, 1) + ' ' + displayUnit('', 'm');
 }
 const inCarSettings = [
   ['TCLevel', 'TC 1 · Level'], ['TCCut', 'TC 2 · Cut'], ['TCSlipAngle', 'TC 3 · Slip Angle'],
@@ -3964,6 +4014,7 @@ async function openCornerComparison(session, request, representative, benchmark,
     corners:request.corners, index, best, includePostCorner, overview};
   referenceSessionPath = session.path;
   referenceSessionLapId = benchmark.id;
+  graphAxis = 'distance';
   if (summaryDialog.open) summaryDialog.close();
   await openSession(session, representative, comparison);
   if (practiceComparison !== comparison || !reviewingPracticeCorner() || !secondary) return;
@@ -4116,6 +4167,36 @@ function updateContext() {
       ? lap.validity === 'no official time' ? 'No official time' : 'No recorded time' : lap.kind;
 }
 const sectorZoomButtons = [...document.querySelectorAll('[data-zoom-sector]')];
+const graphAxisButtons = [...$('telemetry-graphs-toolbar').querySelectorAll('[data-graph-axis]')];
+function updateGraphAxisButtons() {
+  for (const button of graphAxisButtons) {
+    const distance = button.dataset.graphAxis === 'distance';
+    button.disabled = !ready || distance && !primary?.useDistance;
+    button.setAttribute('aria-pressed', String(distance === usesDistanceAxis()));
+  }
+}
+for (const button of graphAxisButtons) button.onclick = () => setGraphAxis(button.dataset.graphAxis);
+
+function setGraphAxis(axis) {
+  const distance = axis === 'distance';
+  if (!ready || distance === usesDistanceAxis() || distance && !primary.useDistance) return;
+  const wholeLap = isWholeLapRange(range);
+  const times = range.map(position => graphTime(primary, position));
+  const scroller = graphScrollContainer();
+  const scrollTop = scroller.scrollTop;
+  graphAxis = axis;
+  cursor = graphPosition(primary, playTime);
+  const next = times.map(time => graphPosition(primary, time));
+  if (wholeLap || next[1] - next[0] <= .01) resetZoom();
+  else range = next;
+  trackCameraOverride = undefined;
+  if (previousTrackCamera) previousTrackCamera.override = undefined;
+  updateSectorZoom(primary);
+  buildCharts();
+  buildChannels();
+  scroller.scrollTop = scrollTop;
+  if (secondary) message(referenceAlignmentMessage());
+}
 function updateSectorZoom(data) {
   const bounds = new Map();
   const channel = data?.channels['Current Sector'];
@@ -4128,7 +4209,7 @@ function updateSectorZoom(data) {
       // LMU uses 0 for the third sector.
       const sector = state === 0 ? 3 : state;
       if (![1, 2, 3].includes(sector) || until - from < .1) return;
-      const left = data.distanceAt(from), right = data.distanceAt(until);
+      const left = graphPosition(data, from), right = graphPosition(data, until);
       if (right - left <= .01) return;
       const previous = bounds.get(sector);
       if (!previous || right - left > previous[1] - previous[0]) bounds.set(sector, [left, right]);
@@ -4156,13 +4237,18 @@ function updateSectorZoom(data) {
 }
 function resetZoom() {
   if (!primary) return;
-  range = [primary.extent[0], Math.max(primary.extent[1], primary.extent[0]+.01)];
+  const [from, to] = graphExtent(primary);
+  range = [from, Math.max(to, from + .01)];
   restoreTrackCamera();
   scheduleRender();
 }
+function isWholeLapRange([start, end]) {
+  const [from, to] = graphExtent(primary);
+  return start <= from + .01 && end >= to - .01;
+}
 function setTelemetryZoom(next) {
   range = next;
-  if (next[0] <= primary.extent[0] + .01 && next[1] >= primary.extent[1] - .01) {
+  if (isWholeLapRange(next)) {
     restoreTrackCamera();
     return;
   }
@@ -4499,10 +4585,10 @@ function openGraphPicker(event) {
   const names = new Set([...chosen, ...(settings.graphOrder ?? []).filter(name => name !== 'delta'), ...availableChannels(), ...sessions.flatMap(session => session.summaryChannels ?? [])]);
   const extra = [...names].filter(name => !builtInGraphKeys.has(name)).sort((a, b) => a.localeCompare(b))
     .map(name => [telemetryName(name), name, chosen.has(name) && !hidden.has(name)]);
-  const options = [deltaGraph, ...chartSpecs.map(([label,key]) => [telemetryGraphName(key,label),key]), ...extra];
+  const options = [[deltaTitle(),'delta'], ...chartSpecs.map(([label,key]) => [telemetryGraphName(key,label),key]), ...extra];
   const annotated = options.map(([label,key,checked]) => {
     const name = key === 'tyres' ? tyreName() : key;
-    const hasData = key === 'delta' ? primary?.useDistance && secondary?.useDistance :
+    const hasData = key === 'delta' ? canPlotDelta() :
       graphHasLapData(primary,name) || graphHasLapData(secondary,name);
     return [label,key,checked,ready && !hasData];
   });
@@ -5021,7 +5107,7 @@ function cornerTimeLossPanel() {
       expandedButton = button;
       expandedDetail = detail;
       cornerEventMarkers = expandedMarkers = markers;
-      selectedCorner = {from, to, route:routeSection(primary, from, to)};
+      selectedCorner = {from, to, route:routeSection(primary, primary.timeAt(from), primary.timeAt(to))};
       button.setAttribute('aria-expanded', 'true');
       stop();
       selection = null;
@@ -5062,6 +5148,7 @@ function viewerLapDetails(label, session, currentLap) {
   return driverAndCar + '\n' + dateAndLap;
 }
 function updateActiveLapComparison() {
+  updateGraphAxisButtons();
   const graphReferenceToggle = $('show-graph-reference');
   const dockedReferenceToggle = $('show-track-reference');
   if (graphReferenceToggle) {
@@ -5101,20 +5188,22 @@ function suspensionSamples(data, name, component = 0) {
     const time = channel.times[index];
     if (time < data.lap.start || time >= data.lap.end) return [];
     const raw = row[component + (channel.rate ? 0 : 1)];
-    return [[data.distanceAt(time), Number.isFinite(raw) ? raw * scale : NaN, time]];
+    return [[graphPosition(data,time), Number.isFinite(raw) ? raw * scale : NaN, time]];
   });
 }
 function suspensionData(data) {
-  if (suspensionCache.has(data)) return suspensionCache.get(data);
+  const distanceAxis = usesDistanceAxis();
+  const cached = suspensionCache.get(data);
+  if (cached?.distanceAxis === distanceAxis) return cached;
   const travel = suspensionCorners.map((_, i) => suspensionSamples(data, 'Susp Pos', i));
-  const velocity = travel.map(points => points.map(([distance, value, time], index) => {
+  const velocity = travel.map(points => points.map(([position, value, time], index) => {
     const previous = points[index - 1], next = points[index + 1];
     const duration = previous && next ? next[2] - previous[2] : 0;
-    return [distance, Number.isFinite(value) && duration > 0 && duration <= .12
+    return [position, Number.isFinite(value) && duration > 0 && duration <= .12
       ? (next[1] - previous[1]) / duration : NaN, time];
   }));
   const heights = ['FrontRideHeight','RearRideHeight'].map(name => suspensionSamples(data, name));
-  const result = {travel, velocity, heights};
+  const result = {distanceAxis, travel, velocity, heights};
   suspensionCache.set(data, result);
   return result;
 }
@@ -5151,7 +5240,7 @@ function suspensionSvg(parent, tag, attrs = {}, text) {
   parent.append(element);
   return element;
 }
-function suspensionPlot(parent, title, width, height, axis, domain, bounds) {
+function suspensionPlot(parent, title, width, height, axis, domain, bounds, formatTick = Math.round) {
   const graph = node('section', undefined, 'suspension-plot');
   graph.append(node('h3',title));
   parent.append(graph);
@@ -5165,21 +5254,24 @@ function suspensionPlot(parent, title, width, height, axis, domain, bounds) {
     suspensionSvg(svg,'line',{x1:left,x2:right,y1:y(value),y2:y(value),class:'suspension-grid'});
     suspensionSvg(svg,'line',{x1:px,x2:px,y1:top,y2:bottom,class:'suspension-grid'});
     suspensionSvg(svg,'text',{x:left-6,y:y(value)+4,'text-anchor':'end'},Number(value.toFixed(1)));
-    suspensionSvg(svg,'text',{x:px,y:bottom+15,'text-anchor':'middle'},Math.round(domain[0]+(domain[1]-domain[0])*i/4));
+    suspensionSvg(svg,'text',{x:px,y:bottom+15,'text-anchor':'middle'},formatTick(domain[0]+(domain[1]-domain[0])*i/4));
   }
   suspensionSvg(svg,'text',{x:right,y:height-1,'text-anchor':'end'},axis);
   return {svg,x,y,left,right,top,bottom,width};
 }
-function suspensionDistancePlot(parent, title, sources, events, domain) {
-  const bounds = sources.reduce(([min,max], source) => source.points.reduce(([low,high],[distance,value]) =>
-    distance >= domain[0] && distance <= domain[1] && Number.isFinite(value)
+function suspensionAlignedPlot(parent, title, sources, events, domain) {
+  const bounds = sources.reduce(([min,max], source) => source.points.reduce(([low,high],[position,value]) =>
+    position >= domain[0] && position <= domain[1] && Number.isFinite(value)
       ? [Math.min(low,value),Math.max(high,value)] : [low,high], [min,max]), [Infinity,-Infinity]);
   if (!Number.isFinite(bounds[0])) {
     parent.append(node('p', title + ' is unavailable in this section of the recording.'));
     return;
   }
   const pad = Math.max(1,(bounds[1]-bounds[0])*.08);
-  const plot = suspensionPlot(parent,title,840,155,primary.useDistance ? 'Distance (m)' : 'Time (s)',domain,[bounds[0]-pad,bounds[1]+pad]);
+  const distanceAxis = usesDistanceAxis();
+  const formatTick = distanceAxis ? Math.round : value => lapTime(Math.max(0,value),domain[1]-domain[0] < 4 ? 2 : 1);
+  const plot = suspensionPlot(parent,title,840,155,distanceAxis ? 'Distance (m)' : 'Elapsed Time',
+    domain,[bounds[0]-pad,bounds[1]+pad],formatTick);
   const {svg,x,y,left,right,top,bottom,width} = plot;
   for (const event of events) {
     if (event.last[0] < domain[0] || event.first[0] > domain[1]) continue;
@@ -5190,9 +5282,9 @@ function suspensionDistancePlot(parent, title, sources, events, domain) {
   }
   for (const {points,colour,reference} of sources) {
     let path = '', connected = false;
-    for (const [distance,value] of points) {
-      if (distance < domain[0] || distance > domain[1] || !Number.isFinite(value)) { connected = false; continue; }
-      path += (connected ? 'L' : 'M') + x(distance).toFixed(1) + ' ' + y(value).toFixed(1);
+    for (const [position,value] of points) {
+      if (position < domain[0] || position > domain[1] || !Number.isFinite(value)) { connected = false; continue; }
+      path += (connected ? 'L' : 'M') + x(position).toFixed(1) + ' ' + y(value).toFixed(1);
       connected = true;
     }
     suspensionSvg(svg,'path',{d:path,stroke:colour,'stroke-dasharray':reference ? '5 4' : 'none',class:'suspension-trace'});
@@ -5264,14 +5356,15 @@ function aeroPhaseMatches(data,time,phase) {
 }
 
 function aeroData(data) {
+  const distanceAxis = usesDistanceAxis();
   const cached = aeroCache.get(data);
-  if (cached && cached.units === settings.measurementUnits) return cached;
+  if (cached?.distanceAxis === distanceAxis && cached.units === settings.measurementUnits) return cached;
   const heights = suspensionData(data).heights;
-  const speed = trace(data,'Ground Speed').map(([distance,[value]]) => [distance,value]);
-  const rake = heights[0].map(([distance,front,time]) => [
-    distance,aeroRideHeight(data,'RearRideHeight',time)-front
+  const speed = trace(data,'Ground Speed',!distanceAxis).map(([position,[value]]) => [position,value]);
+  const rake = heights[0].map(([position,front,time]) => [
+    position,aeroRideHeight(data,'RearRideHeight',time)-front
   ]);
-  const result = {heights,speed,rake,units:settings.measurementUnits};
+  const result = {distanceAxis,heights,speed,rake,units:settings.measurementUnits};
   aeroCache.set(data,result);
   return result;
 }
@@ -5283,7 +5376,8 @@ function renderAeroVisualiser() {
   const comparison = checkbox.checked ? visibleReferenceLap() : null;
   const limits = settings.suspensionLimits;
   const phase = $('aero-phase').value;
-  const key = [primary,comparison,range[0],range[1],limits,settings.measurementUnits,phase];
+  const distanceAxis = usesDistanceAxis();
+  const key = [primary,comparison,range[0],range[1],distanceAxis,limits,settings.measurementUnits,phase];
   if (key.some((value,index) => value !== aeroRenderKey[index])) {
     aeroRenderKey = key;
     charts.replaceChildren();
@@ -5298,19 +5392,19 @@ function renderAeroVisualiser() {
         const threshold = Object.hasOwn(limits ?? {},car) ? limits[car][axle+4] : null;
         return suspensionEvents(points,threshold,true).map(run => ({...run,floor:true,
           label:[index ? 'Reference' : 'Loaded','Possible Floor Contact',axle ? 'Rear' : 'Front',
-            run.first[0].toFixed(1)+(primary.useDistance ? ' m' : ' s'),run.value.toFixed(2)+' mm'].join(' · ')}));
+            run.first[0].toFixed(1)+(distanceAxis ? ' m' : ' s'),run.value.toFixed(2)+' mm'].join(' · ')}));
       });
       const speedUnit = displayUnit('Ground Speed', 'km/h');
-      suspensionDistancePlot(charts,'Front and Rear Ride Height (mm)',heights,events,range);
-      suspensionDistancePlot(charts,'Ground Speed ('+speedUnit+')',laps.map((data,index) =>
+      suspensionAlignedPlot(charts,'Front and Rear Ride Height (mm)',heights,events,range);
+      suspensionAlignedPlot(charts,'Ground Speed ('+speedUnit+')',laps.map((data,index) =>
         ({points:aeroData(data).speed,reference:index===1,colour:index ? 'var(--reference)' : 'var(--accent)'})),[],range);
-      suspensionDistancePlot(charts,'Dynamic Rake · Rear − Front (mm)',laps.map((data,index) =>
+      suspensionAlignedPlot(charts,'Dynamic Rake · Rear − Front (mm)',laps.map((data,index) =>
         ({points:aeroData(data).rake,reference:index===1,colour:index ? 'var(--reference)' : 'var(--accent)'})),[],range);
       const scatter = heights.map(source => {
         const speeds = aeroData(laps[source.index]).speed;
-        const points = speeds.length ? source.points.flatMap(([distance,height,time]) => {
+        const points = speeds.length ? source.points.flatMap(([position,height,time]) => {
           const data = laps[source.index];
-          if (distance < range[0] || distance > range[1] || !Number.isFinite(height) || !aeroPhaseMatches(data,time,phase)) return [];
+          if (position < range[0] || position > range[1] || !Number.isFinite(height) || !aeroPhaseMatches(data,time,phase)) return [];
           const channel = data.channels['Ground Speed'];
           const speed = convert('Ground Speed',sample(channel,time)?.[0],channel.unit);
           return Number.isFinite(speed) ? [[speed,height]] : [];
@@ -5348,9 +5442,8 @@ function renderAeroVisualiser() {
   for (const [index,data] of [primary,comparison].entries()) {
     const group = diagram.querySelector(index ? '.aero-reference-platform' : '.aero-loaded-platform');
     const output = $(index ? 'aero-reference-reading' : 'aero-loaded-reading');
-    const time = data?.timeAt(cursor);
-    const heights = !data || cursor < data.extent[0] || cursor > data.extent[1] ? []
-      : ['FrontRideHeight','RearRideHeight'].map(name => aeroRideHeight(data,name,time));
+    const heights = data && inGraphExtent(data,cursor)
+      ? ['FrontRideHeight','RearRideHeight'].map(name => aeroRideHeight(data,name,graphTime(data,cursor))) : [];
     const [front,rear] = heights;
     const valid = Number.isFinite(front) && Number.isFinite(rear);
     group.style.visibility = valid ? 'visible' : 'hidden';
@@ -5385,9 +5478,10 @@ function renderVisualiserLaps() {
     $('suspension-limits').querySelectorAll('input').forEach((input,index) => { input.value = carLimits?.[index] ?? ''; });
   }
   const useReference = checkbox.checked ? visibleReferenceLap() : null;
+  const distanceAxis = usesDistanceAxis();
   const referenceCar = reference?.session.model || reference?.session.car;
   const referenceLimits = Object.hasOwn(limits,referenceCar) ? limits[referenceCar] : undefined;
-  const key = [primary,useReference,range[0],range[1],car,carLimits,referenceLimits];
+  const key = [primary,useReference,range[0],range[1],distanceAxis,car,carLimits,referenceLimits];
   if (key.some((value,index) => value !== suspensionRenderKey[index])) {
     suspensionRenderKey = key;
     const content = $('suspension-plots');
@@ -5407,14 +5501,14 @@ function renderVisualiserLaps() {
         return suspensionEvents(points,limit,floor).map(run => ({...run,floor,
           label:[lapIndex ? 'Reference' : 'Loaded', floor ? 'Possible Floor Contact' : limit == null ? 'Possible Bottoming' : 'Suspension Travel Limit',
             floor ? ['Front','Rear'][index] : suspensionCorners[index],
-            run.first[0].toFixed(1) + (primary.useDistance ? ' m' : ' s'), run.value.toFixed(2)+' mm'].join(' · ')}));
+            run.first[0].toFixed(1) + (distanceAxis ? ' m' : ' s'), run.value.toFixed(2)+' mm'].join(' · ')}));
       });
     });
-    suspensionDistancePlot(content,'Suspension Travel (mm)',sources('travel'),events(false),range);
+    suspensionAlignedPlot(content,'Suspension Travel (mm)',sources('travel'),events(false),range);
     const velocity = sources('velocity');
     if (velocity.some(source => source.points.some(([,value]) => Number.isFinite(value)))) suspensionHistograms(content,velocity,range);
-    suspensionDistancePlot(content,'Calculated Suspension Velocity (mm/s)',velocity,[],range);
-    suspensionDistancePlot(content,'Front and Rear Ride Height (mm)',sources('heights'),events(true),range);
+    suspensionAlignedPlot(content,'Calculated Suspension Velocity (mm/s)',velocity,[],range);
+    suspensionAlignedPlot(content,'Front and Rear Ride Height (mm)',sources('heights'),events(true),range);
   }
   paintVisualiserCursor($('suspension-plots'));
 }
@@ -5485,7 +5579,7 @@ function wheelTraceControls(chartKey, channelName, colour, redraw) {
 }
 
 function visibleReferenceLap() {
-  return $('show-track-reference').checked ? secondary : null;
+  return $('show-track-reference').checked && secondary && (!usesDistanceAxis() || secondary.useDistance) ? secondary : null;
 }
 
 function changeReferenceTrace(event) {
@@ -5496,6 +5590,7 @@ function changeReferenceTrace(event) {
   buildCharts();
   buildChannels(false);
   scroll.scrollTop = scrollTop;
+  if (secondary) message(referenceAlignmentMessage());
 }
 function loadedLapPrefix(separator = ' ') {
   return visibleReferenceLap() ? loadedTraceLabel + separator : '';
@@ -5518,11 +5613,13 @@ function buildCharts() {
   const chosen = new Set(settings.extraGraphChannels);
   const extra = [...chosen].filter(name => !builtInGraphKeys.has(name))
     .sort((a,b) => a.localeCompare(b)).map(name => [defaultTelemetryNames.get(name) ?? name,name]);
-  const specs = orderTelemetryGraphs([...(visibleReference?.useDistance && primary.useDistance
-    ? [deltaGraph] : []), ...chartSpecs, ...extra]
+  const specs = orderTelemetryGraphs([...(visibleReference && canPlotDelta(visibleReference)
+    ? [[deltaTitle(),'delta']] : []), ...chartSpecs, ...extra]
     .filter(([,key])=>key === 'delta' || !hidden.has(key)), ([,key]) => key);
   const activationControls = new Map(speedActivations.map(([channel]) => [channel, []]));
-  const deltaWidth = number(Math.max(lap.end - lap.start, secondary ? secondary.lap.end - secondary.lap.start : 0), 3).length + 3;
+  const widestDelta = usesDistanceAxis() ? Math.max(lap.end - lap.start, secondary ? secondary.lap.end - secondary.lap.start : 0)
+    : convert('', Math.max(primary.extent[1], secondary?.extent[1] ?? 0), 'm');
+  const deltaWidth = graphDeltaLabel(widestDelta).length;
   const fragments = specs.map(([label, key]) => {
     const title = key === 'delta' ? label : telemetryGraphName(key, label);
     const chart = node('section', undefined, 'chart');
@@ -5547,7 +5644,7 @@ function buildCharts() {
       }
       scheduleRender();
     }));
-    const cornerAnalysis = key === 'delta' ? cornerTimeLossPanel() : null;
+    const cornerAnalysis = key === 'delta' && usesDistanceAxis() ? cornerTimeLossPanel() : null;
     const edit = node('button', configured.length ? 'Edit Overlays' : 'Add Channels', 'chart-edit button-secondary');
     edit.type = 'button';
     edit.setAttribute('aria-label', edit.textContent + ' for ' + title);
@@ -5767,11 +5864,14 @@ function canvasContext(canvas) {
   ctx.setTransform(ratio,0,0,ratio,0,0);
   return {ctx,width,height,ratio};
 }
-function trace(data, name) {
+function trace(data, name, elapsed = false) {
   const channel = data.channels[name];
   if (!channel?.rows.length) return [];
-  const plotValues = values => values.map(value =>
-    typeof value === 'boolean' ? Number(value) : convert(name, value, channel.unit));
+  const [, factor, offset = 0] = unitConversion(name, channel.unit);
+  const plotValues = values => values.map(value => {
+    if (typeof value === 'boolean') return Number(value);
+    return Number.isFinite(value) ? value * factor + offset : value;
+  });
   let points;
   if (!channel.rate) {
     points = [[data.lap.start, sample(channel,data.lap.start) || []]];
@@ -5783,9 +5883,11 @@ function trace(data, name) {
     points = channel.rows.map((values,index) => [channel.times[index],values])
       .filter(([time]) => time >= data.lap.start - 1e-6 && time < data.lap.end);
   }
+  const positionAt = elapsed ? time => time - data.lap.start : data.distanceAt;
+  const extent = elapsed ? [0,data.lap.end - data.lap.start] : data.extent;
   return points.map(([time,values], index) => [
-    channel.rate || (index > 0 && index < points.length - 1) ? data.distanceAt(time) :
-      data.extent[index === 0 ? 0 : 1],
+    channel.rate || (index > 0 && index < points.length - 1) ? positionAt(time) :
+      extent[index === 0 ? 0 : 1],
     plotValues(values)
   ]);
 }
@@ -5800,7 +5902,7 @@ function paintGearSegments(ctx, points, x, y) {
   }
 }
 function smoothPressureTrace(data, points) {
-  const times = points.map(([distance]) => data.timeAt(distance));
+  const times = points.map(([position]) => graphTime(data, position));
   const result = points.map(([distance, values]) => [distance, [...values]]);
   const count = points.find(([,values]) => values.length)?.[1].length ?? 0;
   for (let wheel = 0; wheel < count; wheel++) {
@@ -5840,9 +5942,11 @@ function paintDeltaHeadings(ctx, left, right, top, bottom) {
   ctx.fillStyle = (lightGraphBackground ? '#253329' : '#b5c2b4');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText('Losing time compared to the reference lap', left + inset, top + inset, maxWidth);
+  ctx.fillText(usesDistanceAxis() ? 'Losing time compared to the reference lap' : 'Behind the reference lap',
+    left + inset, top + inset, maxWidth);
   ctx.textBaseline = 'bottom';
-  ctx.fillText('Gaining time compared to the reference lap', left + inset, bottom - inset, maxWidth);
+  ctx.fillText(usesDistanceAxis() ? 'Gaining time compared to the reference lap' : 'Ahead of the reference lap',
+    left + inset, bottom - inset, maxWidth);
 }
 function* activationIntervals(data, name, enabled = settings.speedActivations?.[name]) {
   const channel = data.channels[name];
@@ -5865,7 +5969,7 @@ function paintSpeedActivations(ctx, x, y) {
       ctx.lineCap = 'round';
       ctx.setLineDash([]);
       for (const [start, end] of activationIntervals(data, name)) {
-        const from = data.distanceAt(start), to = data.distanceAt(end);
+        const from = graphPosition(data, start), to = graphPosition(data, end);
         if (to < range[0] || from > range[1]) continue;
         const first = sample(speed, start)?.[0], last = sample(speed, end)?.[0];
         if (!Number.isFinite(first) || !Number.isFinite(last)) continue;
@@ -5874,7 +5978,7 @@ function paintSpeedActivations(ctx, x, y) {
         ctx.moveTo(startX, y(first));
         for (let j = lowerBound(speed.times, start); j < speed.times.length && speed.times[j] < end; j++) {
           const point = speed.rows[j][speed.rate ? 0 : 1];
-          if (Number.isFinite(point)) ctx.lineTo(x(data.distanceAt(speed.times[j])), y(point));
+          if (Number.isFinite(point)) ctx.lineTo(x(graphPosition(data, speed.times[j])), y(point));
         }
         ctx.lineTo(endX, y(last));
         ctx.stroke();
@@ -5890,30 +5994,31 @@ function baseChart(row, width, height, ratio) {
   const [left,right] = xBounds(width), top = 12 * textScale(), bottom = height - 30 * textScale();
   const x = value => left + (value - range[0]) / (range[1] - range[0]) * (right-left);
   const name = row.key === 'tyres' ? tyreName() : row.key;
+  const elapsed = !usesDistanceAxis();
   const a = name === 'delta'
     ? Array.from({length:Math.max(150, Math.ceil(right-left))}, (_,i) => i)
-    : trace(primary,name);
+    : trace(primary,name,elapsed);
   let first = a;
   if (name === 'delta') first = a.map(i => {
     const at = range[0] + i/(a.length-1)*(range[1]-range[0]);
-    return [at,[delta(at)]];
+    return [at,[graphDelta(at)]];
   });
   const visibleReference = visibleReferenceLap();
-  const second = visibleReference && name !== 'delta' ? trace(visibleReference,name) : [];
+  const second = visibleReference && name !== 'delta' ? trace(visibleReference,name,elapsed) : [];
   let low = Infinity, high = -Infinity;
   for (const points of [first,second]) for (const [at,values] of points) {
     if (at < range[0] || at > range[1]) continue;
     for (const value of values) if (Number.isFinite(value)) { low = Math.min(low,value); high = Math.max(high,value); }
   }
   const source = primary.channels[name] || secondary?.channels[name];
-  const baseAxis = name === 'delta' ? 'Time delta' : displayUnit(name,source?.unit) || name;
+  const baseAxis = name === 'delta' ? deltaTitle() : displayUnit(name,source?.unit) || name;
   const scales = new Map();
   const overlays = row.readings.map(entry => {
     const channel = primary.channels[entry.name] || secondary?.channels[entry.name];
     const axis = displayUnit(entry.name,channel.unit) || entry.name;
     const traces = [primary,visibleReference].map(data => {
       if (!data) return [];
-      const points = trace(data,entry.name);
+      const points = trace(data,entry.name,elapsed);
       return entry.name === 'TyresPressure' && smoothTyrePressure ? smoothPressureTrace(data,points) : points;
     });
     if (!scales.has(axis)) scales.set(axis,[Infinity,-Infinity]);
@@ -5966,25 +6071,29 @@ function baseChart(row, width, height, ratio) {
     ctx.beginPath();
     ctx.moveTo(xx, top); ctx.lineTo(xx,bottom); ctx.stroke();
     const tick = range[0] + (range[1]-range[0])*i/4;
-    const label = number(primary.useDistance ? convert('',tick,'m') : tick,primary.useDistance ? (range[1]-range[0]<10 ? 1 : 0) : 1);
-    paintHorizontalTick(ctx,label + (i === 4 ? (primary.useDistance ? ' ' + displayUnit('','m') : ' s') : ''),xx,bottom+18*textScale(),width);
+    const label = elapsed ? lapTime(Math.max(0,tick),range[1]-range[0] < 4 ? 2 : 1)
+      : number(convert('',tick,'m'),range[1]-range[0] < 10 ? 1 : 0) + (i === 4 ? ' ' + displayUnit('','m') : '');
+    paintHorizontalTick(ctx,label,xx,bottom+18*textScale(),width);
   }
   ctx.textAlign = 'right';
-  const digits = telemetryDecimalPlaces(name, ['delta','TyresPressure'].includes(name) ? 2 : high-low<12 ? 1 : 0);
+  const distanceDelta = elapsed && name === 'delta';
+  const digits = telemetryDecimalPlaces(name,
+    !distanceDelta && ['delta','TyresPressure'].includes(name) ? 2 : high-low < 12 ? 1 : 0);
   const tickCount = name === 'Gear' ? high - low : 4;
   for (let i = 0; i <= tickCount; i++) {
     const tick = high - (name === 'Gear' ? i : (high-low)*i/tickCount);
     const yy = y(tick);
     ctx.beginPath();
     ctx.moveTo(left,yy); ctx.lineTo(right,yy); ctx.stroke();
-    ctx.fillText(name === 'Gear' ? valueLabel('Gear',tick) : number(tick,digits), left-8,yy+4*textScale());
+    const label = name === 'Gear' ? valueLabel('Gear',tick) : number(tick,digits);
+    ctx.fillText(label + (distanceDelta && i === 0 ? ' ' + displayUnit('','m') : ''), left-8,yy+4*textScale());
   }
   ctx.save();
   ctx.beginPath(); ctx.rect(left,top,right-left,bottom-top); ctx.clip();
   const sectors = primary.channels['Current Sector']?.rows || [];
   for (const [t] of sectors) {
     if (t <= lap.start+.1 || t >= lap.end-.1) continue;
-    const px = x(primary.distanceAt(t));
+    const px = x(graphPosition(primary,t));
     ctx.strokeStyle=elementColour('graph-axis',lightGraphBackground ? '#59645d' : '#60715e'); ctx.setLineDash([3,4]); ctx.beginPath();
     ctx.moveTo(px,top);ctx.lineTo(px,bottom);ctx.stroke();
   }
@@ -6083,8 +6192,8 @@ function paintCursorValues(ctx, row, name) {
     return value => bottom - (value - lo) / (hi - lo) * (bottom - top);
   };
   if (name === 'delta') {
-    const gap = delta(cursor);
-    add(timeGapLabel(gap), gap, scales ? scaleFor('Time delta') : y, graphColor('delta'), row.deltaWidth);
+    const gap = graphDelta(cursor);
+    add(graphDeltaLabel(gap), gap, scales ? scaleFor(deltaTitle()) : y, graphColor('delta'), row.deltaWidth);
   }
   const channels = [...(name === 'delta' ? [] : [name]), ...(row.group?.channels ?? [])];
   channels.forEach((channelName, index) => {
@@ -6094,9 +6203,9 @@ function paintCursorValues(ctx, row, name) {
     const overlay = overlayIndex >= 0 ? row.readings[overlayIndex] : undefined;
     const scale = overlay ? scaleFor(displayUnit(channelName,source.unit) || channelName) : y;
     for (const [data, referenceLap] of [[primary, false], [visibleReferenceLap(), true]]) {
-      if (!data || !inExtent(data, cursor)) continue;
+      if (!data || !inGraphExtent(data, cursor)) continue;
       const channel = data.channels[channelName];
-      const values = sample(channel, data.timeAt(cursor));
+      const values = sample(channel, graphTime(data, cursor));
       const hiddenWheels = overlay ? overlay.hiddenWheels : row.hiddenWheels;
       values?.forEach((value, component) => {
         if (hiddenWheels?.has(component)) return;
@@ -6340,8 +6449,7 @@ function paintChart(row) {
     }
   }
   if(name==='delta') {
-    const value=delta(cursor);
-    row.output.textContent=timeGapLabel(value);
+    row.output.textContent=graphDeltaLabel(graphDelta(cursor));
   } else {
     row.output.replaceChildren(node('span', loadedLapPrefix() + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
     if (row.referenceLayout) row.output.append('  |  ', node('span', referenceTraceLabel + ' ' + readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels), 'reference-color'));
@@ -6359,9 +6467,8 @@ function route(data) {
   data.route=points;
   return points;
 }
-function routeSection(data, from, to) {
+function routeSection(data, start, end) {
   const points = route(data);
-  const start = data.timeAt(from), end = data.timeAt(to);
   const section = [];
   for (let i = 0; i < points.length; i++) {
     const point = points[i], previous = points[i - 1];
@@ -6381,7 +6488,7 @@ function routeSection(data, from, to) {
 }
 function trackRoutes(selectedSection) {
   return [primary, visibleReferenceLap()].map(data => data
-    ? (selectedSection ? routeSection(data, ...range) : route(data)) : []);
+    ? (selectedSection ? routeSection(data, graphTime(data,range[0]), graphTime(data,range[1])) : route(data)) : []);
 }
 const racingMap = $('racing-map');
 const trackPanel = $('track-location');
@@ -6436,7 +6543,7 @@ function inspectTrackLocation(x, y) {
     time = points[i - 1][2] + fraction * (points[i][2] - points[i - 1][2]);
   }
   if (time === undefined) return;
-  seek(data.distanceAt(time), false);
+  seek(graphPosition(data, time), false);
   return true;
 }
 const trackViewButton = $('show-track-view');
@@ -6553,7 +6660,7 @@ function routeCorners(data, correction) {
 function frameCurrentCorner(camera, data, referenceData, correction, width, height, baseScale, centreX, centreY) {
   const corners = routeCorners(data, correction);
   if (!corners.length) return;
-  const time = data.timeAt(cursor);
+  const time = graphTime(data, cursor);
   const corner = corners.findLast(item => item.start <= time) ?? corners[0];
   const points = [...corner.points];
   if (referenceData && data.useDistance && referenceData.useDistance) {
@@ -6577,8 +6684,8 @@ function frameTrackPoints(camera, points, correction, width, height, baseScale, 
   camera.y = ((top + bottom) / 2 - centreY) * scale;
 }
 function currentGpsPoint(data) {
-  if (!inExtent(data, cursor)) return null;
-  const time = data.timeAt(cursor);
+  if (!inGraphExtent(data, cursor)) return null;
+  const time = graphTime(data, cursor);
   const point = [sample(data.channels['GPS Longitude'], time)?.[0], sample(data.channels['GPS Latitude'], time)?.[0]];
   return point.every(Number.isFinite) ? [...point, time] : null;
 }
@@ -6762,7 +6869,7 @@ function windIndicatorPosition(width, height, paths, labelWidth) {
 let windPlacement;
 function paintMapWind(ctx, width, height, project, origin, correction, routes = [], xy = project) {
   if (!primary || width < 90 || height < 55 || Math.abs(correction) < 1e-6) return;
-  const time = primary.timeAt(cursor);
+  const time = graphTime(primary, cursor);
   const speed = sample(primary.channels['Wind Speed'], time)?.[0];
   const heading = sample(primary.channels['Wind Heading'], time)?.[0];
   if (!(Number.isFinite(speed) && speed >= 0)) return;
@@ -6973,6 +7080,18 @@ function paintMap(canvas, interactive = false) {
   }
   if (!interactive) paintMapWind(ctx, width, height, project, all[0], correction, [a, b, selectedCorner?.route ?? []], xy);
 }
+function playbackDistance() {
+  if (!primary.useDistance) return '';
+  const liveDistance = measurement(primary.distanceAt(playTime), 'm', 0);
+  const section = selection && Math.abs(selection.initial - selection.x) > .01
+    ? [selection.initial, selection.x]
+    : isWholeLapRange(range) ? null : range;
+  if (!section) return liveDistance;
+  const [start, end] = section.map(position => usesDistanceAxis()
+    ? position
+    : primary.distanceAt(graphTime(primary, position)));
+  return liveDistance + ' · Section ' + measurement(Math.abs(end - start), 'm', 0);
+}
 function scheduleRender(){
   if(renderRequested)return;
   renderRequested=true;
@@ -6990,20 +7109,23 @@ function scheduleRender(){
     }
     paintMap($('map'));
     if (!trackPanel.hidden) paintMap(racingMap, true);
-    $('position').textContent=lapTime(playTime-lap.start,2)+' / '+lapTime(lap.end-lap.start,2);
+    const elapsed = lapTime(playTime - lap.start, 2);
+    const duration = lapTime(lap.end - lap.start, 2);
+    const distance = playbackDistance();
+    $('position').textContent = distance ? `${elapsed} / ${duration} · ${distance}` : `${elapsed} / ${duration}`;
     $('scrub').value=Math.round(1000*(playTime-lap.start)/Math.max(.01,lap.end-lap.start));
   });
 }
 function seek(x, clampRange) {
   if(!primary)return;
   if(clampRange && (x<range[0] || x>range[1]))resetZoom();
-  cursor=x;
-  playTime=primary.timeAt(x);
+  cursor = usesDistanceAxis() ? x : Math.max(0, Math.min(x, primary.lap.end - primary.lap.start));
+  playTime = graphTime(primary, cursor);
   scheduleRender();
 }
 function setTime(t) {
   playTime=t;
-  cursor=primary.distanceAt(t);
+  cursor=graphPosition(primary,t);
   scheduleRender();
 }
 function updatePin(){
@@ -7364,8 +7486,11 @@ function initHeaderCarAnimation() {
   const records = $('records-tab');
   const connection = $('server-connection');
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  const minimumDelay = 30_000;
-  const maximumDelay = 300_000;
+  const minimumDelay = 10_000;
+  const maximumDelay = 60_000;
+  const carCount = 62;
+  const wheelFrames = 8;
+  car.style.backgroundSize = `${wheelFrames * 100}% ${carCount * 100}%`;
   let timer, animation;
 
   function driveAcrossHeader() {
@@ -7383,12 +7508,14 @@ function initHeaderCarAnimation() {
     lane.style.width = `${width}px`;
     const carWidth = car.offsetWidth;
     if (width < carWidth + 24) return;
+    const carIndex = Math.floor(Math.random() * carCount);
+    car.style.backgroundPositionY = `${carIndex / (carCount - 1) * 100}%`;
     animation = car.animate([
       {transform:`translate(${-carWidth}px, -50%)`, opacity:1},
       {transform:`translate(${width}px, -50%)`, opacity:1}
     ],{duration:Math.max(1500, Math.min(3200, (width + carWidth) * 5)), easing:'linear'});
     const wheels = car.animate([{backgroundPositionX:'0%'},{backgroundPositionX:'100%'}],
-      {duration:16 / 28 * 1000,iterations:Infinity,easing:'steps(16, jump-none)'});
+      {duration:wheelFrames / 28 * 1000,iterations:Infinity,easing:`steps(${wheelFrames}, jump-none)`});
     const stopWheels = () => wheels.cancel();
     void animation.finished.then(stopWheels,stopWheels);
   }
