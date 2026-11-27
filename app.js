@@ -285,6 +285,22 @@ function renderLoadedSessions() {
   document.querySelectorAll('.loaded-lap-label').forEach(updateLoadedLapLabel);
   document.querySelectorAll('.reference-match-guide').forEach(guide => { guide.hidden = !ready; });
 }
+const visualizerSettings = {aero:'aeroVisualizerEnabled', suspension:'suspensionVisualizerEnabled'};
+function syncVisualizerSettings() {
+  for (const [name, setting] of Object.entries(visualizerSettings)) {
+    const enabled = settings[setting] === true;
+    $('enable-' + name).checked = enabled;
+    $(name + '-tab').hidden = !enabled;
+    if (!enabled && popoutWindows.has(name)) closePanelPopout(name);
+  }
+}
+for (const [name, setting] of Object.entries(visualizerSettings)) {
+  $('enable-' + name).onchange = event => {
+    save({[setting]:event.target.checked});
+    syncVisualizerSettings();
+  };
+  $(name + '-tab').onclick = () => openVisualiser(name);
+}
 function setView(name) {
   if (name === 'trainer' && settings.driverTrainerEnabled !== true) name = 'library';
   const changingView = name !== view;
@@ -2232,6 +2248,7 @@ $('clear-loaded-session').onclick = $('clear-viewer-session').onclick = () => {
   ready = referenceLoading = pinned = false;
   selected = lap = reference = primary = secondary = undefined;
   if (popoutWindows.has('graphs')) closePanelPopout('graphs');
+  renderVisualiserLaps();
   referenceSessionPath = referenceSessionLapId = manualReference = practiceComparison = undefined;
   setView(view === 'viewer' ? 'viewer' : 'library');
   if (view === 'viewer') $('viewer-open-recent').focus();
@@ -4785,6 +4802,7 @@ function viewerLapDetails(label, session, currentLap) {
   return driverAndCar + '\n' + dateAndLap;
 }
 function updateActiveLapComparison() {
+  renderVisualiserLaps();
   const focusGraphs = $('graphs-popout-link');
   if (focusGraphs) focusGraphs.hidden = !lap;
   if (!lap) return;
@@ -4797,6 +4815,371 @@ function updateActiveLapComparison() {
     ? viewerLapDetails('Loaded Reference', reference.session, reference.lap)
     : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap Loaded';
 }
+
+const suspensionCorners = ['Front Left', 'Front Right', 'Rear Left', 'Rear Right'];
+const suspensionColours = ['var(--accent)', '#75dfc2', '#7baeff', '#eaa8ed'];
+const suspensionLimits = [
+  ...suspensionCorners.map(name => name + ' compression limit'),
+  'Front floor clearance', 'Rear floor clearance'
+];
+const suspensionCache = new WeakMap();
+let suspensionRenderKey = [];
+let suspensionCar;
+
+function suspensionSamples(data, name, component = 0) {
+  const channel = data.channels[name];
+  const scale = {m:1000, cm:10, mm:1}[channel?.unit?.trim().toLowerCase()];
+  if (!scale) return [];
+  return channel.rows.flatMap((row, index) => {
+    const time = channel.times[index];
+    if (time < data.lap.start || time >= data.lap.end) return [];
+    const raw = row[component + (channel.rate ? 0 : 1)];
+    return [[data.distanceAt(time), Number.isFinite(raw) ? raw * scale : NaN, time]];
+  });
+}
+function suspensionData(data) {
+  if (suspensionCache.has(data)) return suspensionCache.get(data);
+  const travel = suspensionCorners.map((_, i) => suspensionSamples(data, 'Susp Pos', i));
+  const velocity = travel.map(points => points.map(([distance, value, time], index) => {
+    const previous = points[index - 1], next = points[index + 1];
+    const duration = previous && next ? next[2] - previous[2] : 0;
+    return [distance, Number.isFinite(value) && duration > 0 && duration <= .12
+      ? (next[1] - previous[1]) / duration : NaN, time];
+  }));
+  const heights = ['FrontRideHeight','RearRideHeight'].map(name => suspensionSamples(data, name));
+  const result = {travel, velocity, heights};
+  suspensionCache.set(data, result);
+  return result;
+}
+function suspensionEvents(points, limit, floor) {
+  const finite = points.filter(point => Number.isFinite(point[1]));
+  if (!finite.length || (floor && limit == null)) return [];
+  const [min, max] = finite.reduce(([low, high], [,value]) =>
+    [Math.min(low,value), Math.max(high,value)], [Infinity,-Infinity]);
+  if (limit == null && max - min < 2) return [];
+  const threshold = limit ?? max - .15;
+  const runs = [];
+  let run;
+  for (const point of points) {
+    const [,value,time] = point;
+    const hit = Number.isFinite(value) && (floor ? value <= threshold : value >= threshold);
+    if (!hit || (run && time - run.last[2] > .08)) {
+      if (run && run.last[2] - run.first[2] >= (limit == null ? .035 : .015)) runs.push(run);
+      run = undefined;
+    }
+    if (hit) {
+      run ??= {first:point,last:point,value};
+      run.last = point;
+      run.value = floor ? Math.min(run.value,value) : Math.max(run.value,value);
+    }
+  }
+  if (run && run.last[2] - run.first[2] >= (limit == null ? .035 : .015)) runs.push(run);
+  if (limit == null && runs.length < 2) return [];
+  return runs;
+}
+function suspensionSvg(parent, tag, attrs = {}, text) {
+  const element = parent.ownerDocument.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [key,value] of Object.entries(attrs)) element.setAttribute(key,value);
+  if (text != null) element.textContent = text;
+  parent.append(element);
+  return element;
+}
+function suspensionPlot(parent, title, width, height, axis, domain, bounds) {
+  const graph = node('section', undefined, 'suspension-plot');
+  graph.append(node('h3',title));
+  parent.append(graph);
+  const svg = suspensionSvg(graph,'svg',{viewBox:`0 0 ${width} ${height}`,role:'img','aria-label':title});
+  const left = 49, right = width - 13, top = 12, bottom = height - 29;
+  const x = value => left + (right-left)*(value-domain[0])/(domain[1]-domain[0]);
+  const y = value => bottom - (bottom-top)*(value-bounds[0])/(bounds[1]-bounds[0]);
+  for (let i=0;i<=4;i++) {
+    const value = bounds[0] + (bounds[1]-bounds[0])*i/4;
+    const px = left + (right-left)*i/4;
+    suspensionSvg(svg,'line',{x1:left,x2:right,y1:y(value),y2:y(value),class:'suspension-grid'});
+    suspensionSvg(svg,'line',{x1:px,x2:px,y1:top,y2:bottom,class:'suspension-grid'});
+    suspensionSvg(svg,'text',{x:left-6,y:y(value)+4,'text-anchor':'end'},Number(value.toFixed(1)));
+    suspensionSvg(svg,'text',{x:px,y:bottom+15,'text-anchor':'middle'},Math.round(domain[0]+(domain[1]-domain[0])*i/4));
+  }
+  suspensionSvg(svg,'text',{x:right,y:height-1,'text-anchor':'end'},axis);
+  return {svg,x,y,left,right,top,bottom,width};
+}
+function suspensionDistancePlot(parent, title, sources, events, domain) {
+  const bounds = sources.reduce(([min,max], source) => source.points.reduce(([low,high],[distance,value]) =>
+    distance >= domain[0] && distance <= domain[1] && Number.isFinite(value)
+      ? [Math.min(low,value),Math.max(high,value)] : [low,high], [min,max]), [Infinity,-Infinity]);
+  if (!Number.isFinite(bounds[0])) {
+    parent.append(node('p', title + ' is unavailable in this section of the recording.'));
+    return;
+  }
+  const pad = Math.max(1,(bounds[1]-bounds[0])*.08);
+  const plot = suspensionPlot(parent,title,840,155,primary.useDistance ? 'Distance (m)' : 'Time (s)',domain,[bounds[0]-pad,bounds[1]+pad]);
+  const {svg,x,y,left,right,top,bottom,width} = plot;
+  for (const event of events) {
+    if (event.last[0] < domain[0] || event.first[0] > domain[1]) continue;
+    const start = Math.max(left, Math.min(right-3,x(event.first[0])));
+    const band = suspensionSvg(svg,'rect',{x:start,y:top,width:Math.max(3,Math.min(right,x(event.last[0]))-start),
+      height:bottom-top, class:event.floor ? 'suspension-floor' : 'suspension-bottoming',tabindex:0,'aria-label':event.label});
+    suspensionSvg(band,'title',{},event.label);
+  }
+  for (const {points,colour,reference} of sources) {
+    let path = '', connected = false;
+    for (const [distance,value] of points) {
+      if (distance < domain[0] || distance > domain[1] || !Number.isFinite(value)) { connected = false; continue; }
+      path += (connected ? 'L' : 'M') + x(distance).toFixed(1) + ' ' + y(value).toFixed(1);
+      connected = true;
+    }
+    suspensionSvg(svg,'path',{d:path,stroke:colour,'stroke-dasharray':reference ? '5 4' : 'none',class:'suspension-trace'});
+  }
+  suspensionSvg(svg,'line',{y1:top,y2:bottom,class:'suspension-cursor','data-left':left,'data-right':right});
+  svg.addEventListener('pointermove',event => {
+    if (pinned) return;
+    const rect = svg.getBoundingClientRect();
+    const fraction = ((event.clientX-rect.left)/rect.width*width-left)/(right-left);
+    if (fraction >= 0 && fraction <= 1) seek(domain[0]+fraction*(domain[1]-domain[0]),false);
+  });
+}
+function suspensionHistograms(parent, sources, domain) {
+  const histograms = node('section',undefined,'suspension-histograms');
+  histograms.append(node('h3','Calculated Suspension Velocity Histograms (% of time)'));
+  const grid = node('div',undefined,'suspension-histogram-grid');
+  histograms.append(grid);
+  parent.append(histograms);
+  const visible = sources.map(({points,...source}) => ({...source,points:points.filter(([x]) => x >= domain[0] && x <= domain[1])}));
+  const extent = visible.reduce((max,source) => source.points.reduce((peak,[,v]) =>
+    Number.isFinite(v) ? Math.max(peak,Math.abs(v)) : peak,max), 0);
+  const step = Math.max(10,Math.ceil(extent/160)*10);
+  const limit = 16*step;
+  const series = visible.map(source => {
+    const bins = Array(32).fill(0);
+    let total = 0;
+    for (let i=0;i<source.points.length-1;i++) {
+      const [,value,time] = source.points[i];
+      const duration = source.points[i+1][2]-time;
+      if (!Number.isFinite(value) || duration <= 0 || duration > .08) continue;
+      bins[Math.min(31,Math.max(0,Math.floor((value+limit)/step)))] += duration;
+      total += duration;
+    }
+    return {...source,bins:bins.map(value => total ? 100*value/total : 0)};
+  });
+  const peak = Math.max(4,...series.flatMap(source => source.bins));
+  for (const [corner,name] of suspensionCorners.entries()) {
+    const {svg,x,y} = suspensionPlot(grid,name,220,130,'Rebound ← mm/s → Bump',[-limit,limit],[0,Math.ceil(peak/4)*4]);
+    for (const {bins,colour,reference} of series.filter(source => source.index === corner)) {
+      bins.forEach((value,index) => {
+        if (!value) return;
+        suspensionSvg(svg,'rect',{x:x(index*step-limit),y:y(value),width:x(step)-x(0),height:y(0)-y(value),
+          fill:reference ? 'none' : colour,stroke:colour,'stroke-dasharray':reference ? '3 2' : 'none',opacity:reference ? 1 : .55});
+      });
+    }
+  }
+}
+const aeroCache = new WeakMap();
+let aeroRenderKey = [];
+
+function aeroRideHeight(data,name,time) {
+  const channel = data.channels[name];
+  const value = channel && sample(channel,time)?.[0];
+  const scale = {m:1000,cm:10,mm:1}[channel?.unit?.trim().toLowerCase()];
+  return Number.isFinite(value) && scale ? value*scale : NaN;
+}
+function aeroPhaseMatches(data,time,phase) {
+  if (phase === 'all') return true;
+  const active = name => {
+    const channel = data.channels[name];
+    const value = channel && sample(channel,time)?.[0];
+    return Number.isFinite(value) ? value > (channel.unit === '%' ? 5 : .05) : null;
+  };
+  const brake = active('Brake Pos');
+  const throttle = active('Throttle Pos');
+  if (phase === 'braking') return brake === true;
+  if (phase === 'throttle') return throttle === true && brake === false;
+  return throttle === false && brake === false;
+}
+
+function aeroData(data) {
+  const cached = aeroCache.get(data);
+  if (cached && cached.units === settings.measurementUnits) return cached;
+  const heights = suspensionData(data).heights;
+  const speed = trace(data,'Ground Speed').map(([distance,[value]]) => [distance,value]);
+  const rake = heights[0].map(([distance,front,time]) => [
+    distance,aeroRideHeight(data,'RearRideHeight',time)-front
+  ]);
+  const result = {heights,speed,rake,units:settings.measurementUnits};
+  aeroCache.set(data,result);
+  return result;
+}
+
+function renderAeroVisualiser() {
+  const charts = $('aero-plots');
+  const checkbox = $('aero-show-reference');
+  checkbox.disabled = !secondary;
+  const comparison = checkbox.checked ? secondary : null;
+  const limits = settings.suspensionLimits;
+  const phase = $('aero-phase').value;
+  const key = [primary,comparison,range[0],range[1],limits,settings.measurementUnits,phase];
+  if (key.some((value,index) => value !== aeroRenderKey[index])) {
+    aeroRenderKey = key;
+    charts.replaceChildren();
+    if (!primary) charts.append(node('p','Load a lap in Telemetry Viewer to show aero data.'));
+    else {
+      const laps = [primary,...(comparison ? [comparison] : [])];
+      const heights = laps.flatMap((data,index) => aeroData(data).heights.map((points,axle) =>
+        ({points,reference:index===1,colour:suspensionColours[axle*2],axle,index})));
+      const events = heights.flatMap(({points,axle,index}) => {
+        const session = index ? reference.session : selected;
+        const car = session.model || session.car;
+        const threshold = Object.hasOwn(limits ?? {},car) ? limits[car][axle+4] : null;
+        return suspensionEvents(points,threshold,true).map(run => ({...run,floor:true,
+          label:[index ? 'Reference' : 'Loaded','Possible Floor Contact',axle ? 'Rear' : 'Front',
+            run.first[0].toFixed(1)+(primary.useDistance ? ' m' : ' s'),run.value.toFixed(2)+' mm'].join(' · ')}));
+      });
+      const speedUnit = displayUnit('Ground Speed', 'km/h');
+      suspensionDistancePlot(charts,'Front and Rear Ride Height (mm)',heights,events,range);
+      suspensionDistancePlot(charts,'Ground Speed ('+speedUnit+')',laps.map((data,index) =>
+        ({points:aeroData(data).speed,reference:index===1,colour:index ? 'var(--reference)' : 'var(--accent)'})),[],range);
+      suspensionDistancePlot(charts,'Dynamic Rake · Rear − Front (mm)',laps.map((data,index) =>
+        ({points:aeroData(data).rake,reference:index===1,colour:index ? 'var(--reference)' : 'var(--accent)'})),[],range);
+      const scatter = heights.map(source => {
+        const speeds = aeroData(laps[source.index]).speed;
+        const points = speeds.length ? source.points.flatMap(([distance,height,time]) => {
+          const data = laps[source.index];
+          if (distance < range[0] || distance > range[1] || !Number.isFinite(height) || !aeroPhaseMatches(data,time,phase)) return [];
+          const channel = data.channels['Ground Speed'];
+          const speed = convert('Ground Speed',sample(channel,time)?.[0],channel.unit);
+          return Number.isFinite(speed) ? [[speed,height]] : [];
+        }) : [];
+        return {...source,points};
+      });
+      const points = scatter.flatMap(source => source.points);
+      if (points.length) {
+        const [minSpeed,maxSpeed,minHeight,maxHeight] = points.reduce(([lo,hi,low,high],[speed,height]) =>
+          [Math.min(lo,speed),Math.max(hi,speed),Math.min(low,height),Math.max(high,height)], [Infinity,-Infinity,Infinity,-Infinity]);
+        const {svg,x,y} = suspensionPlot(charts,'Ride Height (mm) vs Ground Speed',840,185,'Ground speed ('+speedUnit+')',
+          [Math.floor(minSpeed),Math.max(Math.floor(minSpeed)+1,Math.ceil(maxSpeed))],[minHeight-1,maxHeight+1]);
+        for (const {points,colour,reference} of scatter) {
+          const stride = Math.max(1,Math.ceil(points.length/650));
+          for (let i=0;i<points.length;i+=stride) {
+            const [speed,height] = points[i];
+            suspensionSvg(svg,'circle',{cx:x(speed),cy:y(height),r:1.8,fill:reference ? 'none' : colour,
+              stroke:colour,opacity:reference ? .65 : .45});
+          }
+        }
+      } else charts.append(node('p','No ride height and speed samples match this driving phase and zoom range.'));
+    }
+  }
+  paintVisualiserCursor(charts);
+  const diagram = $('aero-platform');
+  const carClass = selected?.carClass?.toLowerCase().trim();
+  const model = selected?.model || selected?.car || '';
+  const profile = /lexus.*rc[ -]?f/i.test(model) ? 'lexus' : carClass === 'lmgt3' ? 'gt3'
+    : ['gt3','gte','lmp3','lmp2','hypercar'].includes(carClass) ? carClass : 'generic';
+  if (diagram.dataset.profile !== profile) {
+    diagram.dataset.profile = profile;
+    diagram.setAttribute('viewBox', profile === 'lexus' ? '-29 -76 540 201' : '0 -32 460 157');
+    diagram.querySelectorAll('use').forEach(outline => outline.setAttribute('href','#aero-outline-' + profile));
+  }
+  for (const [index,data] of [primary,comparison].entries()) {
+    const group = diagram.querySelector(index ? '.aero-reference-platform' : '.aero-loaded-platform');
+    const output = $(index ? 'aero-reference-reading' : 'aero-loaded-reading');
+    const time = data?.timeAt(cursor);
+    const heights = !data || cursor < data.extent[0] || cursor > data.extent[1] ? []
+      : ['FrontRideHeight','RearRideHeight'].map(name => aeroRideHeight(data,name,time));
+    const [front,rear] = heights;
+    const valid = Number.isFinite(front) && Number.isFinite(rear);
+    group.style.visibility = valid ? 'visible' : 'hidden';
+    output.hidden = index === 1 && !comparison;
+    output.textContent = valid ? `Front ${front.toFixed(1)} mm · Rear ${rear.toFixed(1)} mm · Rake ${(rear-front).toFixed(1)} mm`
+      : 'Ride height unavailable at cursor';
+    if (valid) {
+      const height = value => 98 - Math.max(-10,Math.min(140,value))*(profile === 'lexus' ? .22 : .44);
+      const start = height(front), end = height(rear);
+      group.setAttribute('transform',`matrix(1 ${(end-start)/300} 0 1 0 ${start-80*(end-start)/300})`);
+    }
+  }
+}
+$('aero-show-reference').onchange = $('aero-phase').onchange = renderAeroVisualiser;
+
+function renderVisualiserLaps() {
+  for (const name of Object.keys(visualizerSettings)) {
+    if (!popoutWindows.has(name)) continue;
+    $(name + '-loaded').textContent = selected && lap ? viewerLapDetails('Loaded Lap',selected,lap) : 'No lap loaded';
+    $(name + '-reference').textContent = secondary && reference
+      ? viewerLapDetails('Reference Lap',reference.session,reference.lap) : 'No reference lap loaded';
+  }
+  if (popoutWindows.has('aero')) renderAeroVisualiser();
+  if (!popoutWindows.has('suspension')) return;
+  const checkbox = $('suspension-show-reference');
+  checkbox.disabled = !secondary;
+  const car = selected?.model || selected?.car;
+  const limits = settings.suspensionLimits ?? {};
+  const carLimits = Object.hasOwn(limits,car) ? limits[car] : undefined;
+  if (car !== suspensionCar) {
+    suspensionCar = car;
+    $('suspension-limits').querySelectorAll('input').forEach((input,index) => { input.value = carLimits?.[index] ?? ''; });
+  }
+  const useReference = checkbox.checked && secondary;
+  const referenceCar = reference?.session.model || reference?.session.car;
+  const referenceLimits = Object.hasOwn(limits,referenceCar) ? limits[referenceCar] : undefined;
+  const key = [primary,useReference,range[0],range[1],car,carLimits,referenceLimits];
+  if (key.some((value,index) => value !== suspensionRenderKey[index])) {
+    suspensionRenderKey = key;
+    const content = $('suspension-plots');
+    content.replaceChildren();
+    if (!primary) {
+      content.append(node('p','Load a lap in Telemetry Viewer to show suspension data.'));
+      return;
+    }
+    const laps = [primary,...(useReference ? [secondary] : [])];
+    const sources = field => laps.flatMap((data,lapIndex) => suspensionData(data)[field].map((points,index) =>
+      ({points,index,reference:lapIndex===1,colour:suspensionColours[field === 'heights' ? index * 2 : index]})));
+    const events = floor => laps.flatMap((data,lapIndex) => {
+      const thresholds = lapIndex ? referenceLimits : carLimits;
+      const series = suspensionData(data)[floor ? 'heights' : 'travel'];
+      return series.flatMap((points,index) => {
+        const limit = thresholds?.[index + (floor ? 4 : 0)];
+        return suspensionEvents(points,limit,floor).map(run => ({...run,floor,
+          label:[lapIndex ? 'Reference' : 'Loaded', floor ? 'Possible Floor Contact' : limit == null ? 'Possible Bottoming' : 'Suspension Travel Limit',
+            floor ? ['Front','Rear'][index] : suspensionCorners[index],
+            run.first[0].toFixed(1) + (primary.useDistance ? ' m' : ' s'), run.value.toFixed(2)+' mm'].join(' · ')}));
+      });
+    });
+    suspensionDistancePlot(content,'Suspension Travel (mm)',sources('travel'),events(false),range);
+    const velocity = sources('velocity');
+    if (velocity.some(source => source.points.some(([,value]) => Number.isFinite(value)))) suspensionHistograms(content,velocity,range);
+    suspensionDistancePlot(content,'Calculated Suspension Velocity (mm/s)',velocity,[],range);
+    suspensionDistancePlot(content,'Front and Rear Ride Height (mm)',sources('heights'),events(true),range);
+  }
+  paintVisualiserCursor($('suspension-plots'));
+}
+function paintVisualiserCursor(charts) {
+  const fraction = (cursor-range[0])/(range[1]-range[0]);
+  charts.querySelectorAll('.suspension-cursor').forEach(line => {
+    const {left,right} = line.dataset;
+    const x = Number(left) + (Number(right)-Number(left))*fraction;
+    line.style.visibility = fraction >= 0 && fraction <= 1 ? 'visible' : 'hidden';
+    line.setAttribute('x1',x);
+    line.setAttribute('x2',x);
+  });
+}
+
+const suspensionLimitPanel = $('suspension-limits');
+suspensionLimits.forEach((label,index) => {
+  const field = node('label',label + ' (mm)');
+  const input = node('input');
+  input.type = 'number';
+  input.step = 'any';
+  input.onchange = () => {
+    if (!suspensionCar) return;
+    const limits = settings.suspensionLimits ?? {};
+    const thresholds = Object.hasOwn(limits,suspensionCar) ? [...limits[suspensionCar]] : Array(6).fill(null);
+    thresholds[index] = Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : null;
+    save({suspensionLimits:{...limits,[suspensionCar]:thresholds}});
+    renderVisualiserLaps();
+  };
+  field.append(input);
+  suspensionLimitPanel.append(field);
+});
+$('suspension-show-reference').onchange = renderVisualiserLaps;
 
 const chartHiddenWheels = new Map();
 let smoothTyrePressure = true;
@@ -6263,6 +6646,7 @@ function scheduleRender(){
   renderRequested=true;
   requestAnimationFrame(()=>{
     renderRequested=false;
+    renderVisualiserLaps();
     if (!ready) return;
     if (view === 'viewer' || popoutWindows.has('graphs')) {
       for (const row of chartRows) paintChart(row);
@@ -6872,12 +7256,7 @@ function closePanelPopout(key) {
   if (lmu.dockPanel) lmu.dockPanel(key).catch(error => message(error.message));
   else popoutWindows.get(key)?.close();
 }
-function togglePanelPopout(key, panel, title) {
-  const existing = popoutWindows.get(key);
-  if (existing && !existing.closed) {
-    closePanelPopout(key);
-    return;
-  }
+function openPanelWindow(key,title) {
   const popup = window.open('about:blank', key, 'popup');
   if (!popup) {
     message('Could not open the ' + title + ' window.');
@@ -6888,11 +7267,47 @@ function togglePanelPopout(key, panel, title) {
   doc.documentElement.lang = 'en-AU';
   doc.documentElement.style.cssText = document.documentElement.style.cssText;
   doc.body.className = 'panel-popout';
-  const stylesheet = doc.createElement('link');
-  stylesheet.rel = 'stylesheet';
-  stylesheet.href = document.querySelector('link[rel="stylesheet"]').href;
-  doc.head.append(stylesheet);
-  stylesheet.onload = scheduleRender;
+  const source = document.querySelector('link[rel="stylesheet"]');
+  try {
+    const sheet = new popup.CSSStyleSheet({baseURL:source.href});
+    sheet.replaceSync(Array.from(source.sheet.cssRules,rule => rule.cssText).join('\n'));
+    doc.adoptedStyleSheets = [sheet];
+  } catch {
+    const stylesheet = doc.createElement('link');
+    stylesheet.rel = 'stylesheet';
+    stylesheet.href = source.href;
+    stylesheet.onload = scheduleRender;
+    doc.head.append(stylesheet);
+  }
+  return popup;
+}
+function openVisualiser(name) {
+  const existing = popoutWindows.get(name);
+  if (existing && !existing.closed) { existing.focus(); return; }
+  if (settings[visualizerSettings[name]] !== true || !lap) return;
+  const panel = $(name);
+  const popup = openPanelWindow(name,$(name + '-title').textContent);
+  if (!popup) return;
+  const home = panel.parentElement;
+  popoutWindows.set(name,popup);
+  popup.document.body.append(panel);
+  panel.hidden = false;
+  popup.addEventListener('beforeunload',() => {
+    panel.hidden = true;
+    home.append(panel);
+    popoutWindows.delete(name);
+  },{once:true});
+  renderVisualiserLaps();
+}
+function togglePanelPopout(key, panel, title) {
+  const existing = popoutWindows.get(key);
+  if (existing && !existing.closed) {
+    closePanelPopout(key);
+    return;
+  }
+  const popup = openPanelWindow(key,title);
+  if (!popup) return;
+  const doc = popup.document;
   const link = node('button', 'Focus ' + title, 'popout-link');
   link.id = key + '-popout-link';
   link.type = 'button';
@@ -6981,6 +7396,7 @@ window.addEventListener('resize', () => {
   loadRecordNotifications();
   communityMinimumGameVersion = settings.communityMinimumGameVersion ?? null;
   syncDriverTrainerSetting();
+  syncVisualizerSettings();
   if (settings.appVersion) {
     $('app-version').textContent = 'v' + settings.appVersion;
     $('app-version').hidden = false;

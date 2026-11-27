@@ -32,6 +32,81 @@
   <p id="notifications-empty">No notifications.</p><ul id="notification-list"></ul>
 </dialog>
 <main>
+  <section id="aero" class="visualiser-window" hidden aria-labelledby="aero-title">
+    <h1 id="aero-title">Aero Visualiser</h1>
+    <div class="visualiser-laps"><p id="aero-loaded" class="selected-color"></p><p id="aero-reference" class="reference-color"></p></div>
+    <div class="suspension-controls">
+      <label><input id="aero-show-reference" type="checkbox" checked> Show Reference</label>
+      <span>Solid · Loaded / Dashed or hollow · Reference</span>
+    </div>
+    <section class="suspension-plot">
+      <h3>Ride Height at Cursor</h3>
+      <svg id="aero-platform" viewBox="0 -32 460 157" role="img" aria-label="Side-on schematic with exaggerated ride height">
+        <defs>
+          <g id="aero-outline-gt3">
+            <path d="M31-4 32-12Q33-17 44-18L60-20Q68-25 80-25Q92-25 102-21L137-24Q160-29 178-47Q188-55 205-55H247Q268-54 282-43L312-24L352-22Q366-28 380-27Q394-26 402-19L416-18Q425-17 426-10L423-2H405C403-28 357-28 355 0H105C103-28 57-28 55 0H37Z"/>
+            <path d="M346-24 359-41 410-43 423-40 421-36 361-37 355-23Z"/>
+          </g>
+          <g id="aero-outline-lexus">
+            <path d="M-18 0H-4L-6-7-7-35Q-5-48 13-58Q29-67 43-73Q60-81 105-81L148-87Q170-101 196-113Q221-127 258-127Q307-127 349-111L401-94Q419-89 440-88L454-91L466-84L470-62Q484-56 477-27L472-17L482-7L425-5C425-83 335-83 335-3H125C125-82 35-82 35 0H-18Z"/>
+            <path d="M419-89 421-113Q422-121 431-123L484-126 501-126 494-115 470-108 446-107 440-113 436-89Z"/>
+          </g>
+          <path id="aero-outline-gte" d="M30-3 35-15 61-20Q80-34 107-22L147-24 187-53Q202-60 239-58L263-53 308-29 350-24Q380-35 402-23L421-25V-40H387V-45H428V-41L425-20 431-13 428-2H405C402-27 358-27 355 0H105C102-27 58-27 55 0H34Z"/>
+          <path id="aero-outline-lmp3" d="M27-2 30-12 55-15Q68-34 92-31L111-20 145-20 168-33 190-45 229-45 244-33 300-24 328-22 347-27Q379-45 406-29L416-22 419-40H435V-34H425L429-2H405C402-27 358-27 355 0H105C102-27 58-27 55 0Z"/>
+          <path id="aero-outline-lmp2" d="M23-2 24-12 52-15Q76-38 102-28L118-17H152L173-39 193-51H226L248-30 319-21 347-26Q381-47 406-30L414-23 414-39H439V-33H425L432-2H405C402-27 358-27 355 0H105C102-27 58-27 55 0Z"/>
+          <path id="aero-outline-hypercar" d="M21-2 25-12 48-15Q72-40 100-31L126-21 150-19 168-35 190-52 226-54 249-33 296-38 322-23 344-27Q377-46 407-29L414-24 411-40H437V-34H423L433-15 432-2H405C402-27 358-27 355 0H105C102-27 58-27 55 0Z"/>
+          <path id="aero-outline-generic" d="M28-2 32-16 107-26 149-29 182-48Q213-57 250-51L296-28 403-22 427-14 430-2H405C402-27 358-27 355 0H105C102-27 58-27 55 0Z"/>
+        </defs>
+        <path d="M30 100H430" class="suspension-grid"/>
+        <g class="aero-wheel">
+          <circle cx="80" cy="86" r="14"/><circle cx="380" cy="86" r="14"/>
+          <circle class="aero-wheel-hub" cx="80" cy="86" r="7"/><circle class="aero-wheel-hub" cx="380" cy="86" r="7"/>
+        </g>
+        <g class="aero-wheel aero-lexus-wheels">
+          <circle cx="80" cy="63" r="37"/><circle cx="380" cy="63" r="37"/>
+          <circle class="aero-wheel-hub" cx="80" cy="63" r="24"/><circle class="aero-wheel-hub" cx="380" cy="63" r="24"/>
+        </g>
+        <g class="aero-loaded-platform">
+          <use href="#aero-outline-gt3"/>
+          <path class="aero-body-detail aero-lexus-detail" d="M169-87Q196-107 220-114Q254-125 285-116Q321-111 366-96Q353-91 322-88L169-87ZM294-115 289-89M168-79Q167-69 166-51L170-26Q228-20 311-27L325-79M252-73H270M4-35Q15-47 35-50M444-80 465-77M131-9H330"/>
+          <path class="aero-body-detail aero-gt3-detail" d="M150-24 182-47Q191-51 204-51H244Q259-51 272-43L291-28ZM209-51 215-27M147-20 150-6H301L311-21M115-5H143M311-5H347M35-12 51-13M410-13 422-12"/>
+        </g>
+        <g class="aero-reference-platform"><use href="#aero-outline-gt3"/></g>
+        <text x="80" y="117" text-anchor="middle">Front</text><text x="380" y="117" text-anchor="middle">Rear</text>
+      </svg>
+      <div class="aero-readings"><output id="aero-loaded-reading" class="selected-color"></output><output id="aero-reference-reading" class="reference-color"></output></div>
+      <small>Schematic · ride height exaggerated</small>
+    </section>
+    <div class="aero-key"><span>Front</span> · <span>Rear</span> · <span>Possible Floor Contact</span></div>
+    <label class="aero-phase">Ride height vs speed samples
+      <select id="aero-phase">
+        <option value="all">All driving phases</option>
+        <option value="coasting">Off throttle and brake</option>
+        <option value="throttle">On throttle</option>
+        <option value="braking">Braking</option>
+      </select>
+    </label>
+    <div id="aero-plots"></div>
+  </section>
+  <section id="suspension" class="visualiser-window" hidden aria-labelledby="suspension-title">
+    <h1 id="suspension-title">Suspension Visualiser</h1>
+    <div class="visualiser-laps"><p id="suspension-loaded" class="selected-color"></p><p id="suspension-reference" class="reference-color"></p></div>
+    <div class="suspension-controls">
+      <label><input id="suspension-show-reference" type="checkbox" checked> Show Reference</label>
+      <span>Solid · Loaded / Dashed · Reference</span>
+    </div>
+    <div class="suspension-key">
+      <span class="selected-color">Front Left / Front</span><span>Front Right</span>
+      <span>Rear Left / Rear</span><span>Rear Right</span>
+      <span>■ Travel Limit / Possible Bottoming</span><span>■ Possible Floor Contact</span>
+    </div>
+    <details>
+      <summary>Bottoming and Floor Contact Limits</summary>
+      <p>Enter known compression and floor clearance limits for this car. Blank compression limits use repeated clipping as a possible bottoming indicator. Floor contact markers require a clearance limit.</p>
+      <div id="suspension-limits"></div>
+    </details>
+    <div id="suspension-plots"></div>
+  </section>
   <section id="trainer" hidden aria-labelledby="trainer-title">
     <div class="trainer-intro">
     <header class="trainer-heading"><h1 id="trainer-title">Driver Trainer is for Practice Sessions Only</h1><div id="trainer-scan" hidden><progress id="trainer-progress" aria-label="Practice history scan"></progress> <span id="trainer-progress-label"></span><small class="trainer-scan-note">Checking saved practice sessions may take a few minutes.</small></div></header>
@@ -226,6 +301,10 @@
           <select id="reference-select">
             <button type="button"><selectedcontent></selectedcontent></button>
           </select>
+          <div class="visualiser-actions">
+            <button id="aero-tab" data-ui-icon="pop" class="button-secondary" type="button" aria-label="Pop out Aero Visualiser" hidden>Aero</button>
+            <button id="suspension-tab" data-ui-icon="pop" class="button-secondary" type="button" aria-label="Pop out Suspension Visualiser" hidden>Suspension</button>
+          </div>
         </div>
       </div>
     </div>
@@ -526,6 +605,8 @@
       </section>
   </div>
   <div id="settings-panel-beta" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-beta" tabindex="0" hidden>
+    <label class="trainer-setting"><input id="enable-aero" type="checkbox"><span>Enable Aero Visualiser (beta)</span></label>
+    <label class="trainer-setting"><input id="enable-suspension" type="checkbox"><span>Enable Suspension Visualiser (beta)</span></label>
         <label class="trainer-setting"><input id="enable-driver-trainer" type="checkbox"><span>Enable Driver Trainer (beta)</span></label>
   </div>
   <div id="settings-panel-temperatures" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-temperatures" tabindex="0" hidden>

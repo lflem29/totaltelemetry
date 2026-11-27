@@ -1,1 +1,1 @@
-Telemetry Viewer adds a saved, draggable sidebar divider with double-click reset, a graph pop-out, and a colour-coded matchup in Session Details. Session Details also shows reference sector deltas and wind, and can stay pinned while graphs scroll.
+Adds opt-in Aero and Suspension Visualisers under Settings → Beta. Both pop-outs follow the selected laps and zoom. Aero includes dynamic rake and a Lexus RC F GT3 side profile. Suspension includes travel and calculated velocity plots, histograms, and configurable compression and floor-clearance markers.

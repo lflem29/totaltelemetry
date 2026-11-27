@@ -718,7 +718,7 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   Menu.setApplicationMenu(null);
   const popouts = new Map();
-  const panelTitles = {track:'Track View', summary:'Session Summary', graphs:'Telemetry Graphs'};
+  const panelTitles = {track:'Track View', summary:'Session Summary', graphs:'Telemetry Graphs', aero:'Aero Visualiser', suspension:'Suspension Visualiser'};
   win.webContents.setWindowOpenHandler(({url, frameName}) => {
     if (url !== 'about:blank' || !Object.hasOwn(panelTitles, frameName)) return {action:'deny'};
     return {action:'allow', overrideBrowserWindowOptions:{
@@ -789,7 +789,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
     save();
     return publicSettings();
