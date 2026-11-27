@@ -458,9 +458,10 @@ const displayFields = {
   deltaChannels:settingsList, chartOverlays:settingsMap(value => settingsList(value) && value.length <= 3), graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
   interfaceColour:settingsColour, interfaceColourMode:value => ['green', 'orange', 'custom'].includes(value),
   interfaceBackgroundColour:settingsColour, graphBackgroundColour:settingsColour,
+  racingLineSpread:value => [1, 2, 3].includes(value),
   textScalePercent:value => Number.isInteger(value) && value >= 75 && value <= 150,
   extraSummaryChannels:settingsList, summaryChannelOrder:settingsList, summaryChartHeights:settingsMap(settingsNumber),
-  summaryHeight:settingsNumber, extraGraphChannels:settingsList, telemetryNames:settingsMap(settingsText),
+  summaryHeight:settingsNumber, telemetrySidebarWidth:value => value === null || (Number.isFinite(value) && value >= 0 && value <= 100), extraGraphChannels:settingsList, telemetryNames:settingsMap(settingsText),
   telemetryDecimals:settingsMap(value => Number.isInteger(value) && value >= 0 && value <= 6)
 };
 const settingsFileFields = new Map([
@@ -717,7 +718,7 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   Menu.setApplicationMenu(null);
   const popouts = new Map();
-  const panelTitles = {track:'Track View', summary:'Session Summary'};
+  const panelTitles = {track:'Track View', summary:'Session Summary', graphs:'Telemetry Graphs'};
   win.webContents.setWindowOpenHandler(({url, frameName}) => {
     if (url !== 'about:blank' || !Object.hasOwn(panelTitles, frameName)) return {action:'deny'};
     return {action:'allow', overrideBrowserWindowOptions:{
@@ -788,7 +789,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
     save();
     return publicSettings();

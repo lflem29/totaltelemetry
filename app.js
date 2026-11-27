@@ -32,7 +32,11 @@ const builtIn = {
   Driving: ['Ground Speed','Throttle Pos','Brake Pos','Gear','Steering Pos','Engine RPM','G Force Lat','G Force Long'],
   'Tyres & Brakes': ['Brakes Temp','Brakes Force','TyresTempCentre','TyresPressure','Tyres Wear','TyresCompound','Brake Thickness'],
   Engine: ['Engine RPM','Engine Oil Temp','Engine Water Temp','Fuel Level','Turbo Boost Pressure'],
-  'Ride Height': ['FrontRideHeight','RideHeights','RearRideHeight']
+  'Ride Height': ['FrontRideHeight','RideHeights','RearRideHeight'],
+  'G Forces': ['G Force Lat','G Force Long','G Force Vert'],
+  'Fuel & Energy': ['Fuel Level','Virtual Energy','SoC','Regen Rate'],
+  'Wheel Slip': ['Ground Speed','Wheel Speed','ABS','TC'],
+  Suspension: ['Susp Pos','Front3rdDeflection','Rear3rdDeflection']
 };
 let settings = {};
 let sessions = [], resultGameVersions = [];
@@ -94,6 +98,7 @@ const uiIconPaths = {
   gauge: 'M4 18a9 9 0 1 1 16 0H4Zm8-3 4-5M6 13h1m5-6v1m5 5h1',
   save: 'M5 3h12l4 4v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm2 0v6h10V3M7 21v-7h10v7',
   zoomIn: 'M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-2 5 6 6M7 10h6m-3-3v6',
+  pin: 'M9 3h6l-1 6 3 3v2H7v-2l3-3-1-6Zm3 11v7',
   unlock: 'M7 11V7a5 5 0 0 1 9-3m-4 11v2M6 11h12a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2Z',
   play: 'M7 4l14 8-14 8V4Z',
   pause: 'M7 5h3v14H7zm7 0h3v14h-3z',
@@ -232,6 +237,23 @@ function referenceLapCells(driver, track, layout, car, time, version) {
     node('td', layout || 'Unknown'), node('td', car || 'Unknown'),
     node('td', lapTime(time), 'numeric-cell session-best'), node('td', version || 'Unknown')];
 }
+function renderSessionDetailsMatchup(session, currentLap, comparison) {
+  const matchup = $('session-details-matchup');
+  matchup.hidden = !comparison;
+  if (!comparison) {
+    matchup.replaceChildren();
+    return;
+  }
+  const loadedDriver = session?.driver?.trim();
+  const referenceDriver = comparison.session?.driver?.trim();
+  const sameDriver = loadedDriver && loadedDriver.toLowerCase() === referenceDriver?.toLowerCase();
+  const loadedLabel = (sameDriver ? null : loadedDriver) ||
+    (currentLap?.number == null ? 'Loaded Lap' : 'Lap ' + currentLap.number);
+  const referenceLabel = (sameDriver ? null : referenceDriver) ||
+    (comparison.lap?.number == null ? 'Reference Lap' : 'Lap ' + comparison.lap.number);
+  matchup.replaceChildren(node('span', loadedLabel, 'selected-color'), ' vs ',
+    node('span', referenceLabel, 'reference-color'));
+}
 function renderLoadedSessions() {
   const show = (id, session, currentLap, empty) => {
     const output = $(id);
@@ -245,6 +267,7 @@ function renderLoadedSessions() {
       currentLap?.number != null ? 'Lap ' + currentLap.number : '', time];
     output.replaceChildren(node('strong', session.track || session.filename), details.filter(Boolean).join(' · '));
   };
+  renderSessionDetailsMatchup(selected, lap, secondary ? reference : null);
   show('loaded-session', selected, lap, 'No session loaded');
   $('clear-loaded-session').hidden = !selected;
   syncCompatibleReferenceFilters();
@@ -275,17 +298,19 @@ function setView(name) {
   $('trainer').hidden = name !== 'trainer';
   $('trainer-tab').classList.toggle('active', name === 'trainer');
   $('library').hidden = name !== 'library';
-  $('viewer').hidden = name !== 'viewer';
+  const showTelemetry = name === 'viewer' && Boolean(lap);
+  $('viewer').hidden = !showTelemetry;
+  $('viewer-empty').hidden = name !== 'viewer' || showTelemetry;
   $('records').hidden = name !== 'records';
-  $('export-best-lap').hidden = name !== 'viewer';
+  $('export-best-lap').hidden = !showTelemetry;
   $('library-tab').classList.toggle('active', name === 'library');
   $('viewer-tab').classList.toggle('active', name === 'viewer');
   $('records-tab').classList.toggle('active', name === 'records');
-  if (name !== 'viewer') stop();
+  if (!showTelemetry) stop();
   if (name === 'library') { renderLibrary(); renderLoadedSessions(); }
   if (name === 'records') { renderRecords(); void refreshFriendRecords(); }
   if (name === 'trainer') { renderDriverTrainer(); void scanDriverTrainer(sessions); }
-  if (name === 'viewer') scheduleRender();
+  if (showTelemetry) scheduleRender();
   for (const id of (changingView ? listScrollContainers[name] : undefined) ?? []) {
     const location = listScrollPositions.get(id);
     if (location && !$(id).hidden) $(id).scrollTo(...location);
@@ -444,6 +469,7 @@ function settingsFields() {
   $('interface-background-colour').value = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
   $('graph-background-colour').value = backgroundColour(settings.graphBackgroundColour, defaultGraphBackgroundColour);
   $('text-scale').value = settings.textScalePercent ?? 100;
+  $('racing-line-spread').value = racingLineSpread();
   $('settings-channels').disabled = !ready;
   $('settings-channel-note').hidden = ready;
   for (const type of ['telemetry', 'results']) $(type + '-path').textContent = settings[type] || 'Folder not set';
@@ -967,6 +993,11 @@ function eligibleRecordLap(item) {
     (item.validity === 'official' || item.validity === 'unconfirmed');
 }
 
+function fastestValidLap(session) {
+  return session.laps.reduce((best, item) =>
+    eligibleRecordLap(item) && item.validity === 'official' && (!best || item.time < best.time) ? item : best, null);
+}
+
 const recordsFilters = $('records-filters');
 let recordsRefreshPending = false;
 function updateRecordsLoading() {
@@ -1462,8 +1493,7 @@ function localRecordCandidates() {
   const driver = normaliseDriverName(settings.primaryDriver);
   const recordings = driver ? sessions.filter(session => normaliseDriverName(session.driver) === driver) : sessions;
   return recordings.flatMap(session => {
-    const bestLap = session.laps.reduce((best,item) =>
-      eligibleRecordLap(item) && item.validity === 'official' && (!best || item.time < best.time) ? item : best,null);
+    const bestLap = fastestValidLap(session);
     return bestLap ? [{session,bestLap,dimensions:recordDimensions(session)}] : [];
   });
 }
@@ -2177,7 +2207,8 @@ async function openSession(value, initialLap, comparison) {
   restoreTrackCamera();
   trackCameraOverride = undefined;
   fitTrack();
-  lap = initialLap || value.laps.find(item => item.time === value.best && item.time) || value.laps[0];
+  lap = initialLap || fastestValidLap(value) ||
+    value.laps.find(item => item.time === value.best && item.time) || value.laps[0];
   if (referenceSessionPath) {
     const target = (settings.comparisonLaps ?? []).find(session => session.path === referenceSessionPath)
       ?? sessions.find(session => session.path === referenceSessionPath);
@@ -2192,7 +2223,6 @@ async function openSession(value, initialLap, comparison) {
   fillLaps();
   fillReferences();
   $('track').textContent = value.track;
-  $('viewer-tab').disabled = false;
   setView('viewer');
   await readPrimary();
 }
@@ -2201,9 +2231,10 @@ $('clear-loaded-session').onclick = $('clear-viewer-session').onclick = () => {
   compatibleReferencesOnly = false;
   ready = referenceLoading = pinned = false;
   selected = lap = reference = primary = secondary = undefined;
+  if (popoutWindows.has('graphs')) closePanelPopout('graphs');
   referenceSessionPath = referenceSessionLapId = manualReference = practiceComparison = undefined;
-  $('viewer-tab').disabled = true;
-  setView('library');
+  setView(view === 'viewer' ? 'viewer' : 'library');
+  if (view === 'viewer') $('viewer-open-recent').focus();
 };
 function message(text = '') {
   $('viewer-message').textContent = text;
@@ -2598,6 +2629,13 @@ const defaultTelemetryNames = new Map([
   ...chartSpecs.map(([label, key]) => [key, label]),
   ...Object.entries(tyreChannels),
   ...inCarSettings, ...hypercarSetupOptions,
+  ['G Force Lat', 'G Force Lateral (Side-to-Side)'],
+  ['G Force Long', 'G Force Longitudinal (Acceleration and Braking)'],
+  ['G Force Vert', 'G Force Vertical (Bumps, Kerbs, etc)'],
+  ['SoC', 'State of Charge'],
+  ['Susp Pos', 'Suspension Position'],
+  ['Front3rdDeflection', 'Front Third-Element Deflection'],
+  ['Rear3rdDeflection', 'Rear Third-Element Deflection'],
   ['virtualEnergy', 'Virtual Energy Usage per Lap']
 ]);
 function telemetryName(key, fallback = defaultTelemetryNames.get(key) ?? key) {
@@ -2725,27 +2763,31 @@ const summaryChartColours = {
 function summaryChannelColour(channel) {
   return graphColor('summary:' + channel, summaryChartColours[channel] ?? graphColor(channel));
 }
-function attachChartResize(handle, getHeight, setHeight, persist, reset) {
+function attachChartResize(handle, getSize, setSize, persist, reset, axis = 'y') {
+  const horizontal = axis === 'x';
+  const pointerPosition = event => horizontal ? event.clientX : event.clientY;
+  const decrease = horizontal ? 'ArrowLeft' : 'ArrowUp';
+  const increase = horizontal ? 'ArrowRight' : 'ArrowDown';
   handle.title = "Double-click to restore default size";
   handle.addEventListener('dblclick', reset);
   let drag;
   handle.addEventListener('pointerdown', event => {
     if (event.button !== 0) return;
-    drag = {pointerId:event.pointerId, y:event.clientY, height:getHeight()};
+    drag = {pointerId:event.pointerId, position:pointerPosition(event), size:getSize()};
     handle.setPointerCapture(event.pointerId);
   });
   handle.addEventListener('pointermove', event => {
-    if (drag?.pointerId === event.pointerId) setHeight(drag.height + event.clientY - drag.y);
+    if (drag?.pointerId === event.pointerId) setSize(drag.size + pointerPosition(event) - drag.position);
   });
   handle.addEventListener('lostpointercapture', event => {
     if (drag?.pointerId !== event.pointerId) return;
-    if (getHeight() !== drag.height) persist?.();
+    if (getSize() !== drag.size) persist?.();
     drag = null;
   });
   handle.addEventListener('keydown', event => {
-    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+    if (event.key !== decrease && event.key !== increase) return;
     event.preventDefault();
-    setHeight(getHeight() + (event.key === 'ArrowDown' ? 15 : -15));
+    setSize(getSize() + (event.key === increase ? 15 : -15));
     persist?.();
   });
 }
@@ -3003,6 +3045,12 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
 function renderMapSectorTimes() {
   const timed = (selected?.laps ?? []).filter(lap => lap.time > 0);
   const fastest = timed.find(lap => lap.time === selected.best);
+  const referenceLap = secondary ? reference?.lap : null;
+  const referenceHeading = $('map-reference-gap');
+  referenceHeading.hidden = !referenceLap;
+  referenceHeading.title = referenceLap
+    ? 'Current lap minus reference · ' + lapLabel(referenceLap) : '';
+  $('map-content').classList.toggle('has-reference-sectors', Boolean(referenceLap));
   $('map-current-lap').textContent = lap?.number == null ? 'Current Lap' : 'Current · Lap ' + lap.number;
   $('map-fastest-lap').textContent = fastest?.number == null ? 'Fastest Lap' : 'Fastest · Lap ' + fastest.number;
 
@@ -3012,13 +3060,20 @@ function renderMapSectorTimes() {
   });
   const optimal = bestSectors.every(Boolean)
     ? bestSectors.reduce((total, lap, index) => total + lap.sectors[index], 0) : null;
-  $('map-sector-note').hidden = ![lap, fastest, ...bestSectors].some(item => item?.validity === 'unconfirmed');
+  $('map-sector-note').hidden = ![lap, fastest, referenceLap, ...bestSectors].some(item => item?.validity === 'unconfirmed');
+  const gapCell = (current, baseline) => {
+    const gap = current > 0 && baseline > 0 ? Math.round((current - baseline) * 1000) / 1000 : NaN;
+    return node('td', timeGapLabel(gap), gap > 0 ? 'corner-loss' : gap < 0 ? 'corner-gain' : undefined);
+  };
   const rows = bestSectors.map((best, index) => {
     const value = node('td', number(best?.sectors[index], 3));
     if (best?.number != null) value.title = 'Lap ' + best.number;
-    return ['S' + (index + 1), node('td', number(lap?.sectors?.[index], 3)), node('td', number(fastest?.sectors?.[index], 3)), value];
+    const current = lap?.sectors?.[index];
+    return ['S' + (index + 1), node('td', number(current, 3)), node('td', number(fastest?.sectors?.[index], 3)), value,
+      ...(referenceLap ? [gapCell(current, referenceLap.sectors?.[index])] : [])];
   });
-  rows.push(['Total', node('td', lapTime(lap?.time)), node('td', lapTime(fastest?.time)), node('td', lapTime(optimal))]);
+  rows.push(['Total', node('td', lapTime(lap?.time)), node('td', lapTime(fastest?.time)), node('td', lapTime(optimal)),
+    ...(referenceLap ? [gapCell(lap?.time, referenceLap.time)] : [])]);
   $('map-sector-rows').replaceChildren(...rows.map(([label, ...values]) => {
     const row = node('tr');
     const heading = node('th', label);
@@ -3036,6 +3091,11 @@ function sessionLength(seconds) {
   return hours ? hours + ':' + String(minutes).padStart(2, '0') + ':' + remainder : minutes + ':' + remainder;
 }
 let summaryCategory = 'vehicle';
+const summaryViews = {
+  driver:['driver-performance', 'Driver Performance'],
+  vehicle:['session-highlights', 'Vehicle Performance'],
+  race:['race-summary', 'Race Summary']
+};
 let practiceRequest;
 let practiceComparison;
 
@@ -3049,7 +3109,8 @@ function selectSummaryCategory(category) {
   $('driver-performance').hidden = !driver;
   $('race-summary').hidden = !race;
   $('session-highlights').inert = driver || race;
-  $('choose-summary-channels').style.visibility = driver || race ? 'hidden' : '';
+  $('choose-summary-channels').hidden = driver || race;
+  $('export-summary-image').setAttribute('aria-label', 'Export Image for ' + summaryViews[category][1]);
   $('driver-performance').parentElement.scrollTop = 0;
   if (driver) void updatePracticeReview();
   else if (race) renderRaceGaps();
@@ -3654,6 +3715,23 @@ function returnToDriverOverview({fullScreen, stint, condition, scrollTop}) {
   $('practice-tab-overview').focus({preventScroll:true});
 }
 
+function renderAdditionalConditions(conditions = {}) {
+  const wetness = (conditions.wetness ?? []).map(value =>
+    Number.isFinite(value) && value >= 0 && value <= 1 ? number(value * 100, 0) + '%' : '');
+  const wind = (conditions.windSpeed ?? []).map((speed, index) => {
+    if (!Number.isFinite(speed) || speed < 0) return '';
+    const heading = conditions.windHeading?.[index];
+    // LMU recordings store wind heading in radians despite labelling the channel degrees.
+    const compass = Number.isFinite(heading) && speed > 0
+      ? ['N','NE','E','SE','S','SW','W','NW'][((Math.round(heading * 4 / Math.PI) % 8) + 8) % 8] : '';
+    return [measurement(speed * 3.6, 'km/h', 0), compass].filter(Boolean).join(' ');
+  });
+  for (const [key, [start, finish]] of [['wetness', wetness], ['wind', wind]]) {
+    const value = start && finish && start !== finish ? start + ' → ' + finish : start || finish || '';
+    $('map-' + key + '-row').hidden = !value;
+    $('map-' + key).textContent = value;
+  }
+}
 function renderSessionSummary() {
   const isRace = /^race/i.test(selected?.session ?? '');
   $('show-race-summary').hidden = !isRace;
@@ -3665,6 +3743,7 @@ function renderSessionSummary() {
   updateBestLapExport();
   renderMapSectorTimes();
   const summary = selected?.sessionSummary;
+  renderAdditionalConditions(summary?.conditionEndpoints);
   $('map-session-length').textContent = sessionLength(selected?.durationSeconds);
   const [weatherStart, weatherFinish] = summary?.weatherEndpoints ?? [];
   $('map-weather').textContent = weatherStart && weatherFinish && weatherStart !== weatherFinish
@@ -3728,7 +3807,12 @@ function renderInCarSettings() {
     : [];
   $('session-settings-group').hidden = !(visibleSettings.length || visibleHypercarSettings.length);
   const settingsList = $('session-settings');
-  settingsList.replaceChildren(...visibleSettings.flatMap(([channel, label]) => {
+  const settingRow = (key, label, value) => {
+    const row = node('div');
+    row.append(node('dt', telemetryName(key, label)), value);
+    return row;
+  };
+  settingsList.replaceChildren(...visibleSettings.map(([channel, label]) => {
     const event = lapSetting(primary?.channels[channel], primary?.lap);
     function format(value) {
       if (channel !== 'Brake Bias Rear') {
@@ -3745,12 +3829,12 @@ function renderInCarSettings() {
       value.title = 'Start ' + (event.initial === undefined ? '—' : format(event.initial)) + ' · Finish ' + format(event.final);
       value.append(' ', node('small', '(' + event.changes + (event.changes === 1 ? ' change)' : ' changes)')));
     }
-    return [node('dt', telemetryName(channel, label)), value];
+    return settingRow(channel, label, value);
   }));
   for (const [key, label] of visibleHypercarSettings) {
     const value = node('dd', summary.hypercarSetup[key] + ' (setup)');
     value.title = 'Value from the recorded car setup.';
-    settingsList.append(node('dt', telemetryName(key, label)), value);
+    settingsList.append(settingRow(key, label, value));
   }
 }
 function updateContext() {
@@ -3945,13 +4029,15 @@ function chartOverlayChannels(key) {
   const saved = settings.chartOverlays?.[key] ?? (key === 'delta' ? settings.deltaChannels : []);
   return Array.isArray(saved) ? [...new Set(saved)].slice(0,maxChartOverlays) : [];
 }
-function openMerge(key, title, channelName) {
+function openMerge(key, title, channelName, mergeButton) {
   if (!ready) return;
   mergeChart = {key,channelName};
   mergeChoices = new Set(chartOverlayChannels(key).filter(name => name !== channelName));
   $('merge-title').textContent = title + ' Overlays';
   $('merge-search').value = '';
-  $('merge-dialog').showModal();
+  const dialog = $('merge-dialog');
+  mergeButton.ownerDocument.body.append(dialog);
+  dialog.showModal();
   updateMergePicker();
   $('merge-search').focus();
 }
@@ -3959,7 +4045,7 @@ $('merge-search').oninput = updateMergePicker;
 $('cancel-merge').onclick = () => $('merge-dialog').close();
 $('merge-form').onsubmit = event => {
   event.preventDefault();
-  const column = $('plot-column');
+  const column = graphScrollContainer();
   const scrollTop = column.scrollTop;
   const {key} = mergeChart;
   save({chartOverlays:{...settings.chartOverlays,[key]:[...mergeChoices]}});
@@ -4699,31 +4785,18 @@ function viewerLapDetails(label, session, currentLap) {
   return driverAndCar + '\n' + dateAndLap;
 }
 function updateActiveLapComparison() {
-  $('active-lap-comparison').hidden = !lap;
+  const focusGraphs = $('graphs-popout-link');
+  if (focusGraphs) focusGraphs.hidden = !lap;
   if (!lap) return;
+  renderMapSectorTimes();
   $('viewer-loaded-session').textContent = viewerLapDetails('Loaded Session', selected, lap);
-  $('active-selected-lap').textContent = [loadedTraceLabel,selected?.driver,lapLabel(lap)].filter(Boolean).join(' · ');
   const comparing = !!(reference && secondary);
   const loadedReference = $('viewer-loaded-reference');
   loadedReference.classList.toggle('reference-color', comparing);
   loadedReference.textContent = comparing
     ? viewerLapDetails('Loaded Reference', reference.session, reference.lap)
     : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap Loaded';
-  $('active-comparison-vs').hidden = !comparing && !referenceLoading;
-  const referenceLabel = $('active-reference-lap');
-  referenceLabel.classList.toggle('reference-color', comparing);
-  referenceLabel.classList.toggle('reference-loading', referenceLoading && !comparing);
-  referenceLabel.textContent = comparing
-    ? [referenceTraceLabel,reference.session.driver,lapLabel(reference.lap)].filter(Boolean).join(' · ')
-    : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap';
 }
-$('change-active-reference').onclick = () => {
-  const picker = $('reference-select');
-  picker.focus();
-  try { picker.showPicker?.(); } catch {
-    // The focused native control remains available if the picker cannot open programmatically.
-  }
-};
 
 const chartHiddenWheels = new Map();
 let smoothTyrePressure = true;
@@ -4765,6 +4838,10 @@ function loadedLapPrefix(separator = ' ') {
   return secondary ? loadedTraceLabel + separator : '';
 }
 
+function graphScrollContainer() {
+  return popoutWindows.has('graphs') ? $('telemetry-graphs-panel') : $('plot-column');
+}
+
 function buildCharts() {
   updateActiveLapComparison();
   cornerEventMarkers = [];
@@ -4774,7 +4851,7 @@ function buildCharts() {
   const hidden = new Set(settings.hiddenGraphs ?? defaultHiddenGraphs);
   const chosen = new Set(settings.extraGraphChannels);
   const extra = [...chosen].filter(name => !builtInGraphKeys.has(name))
-    .sort((a,b) => a.localeCompare(b)).map(name => [name,name]);
+    .sort((a,b) => a.localeCompare(b)).map(name => [defaultTelemetryNames.get(name) ?? name,name]);
   const specs = orderTelemetryGraphs([...(secondary?.useDistance && primary.useDistance
     ? [deltaGraph] : []), ...chartSpecs, ...extra]
     .filter(([,key])=>key === 'delta' || !hidden.has(key)), ([,key]) => key);
@@ -4808,7 +4885,7 @@ function buildCharts() {
     const edit = node('button', configured.length ? 'Edit Overlays' : 'Add Channels', 'chart-edit button-secondary');
     edit.type = 'button';
     edit.setAttribute('aria-label', edit.textContent + ' for ' + title);
-    edit.onclick = () => openMerge(key, title, channelName);
+    edit.onclick = () => openMerge(key, title, channelName, edit);
     head.append(edit);
     const exportImage = node('button', 'Export Image', 'chart-edit chart-export button-secondary');
     addButtonIcon(exportImage, 'download');
@@ -4831,10 +4908,10 @@ function buildCharts() {
       Object.entries(tyreChannels).forEach(([channel, label]) => option(select, telemetryName(channel, label), channel));
       select.value = tyreName();
       select.addEventListener('change', () => {
-        const column = $('plot-column');
+        const column = graphScrollContainer();
         const scrollTop = column.scrollTop;
         const chartTop = chart.getBoundingClientRect().top;
-        const hadFocus = document.activeElement === select;
+        const hadFocus = select.ownerDocument.activeElement === select;
         save({tyres:select.value});
         buildCharts();
         const replacement = column.querySelector('select[aria-label="Tyre temperature measurement"]');
@@ -4889,14 +4966,14 @@ function buildCharts() {
       close.title = 'Hide ' + title;
       close.setAttribute('aria-label', close.title);
       close.onclick = () => {
-        const column = $('plot-column');
+        const column = graphScrollContainer();
         const scrollTop = column.scrollTop;
         const nextIndex = chartRows.indexOf(row);
         save({hiddenGraphs:[...new Set([...(settings.hiddenGraphs ?? defaultHiddenGraphs), key])]});
         buildCharts();
         column.scrollTop = scrollTop;
         const nextClose = chartRows[nextIndex]?.canvas.closest('.chart').querySelector('.chart-close');
-        (nextClose ?? $('choose-graphs')).focus({preventScroll:true});
+        (nextClose ?? (popoutWindows.has('graphs') ? $('dock-graphs') : $('choose-graphs'))).focus({preventScroll:true});
       };
       exportActions.append(close);
     }
@@ -5409,10 +5486,11 @@ function paintCursorValues(ctx, row, name) {
   }
   ctx.restore();
 }
-function captureChartElement(element, exportButton) {
-  const isCanvas = element instanceof HTMLCanvasElement;
+function captureChartElement(element, exportButton, expanded = new Set()) {
+  const owner = element.ownerDocument.defaultView;
+  const isCanvas = element.localName === 'canvas';
   const copy = isCanvas ? node('img') : element.cloneNode(false);
-  const style = getComputedStyle(element);
+  const style = owner.getComputedStyle(element);
   copy.style.cssText = '';
   for (const property of style) copy.style.setProperty(property, style.getPropertyValue(property));
   if (element === exportButton) {
@@ -5424,27 +5502,28 @@ function captureChartElement(element, exportButton) {
     copy.src = element.toDataURL();
     return copy;
   }
-  if (element instanceof HTMLInputElement) {
+  if (element.localName === 'input') {
     copy.setAttribute('value', element.value);
     copy.toggleAttribute('checked', element.checked);
   }
   for (const child of element.childNodes) {
-    const rendered = child instanceof HTMLElement ? captureChartElement(child, exportButton) : child.cloneNode(true);
-    if (rendered instanceof HTMLElement && (element.scrollTop || element.scrollLeft)) {
+    const rendered = child.nodeType === 1 ? captureChartElement(child, exportButton, expanded) : child.cloneNode(true);
+    if (rendered.style && !expanded.has(element) && (element.scrollTop || element.scrollLeft)) {
       rendered.style.translate = -element.scrollLeft + 'px ' + -element.scrollTop + 'px';
     }
-    if (element instanceof HTMLSelectElement && child instanceof HTMLOptionElement) {
+    if (element.localName === 'select' && child.localName === 'option') {
       rendered.toggleAttribute('selected', child.selected);
     }
     copy.append(rendered);
   }
-  const after = getComputedStyle(element, '::after');
+  const after = owner.getComputedStyle(element, '::after');
   if (after.content === '"▸"' || after.content === '"▾"') {
     const arrow = node('span', after.content.slice(1, -1));
     arrow.style.marginInlineStart = after.marginInlineStart;
     arrow.style.color = after.color;
     copy.append(arrow);
   }
+  if (expanded.has(element)) Object.assign(copy.style, {position:'static', height:'auto', maxHeight:'none', overflow:'visible', flex:'none'});
   return copy;
 }
 
@@ -5458,7 +5537,11 @@ async function exportChartImage(row, title, exportImage) {
   copy.style.boxSizing = 'border-box';
   copy.style.width = rect.width + 'px';
   copy.style.height = rect.height + 'px';
+  const filename = [selected?.track, lap?.number == null ? '' : 'Lap ' + lap.number, title].filter(Boolean).join(' - ');
+  return saveMarkupImage(copy, width, height, filename);
+}
 
+async function saveMarkupImage(copy, width, height, filename) {
   const font = await lmu.graphExportFont();
   const markup = new XMLSerializer().serializeToString(copy);
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height +
@@ -5468,16 +5551,51 @@ async function exportChartImage(row, title, exportImage) {
   snapshot.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
   await snapshot.decode();
 
-  const ratio = Math.min(2, window.devicePixelRatio || 1);
+  const ratio = Math.min(2, window.devicePixelRatio || 1, 16384 / Math.max(width, height));
   const png = node('canvas');
   png.width = Math.ceil(width * ratio);
   png.height = Math.ceil(height * ratio);
   png.getContext('2d').drawImage(snapshot, 0, 0, png.width, png.height);
   const blob = await new Promise(resolve => png.toBlob(resolve, 'image/png'));
   if (!blob) throw new Error('Could not export the graph as a PNG.');
-  const filename = [selected?.track, lap?.number == null ? '' : 'Lap ' + lap.number, title].filter(Boolean).join(' - ');
   return lmu.exportGraphImage(filename, await blob.arrayBuffer());
 }
+
+const exportSummaryButton = $('export-summary-image');
+exportSummaryButton.onclick = async () => {
+  exportSummaryButton.disabled = true;
+  try {
+    const [id, title] = summaryViews[summaryCategory];
+    const section = $(id);
+    const sectionWidth = Math.ceil(section.getBoundingClientRect().width);
+    if (!selected || !sectionWidth) throw new Error('Open a session before exporting its summary.');
+    const width = sectionWidth + 24;
+    const owner = section.ownerDocument;
+    const theme = owner.defaultView.getComputedStyle($('session-summary'));
+    const copy = captureChartElement(section, null, new Set([section, $('practice-content')]));
+    Object.assign(copy.style, {width:'100%', margin:'0', boxSizing:'border-box'});
+    const image = owner.createElement('div');
+    Object.assign(image.style, {width:width + 'px', boxSizing:'border-box', padding:'12px',
+      background:theme.backgroundColor, color:theme.color, font:theme.font});
+    const heading = owner.createElement('h2');
+    heading.textContent = title;
+    heading.style.margin = '0 0 10px';
+    image.append(heading, copy);
+    const measure = owner.createElement('div');
+    Object.assign(measure.style, {position:'fixed', left:'-100000px', top:'0', visibility:'hidden'});
+    measure.append(image);
+    owner.body.append(measure);
+    let height;
+    try { height = Math.ceil(image.getBoundingClientRect().height); }
+    finally { measure.remove(); }
+    const saved = await saveMarkupImage(image, width, height, [selected.track, title].filter(Boolean).join(' - '));
+    if (saved) setStatus($('status'), 'Exported ' + saved);
+  } catch (error) {
+    setStatus($('status'), error.message, {error:true});
+  } finally {
+    exportSummaryButton.disabled = false;
+  }
+};
 function speedPeaks() {
   const name = 'Ground Speed';
   const peak = data => {
@@ -5783,7 +5901,45 @@ function currentGpsPoint(data) {
   if (!inExtent(data, cursor)) return null;
   const time = data.timeAt(cursor);
   const point = [sample(data.channels['GPS Longitude'], time)?.[0], sample(data.channels['GPS Latitude'], time)?.[0]];
-  return point.every(Number.isFinite) ? point : null;
+  return point.every(Number.isFinite) ? [...point, time] : null;
+}
+
+function racingLineSpread() {
+  return [2, 3].includes(settings.racingLineSpread) ? settings.racingLineSpread : 1;
+}
+function hasLateralOffset(data) {
+  const channel = data?.channels['Path Lateral'];
+  return channel?.unit === 'm' && channel.times.length > 0;
+}
+function spreadRacingPoint(data, point, correction, spread) {
+  const [east, north, time] = point;
+  const offset = sample(data.channels['Path Lateral'], time)?.[0];
+  if (!Number.isFinite(offset) || Math.abs(correction) < 1e-6) return point;
+  const longitude = data.channels['GPS Longitude'], latitude = data.channels['GPS Latitude'];
+  const dx = (sample(longitude, time + .3)?.[0] - sample(longitude, time - .3)?.[0]) * correction;
+  const dy = sample(latitude, time + .3)?.[0] - sample(latitude, time - .3)?.[0];
+  const length = Math.hypot(dx, dy);
+  if (!(length > 1e-7)) return point;
+  // Positive LMU lateral offsets are to the right of the recorded path.
+  const extra = (spread - 1) * offset / 111195;
+  return [east + dy / length * extra / correction, north - dx / length * extra, time];
+}
+const racingLineSpreadCache = new WeakMap();
+function racingLineProjection(data, correction, spread, project) {
+  if (spread === 1 || !hasLateralOffset(data)) return project;
+  let cached = racingLineSpreadCache.get(data);
+  if (cached?.spread !== spread || cached.correction !== correction) {
+    cached = {spread, correction, points:new WeakMap()};
+    racingLineSpreadCache.set(data, cached);
+  }
+  return point => {
+    let displayPoint = cached.points.get(point);
+    if (!displayPoint) {
+      displayPoint = spreadRacingPoint(data, point, correction, spread);
+      cached.points.set(point, displayPoint);
+    }
+    return project(displayPoint);
+  };
 }
 function compactTrackGeometry(points, correction) {
   const [eastOrigin, northOrigin] = points[0];
@@ -5853,8 +6009,119 @@ function paintTrackActivations(ctx, data, points, xy) {
   ctx.restore();
 }
 
+function windIndicatorPosition(width, height, paths, labelWidth) {
+  const centreX = width / 2, centreY = height / 2;
+  const halfWidth = Math.max(28, (labelWidth + 30) / 2);
+  const halfHeight = 37;
+  if (centreX < halfWidth + 4 || centreY < halfHeight + 3) return [centreX, centreY];
+  let best = [centreX, centreY], bestScore = -Infinity;
+  for (const dy of [0, -.08, .08, -.16, .16, -.24, .24, -.32, .32, -.4, .4]) {
+    for (const dx of [0, -.08, .08, -.16, .16, -.24, .24, -.32, .32, -.4, .4]) {
+      const x = Math.max(halfWidth + 4, Math.min(width - halfWidth - 4, centreX + dx * width));
+      const y = Math.max(halfHeight + 3, Math.min(height - halfHeight - 3, centreY + dy * height));
+      let clearance = 1.6;
+      let withinLoop = false;
+      for (const path of paths) {
+        let inside = false;
+        const first = path[0], last = path.at(-1);
+        const closed = first && Math.hypot(first[0] - last[0], first[1] - last[1]) < 20;
+        for (let i = 0; i < path.length; i++) {
+          const [px, py] = path[i];
+          const [qx, qy] = path[i + 1] ?? (closed ? first : path[i]);
+          const ax = (px - x) / halfWidth, ay = (py - y) / halfHeight;
+          const vx = (qx - px) / halfWidth, vy = (qy - py) / halfHeight;
+          const lengthSquared = vx * vx + vy * vy;
+          const t = lengthSquared ? Math.max(0, Math.min(1, -(ax * vx + ay * vy) / lengthSquared)) : 0;
+          clearance = Math.min(clearance, Math.hypot(ax + t * vx, ay + t * vy));
+          if (closed && (py > y) !== (qy > y) && x < px + (qx - px) * (y - py) / (qy - py)) inside = !inside;
+        }
+        withinLoop ||= inside;
+      }
+      // The clearance ellipse encloses the indicator's full bounding rectangle.
+      const clear = clearance >= Math.SQRT2;
+      const score = clearance - Math.hypot(dx, dy) * .5 + (clear ? 2 + (withinLoop ? .35 : 0) : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = [x, y];
+      }
+    }
+  }
+  return best;
+}
+let windPlacement;
+function paintMapWind(ctx, width, height, project, origin, correction, routes = [], xy = project) {
+  if (!primary || width < 90 || height < 55 || Math.abs(correction) < 1e-6) return;
+  const time = primary.timeAt(cursor);
+  const speed = sample(primary.channels['Wind Speed'], time)?.[0];
+  const heading = sample(primary.channels['Wind Heading'], time)?.[0];
+  if (!(Number.isFinite(speed) && speed >= 0)) return;
+
+  const label = measurement(speed * 3.6, 'km/h', 0);
+  const colour = elementColour('graph-axis', '#a4b3a7');
+  ctx.save();
+  ctx.strokeStyle = colour;
+  ctx.fillStyle = colour;
+  ctx.font = canvasFont();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const labelWidth = ctx.measureText(label).width;
+  if (windPlacement?.primary !== primary || windPlacement.secondary !== secondary || windPlacement.corner !== selectedCorner ||
+      windPlacement.width !== width || windPlacement.height !== height || windPlacement.labelWidth !== labelWidth) {
+    const paths = routes.map(route => route.map(xy));
+    windPlacement = {primary, secondary, corner:selectedCorner, width, height, labelWidth,
+      point:windIndicatorPosition(width, height, paths, labelWidth)};
+  }
+  const [x, y] = windPlacement.point;
+  if (speed > 0 && Number.isFinite(heading)) {
+    const [east, north] = origin;
+    const [ax, ay] = project(origin);
+    const [bx, by] = project([east + Math.sin(heading) * .0001 / correction, north + Math.cos(heading) * .0001]);
+    const angle = Math.atan2(ay - by, bx - ax);
+    ctx.save();
+    ctx.translate(x, y - 11);
+    ctx.rotate(angle);
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-22, 0);
+    ctx.lineTo(22, 0);
+    ctx.moveTo(15, -6);
+    ctx.lineTo(22, 0);
+    ctx.lineTo(15, 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+  const labelY = y + 21;
+  const iconX = x - labelWidth / 2 - 10;
+  ctx.save();
+  ctx.translate(iconX, labelY);
+  ctx.lineWidth = 1.35;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(0, -4);
+  ctx.lineTo(8, -4);
+  ctx.bezierCurveTo(12, -4, 12, -8, 9, -8);
+  ctx.moveTo(0, 0);
+  ctx.lineTo(13, 0);
+  ctx.bezierCurveTo(17, 0, 17, -4, 14, -4);
+  ctx.moveTo(0, 4);
+  ctx.lineTo(8, 4);
+  ctx.bezierCurveTo(12, 4, 12, 8, 9, 8);
+  ctx.stroke();
+  ctx.restore();
+  ctx.strokeStyle = elementColour('map-surface', '#111915');
+  ctx.lineWidth = 4;
+  ctx.strokeText(label, x + 10, labelY);
+  ctx.fillText(label, x + 10, labelY);
+  ctx.restore();
+}
+
 function paintMap(canvas, interactive = false) {
-  if (interactive) trackProjection = undefined;
+  if (interactive) {
+    trackProjection = undefined;
+    $('track-line-spread-key').hidden = true;
+  }
   const display=canvasContext(canvas);
   if(!display)return;
   const {ctx,width}=display;
@@ -5916,8 +6183,14 @@ function paintMap(canvas, interactive = false) {
       height / 2 + camera.y - (y - centreY) * scale
     ];
   };
+  const spread = interactive ? racingLineSpread() : 1;
+  const selectedLine = racingLineProjection(primary, correction, spread, xy);
+  const referenceLine = racingLineProjection(secondary, correction, spread, xy);
   if (interactive) {
-    trackProjection = xy;
+    trackProjection = a.length > 1 ? selectedLine : referenceLine;
+    const spreadKey = $('track-line-spread-key');
+    spreadKey.hidden = spread === 1 || !(a.length && hasLateralOffset(primary) || b.length && hasLateralOffset(secondary));
+    if (!spreadKey.hidden) spreadKey.textContent = spread + '× Spread';
     $('track-reference-key').hidden = !b.length;
     $('track-pedals-key').hidden = !$('track-pedals').checked;
     const road = b.length > 1 && (secondary.lap.kind === 'complete' || a.length < 2) ? b : a;
@@ -5941,7 +6214,7 @@ function paintMap(canvas, interactive = false) {
     ctx.stroke();
     ctx.restore();
   }
-  for (const [points,color,data] of [[b,comparison[0],secondary],[a,palette[0],primary]]) {
+  for (const [points,color,data,xy] of [[b,comparison[0],secondary,referenceLine],[a,palette[0],primary,selectedLine]]) {
     if(!points.length)continue;
     ctx.beginPath();points.forEach((p,i)=>{const [x,y]=xy(p);if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);});
     ctx.strokeStyle = color;
@@ -5977,20 +6250,24 @@ function paintMap(canvas, interactive = false) {
     ctx.lineCap = ctx.lineJoin = 'round';
     ctx.beginPath();
     selectedCorner.route.forEach((point, index) => {
-      if (index) ctx.lineTo(...xy(point));
-      else ctx.moveTo(...xy(point));
+      if (index) ctx.lineTo(...selectedLine(point));
+      else ctx.moveTo(...selectedLine(point));
     });
     ctx.stroke();
     ctx.restore();
   }
+  if (!interactive) paintMapWind(ctx, width, height, project, all[0], correction, [a, b, selectedCorner?.route ?? []], xy);
 }
 function scheduleRender(){
   if(renderRequested)return;
   renderRequested=true;
   requestAnimationFrame(()=>{
     renderRequested=false;
-    if(!ready || view!=='viewer')return;
-    for (const row of chartRows) paintChart(row);
+    if (!ready) return;
+    if (view === 'viewer' || popoutWindows.has('graphs')) {
+      for (const row of chartRows) paintChart(row);
+    }
+    if (view !== 'viewer') return;
     for(const row of readoutRows) {
       row.a.textContent=readings(primary,row.name,true);
       row.b.textContent=readings(secondary,row.name,true);
@@ -6052,12 +6329,12 @@ const builtInGraphPresets = {
   'Braking & Corner Entry': {
     graphOrder:['Brake Pos','Ground Speed','Steering Pos','Gear'],
     heights:{'Brake Pos':235},
-    speedActivation:'ABS'
+    activations:['ABS']
   },
   'Corner Exit & Traction': {
     graphOrder:['Throttle Pos','Ground Speed','Steering Pos','Gear'],
     heights:{'Throttle Pos':235},
-    speedActivation:'TC'
+    activations:['TC']
   },
   'Tyres & Brakes': {
     graphOrder:['TyresPressure','tyres','Brakes Temp','Ground Speed'],
@@ -6066,11 +6343,29 @@ const builtInGraphPresets = {
   'Ride Height': {
     graphOrder:builtIn['Ride Height'],
     heights:{}
+  },
+  'G Forces': {
+    graphOrder:builtIn['G Forces'],
+    heights:{}
+  },
+  'Fuel & Energy': {
+    graphOrder:builtIn['Fuel & Energy'],
+    heights:{}
+  },
+  'Wheel Slip': {
+    graphOrder:['Ground Speed','Wheel Speed'],
+    heights:{},
+    activations:['ABS','TC']
+  },
+  Suspension: {
+    graphOrder:builtIn.Suspension,
+    heights:{}
   }
 };
 
 const builtInColourPresets = {
   'Classic Green': {interfaceColourMode:'green'},
+  'Classic Orange': {interfaceColourMode:'orange'},
   'TRD IMSA': {
     interfaceColour:'#9c1c20', interfaceBackgroundColour:'#080808', graphBackgroundColour:'#0b0b0b',
     elementColours:{header:'#050505',panel:'#121212',raised:'#1a1a1a',control:'#202020',rule:'#383838',
@@ -6150,12 +6445,13 @@ $('graph-preset').onchange=()=>{
   $('remove-graph-preset').disabled = !key.startsWith('saved:');
   if(!key)return;
   if (key.startsWith('builtin:')) {
-    const {graphOrder, heights, speedActivation} = builtInGraphPresets[key.slice(8)];
+    const {graphOrder, heights, activations = []} = builtInGraphPresets[key.slice(8)];
     save({
       graphOrder, heights, chartOverlays:{delta:[]},
       extraGraphChannels:graphOrder.filter(name => name !== 'delta' && !builtInGraphKeys.has(name)),
       hiddenGraphs:chartSpecs.map(([,name]) => name).filter(name => !graphOrder.includes(name)),
-      ...(speedActivation ? {speedActivations:{...settings.speedActivations,[speedActivation]:true}} : {})
+      ...(activations.length ? {speedActivations:{...settings.speedActivations,
+        ...Object.fromEntries(activations.map(channel => [channel,true]))}} : {})
     });
   } else {
     const {hiddenGraphs, extraGraphChannels, heights, graphOrder = [], chartOverlays = {delta:[]}} = settings.graphPresets[key.slice(6)];
@@ -6239,11 +6535,18 @@ for (const id of ['enable-shown', 'disable-shown']) $(id).onclick=()=>{
   save({enabled:[...enabled]});
   buildChannels();
 };
+$('pin-session-details').onclick = event => {
+  const button = event.currentTarget;
+  const locked = button.getAttribute('aria-pressed') !== 'true';
+  button.setAttribute('aria-pressed', String(locked));
+  button.title = locked ? 'Unpin Session Details' : 'Pin Session Details';
+  button.closest('.map-card').classList.toggle('session-details-pinned', locked);
+};
 $('toggle-map').onclick=event=>{
   const map = $('map-content');
   map.hidden = !map.hidden;
   event.currentTarget.setAttribute('aria-expanded', String(!map.hidden));
-  event.currentTarget.setAttribute('aria-label', map.hidden ? 'Expand track map' : 'Collapse track map');
+  event.currentTarget.setAttribute('aria-label', map.hidden ? 'Expand Session Details' : 'Collapse Session Details');
   if (!map.hidden) scheduleRender();
 };
 $('play').onclick=play;
@@ -6273,6 +6576,17 @@ $('reference-select').onchange=()=>{
 };
 $('library-tab').onclick=()=>setView('library');
 $('viewer-tab').onclick=()=>setView('viewer');
+$('viewer-open-recent').onclick = () => {
+  setView('library');
+  $('recent-sessions-title').click();
+  $('recent-sessions-title').focus();
+};
+$('viewer-import-lap').onclick = () => {
+  setView('library');
+  $('comparison-laps-title').click();
+  importComparisonButton.focus();
+  importComparisonButton.click();
+};
 $('records-tab').onclick=()=>setView('records');
 $('recent-session-filters').addEventListener('change', event => {
   if (event.target instanceof HTMLSelectElement) renderLibrary({resetRecentSessions:true});
@@ -6340,6 +6654,10 @@ $('text-scale').addEventListener('change', event => {
   save({textScalePercent:event.target.valueAsNumber});
   applyAppearance();
 });
+$('racing-line-spread').onchange = event => {
+  save({racingLineSpread:Number(event.target.value)});
+  scheduleRender();
+};
 for (const category of [...carClasses, 'other']) {
   const row = node('tr');
   const classLabel = category === 'other' ? 'Unclassified' : category;
@@ -6387,6 +6705,7 @@ for (const button of settingsFileButtons) {
             summaryHeight = null;
             telemetryPanels.style.removeProperty('--summary-height');
           }
+          applySidebarWidth(settings.telemetrySidebarWidth);
           applyAppearance();
           if (ready) {
             buildCharts();
@@ -6495,6 +6814,32 @@ for (const button of document.querySelectorAll('[data-folder]')) button.onclick 
     button.focus();
   }
 };
+const telemetryWorkbench = $('telemetry-workbench');
+const viewerDivider = $('viewer-divider');
+const telemetrySidebar = $('telemetry-sidebar');
+function applySidebarWidth(percent) {
+  if (Number.isFinite(percent)) telemetryWorkbench.style.setProperty('--sidebar-width', percent + '%');
+  else telemetryWorkbench.style.removeProperty('--sidebar-width');
+}
+const sidebarWidth = () => telemetrySidebar.getBoundingClientRect().width;
+const resetSidebarWidth = () => {
+  applySidebarWidth(null);
+  save({telemetrySidebarWidth:null});
+};
+attachChartResize(viewerDivider, () => -sidebarWidth(), offset => {
+  const width = telemetryWorkbench.clientWidth;
+  if (width) applySidebarWidth(Math.max(0, Math.min(100, -offset / width * 100)));
+}, () => {
+  const width = telemetryWorkbench.clientWidth;
+  if (width) {
+    const telemetrySidebarWidth = sidebarWidth() / width * 100;
+    applySidebarWidth(telemetrySidebarWidth);
+    save({telemetrySidebarWidth});
+  }
+}, resetSidebarWidth, 'x');
+viewerDivider.onclick = event => { if (event.detail === 0) resetSidebarWidth(); };
+new ResizeObserver(scheduleRender).observe($('plot-column'));
+
 const summaryPanel = $('session-summary');
 const telemetryPanels = $('telemetry-panels');
 let summaryHeight;
@@ -6519,11 +6864,18 @@ const graphDialog = $('graph-dialog');
 graphDialog.addEventListener('close', () => {
   if (graphDialog.ownerDocument !== document) document.body.append(graphDialog);
 });
+const mergeDialog = $('merge-dialog');
+mergeDialog.addEventListener('close', () => {
+  if (mergeDialog.ownerDocument !== document) document.body.append(mergeDialog);
+});
+function closePanelPopout(key) {
+  if (lmu.dockPanel) lmu.dockPanel(key).catch(error => message(error.message));
+  else popoutWindows.get(key)?.close();
+}
 function togglePanelPopout(key, panel, title) {
   const existing = popoutWindows.get(key);
   if (existing && !existing.closed) {
-    if (lmu.dockPanel) lmu.dockPanel(key).catch(error => message(error.message));
-    else existing.close();
+    closePanelPopout(key);
     return;
   }
   const popup = window.open('about:blank', key, 'popup');
@@ -6544,10 +6896,22 @@ function togglePanelPopout(key, panel, title) {
   const link = node('button', 'Focus ' + title, 'popout-link');
   link.id = key + '-popout-link';
   link.type = 'button';
+  addButtonIcon(link, 'pop');
   link.onclick = () => popup.focus();
   panel.before(link);
-  const button = $(key === 'track' ? 'pop-out-track' : 'pop-out-summary');
-  button.querySelector('.icon-button-label').textContent = 'Dock Panel';
+  const button = $('pop-out-' + key);
+  const label = button.querySelector('.icon-button-label');
+  const originalLabel = label.textContent;
+  label.textContent = key === 'graphs' ? 'Dock Telemetry Graphs' : 'Dock Panel';
+  let dockGraphs;
+  if (key === 'graphs') {
+    dockGraphs = node('button', 'Dock Telemetry Graphs', 'button-secondary');
+    dockGraphs.id = 'dock-graphs';
+    dockGraphs.type = 'button';
+    addButtonIcon(dockGraphs, 'pop');
+    dockGraphs.onclick = () => closePanelPopout(key);
+    panel.prepend(dockGraphs);
+  }
   popoutWindows.set(key, popup);
   if (key === 'summary') {
     summaryToggle.hidden = true;
@@ -6564,13 +6928,20 @@ function togglePanelPopout(key, panel, title) {
       graphDialog.close();
       document.body.append(graphDialog);
     }
+    if (mergeDialog.ownerDocument === doc) {
+      mergeDialog.close();
+      document.body.append(mergeDialog);
+    }
     popoutWindows.delete(key);
+    dockGraphs?.remove();
     link.replaceWith(panel);
-    button.querySelector('.icon-button-label').textContent = 'Pop Out';
+    label.textContent = originalLabel;
     if (key === 'summary') {
       summaryToggle.hidden = false;
       $('telemetry-divider').hidden = false;
       observeSummaryPlots();
+    } else if (key === 'graphs') {
+      updateActiveLapComparison();
     } else {
       panel.hidden = trackViewButton.getAttribute('aria-pressed') !== 'true';
     }
@@ -6578,6 +6949,7 @@ function togglePanelPopout(key, panel, title) {
   }, {once:true});
   scheduleRender();
 }
+$('pop-out-graphs').onclick = () => togglePanelPopout('graphs', $('telemetry-graphs-panel'), 'Telemetry Graphs');
 $('pop-out-track').onclick = () => togglePanelPopout('track', trackPanel, 'Track View');
 $('pop-out-summary').onclick = () => {
   if (!summaryDialog.open) togglePanelPopout('summary', summaryPanel, 'Session Summary');
@@ -6614,6 +6986,7 @@ window.addEventListener('resize', () => {
     $('app-version').hidden = false;
   }
   if (Number.isFinite(settings.summaryHeight)) setSummaryHeight(settings.summaryHeight);
+  applySidebarWidth(settings.telemetrySidebarWidth);
   applyAppearance();
   enabled=new Set(settings.enabled || builtIn.Driving);
   setupPresets();

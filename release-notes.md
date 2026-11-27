@@ -1,1 +1,1 @@
-Adds Race Summary with race gaps, position history and pit stints. Also adds Ride Height presets and an Audio settings tab. The first launch applies the new brake temperature defaults, then preserves any later edits.
+Telemetry Viewer adds a saved, draggable sidebar divider with double-click reset, a graph pop-out, and a colour-coded matchup in Session Details. Session Details also shows reference sector deltas and wind, and can stay pinned while graphs scroll.

@@ -267,14 +267,18 @@ def inspect(path):
                    'first(value ORDER BY rowid), last(value ORDER BY rowid)', (None, None))]
             for key, channel in [('air', 'Ambient Temperature'), ('track', 'Track Temperature')]
         }
-        weather_channels = [
-            summary(channel,
-                    'first(value ORDER BY rowid) FILTER (WHERE isfinite(try_cast(value AS DOUBLE))), '
-                    'last(value ORDER BY rowid) FILTER (WHERE isfinite(try_cast(value AS DOUBLE)))',
-                    (None, None))
-            for channel in ('CloudDarkness', 'Minimum Path Wetness', 'OffpathWetness')
-        ]
+        def condition_endpoints(channel):
+            return summary(channel,
+                           'first(value ORDER BY rowid) FILTER (WHERE isfinite(try_cast(value AS DOUBLE))), '
+                           'last(value ORDER BY rowid) FILTER (WHERE isfinite(try_cast(value AS DOUBLE)))',
+                           (None, None))
+
+        weather_channels = [condition_endpoints(channel) for channel in
+                            ('CloudDarkness', 'Minimum Path Wetness', 'OffpathWetness')]
         weather_endpoints = [weather_description(*values) for values in zip(*weather_channels)]
+        conditions = {'wetness': weather_channels[1],
+                      'windSpeed': condition_endpoints('Wind Speed'),
+                      'windHeading': condition_endpoints('Wind Heading')}
         settings = {}
         for name in IN_CAR_SETTINGS:
             values = [value for _, value in events(con, names, name) if value is not None and finite(value) is not None]
@@ -288,7 +292,7 @@ def inspect(path):
                 gameVersion=metadata.get('GameVersion', ''),
                 car=metadata.get('CarName', ''), carClass=metadata.get('CarClass', ''), session=metadata.get('SessionType', ''),
                 fuel=[finite(v) for v in fuel], speed=finite(speed), distanceKm=finite(distance_km), durationSeconds=finite(end - start), laps=laps, summaryChannels=summary_channels,
-                sessionSummary={'settings': settings, 'energyUsedByLap': energy_by_lap, 'temperatureEndpoints': temperature_endpoints, 'weatherEndpoints': weather_endpoints, 'peakTemperaturesByLap': peak_temperatures_by_lap, 'chartEndpoints': chart_endpoints, 'hypercarSetup': hypercar_setup(metadata.get('CarSetup'))})
+                sessionSummary={'settings': settings, 'energyUsedByLap': energy_by_lap, 'temperatureEndpoints': temperature_endpoints, 'weatherEndpoints': weather_endpoints, 'conditionEndpoints': conditions, 'peakTemperaturesByLap': peak_temperatures_by_lap, 'chartEndpoints': chart_endpoints, 'hypercarSetup': hypercar_setup(metadata.get('CarSetup'))})
 
 
 def read_results(path):
@@ -462,7 +466,7 @@ def index(payload):
                     needs_update = (
                         not {'summaryChannels', 'carClass', 'durationSeconds', 'trackName', 'trackLayout', 'trackLayoutVersion', 'gameVersion'} <= data.keys()
                         or not {'peakTemperaturesByLap', 'chartEndpoints', 'energyUsedByLap', 'temperatureEndpoints',
-                                'weatherEndpoints', 'hypercarSetup'} <= session_summary.keys()
+                                'weatherEndpoints', 'conditionEndpoints', 'hypercarSetup'} <= session_summary.keys()
                         or not {'frontBrakes', 'rearBrakes'} <= session_summary.get('chartEndpoints', {}).keys()
                         or any(not {'sectors', 'topSpeed', 'pitLaneAtBoundary'} <= lap.keys() for lap in data['laps'])
                     )

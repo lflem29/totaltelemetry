@@ -12,7 +12,7 @@
 <header class="masthead">
   <div class="brand"><img class="brand-icon" src="total-telemetry-icon.png" alt="" width="44" height="44"><div>Total Telemetry <span id="app-version" hidden></span><small>LE MANS ULTIMATE</small></div></div>
   <div class="masthead-actions">
-    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave" disabled>Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button" hidden>Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
+    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave">Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button" hidden>Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
   </div>
   <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
 </header>
@@ -53,7 +53,7 @@
       <div class="library-sessions">
         <dl class="loaded-sessions" aria-label="Loaded Sessions">
           <div><dt>Loaded Session</dt><dd class="loaded-session-actions"><button id="clear-loaded-session" type="button" class="button-secondary" hidden>Clear Loaded Session</button></dd><dd id="loaded-session">No session loaded</dd></div>
-          <div><dt>Loaded Reference Lap</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
+          <div><dt>Loaded Reference</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
         </dl>
         <div id="library-tabs" class="view-tabs" role="tablist" aria-label="Session Library Views">
           <button id="recent-sessions-title" type="button" role="tab" aria-selected="true" aria-controls="recent-sessions-panel">My Recent Sessions</button>
@@ -184,6 +184,16 @@
       <tbody id="record-rows"></tbody>
     </table></div>
   </section>
+  <section id="viewer-empty" aria-labelledby="viewer-empty-title" hidden>
+    <div class="viewer-empty-panel">
+      <h1 id="viewer-empty-title">No Session Loaded</h1>
+      <p>Open a session or import a lap to view its telemetry.</p>
+      <div class="viewer-empty-actions">
+        <button id="viewer-open-recent" type="button">Open a Recent Session</button>
+        <button id="viewer-import-lap" class="button-secondary" type="button">Import a Lap</button>
+      </div>
+    </div>
+  </section>
   <section id="viewer" hidden>
     <div class="lap-toolbar">
       <div class="viewer-session">
@@ -219,19 +229,21 @@
         </div>
       </div>
     </div>
-    <div class="workbench">
+    <div class="workbench" id="telemetry-workbench">
       <div class="plot-pane">
         <div class="plot-column" id="plot-column">
           <section class="map-card">
-            <div class="card-head"><h2>Track Map</h2><span id="map-status"></span><button id="toggle-map" type="button" aria-controls="map-content" aria-expanded="true" aria-label="Collapse track map"></button></div>
+            <div class="card-head"><h2>Session Details</h2><span id="session-details-matchup" hidden></span><span id="map-status"></span><div class="session-details-actions"><button id="pop-out-graphs" data-ui-icon="pop" class="button-secondary" type="button">Pop Out Telemetry Graphs</button><button id="pin-session-details" data-ui-icon="pin" class="button-secondary" type="button" aria-pressed="false" aria-label="Pin Session Details" title="Pin Session Details"></button><button id="toggle-map" type="button" aria-controls="map-content" aria-expanded="true" aria-label="Collapse Session Details"></button></div></div>
             <div id="map-content">
               <section id="map-conditions" aria-labelledby="map-conditions-title">
                 <h3 id="map-conditions-title">Conditions</h3>
                 <dl id="map-temperatures">
                   <div><dt>Session Length:</dt> <dd id="map-session-length" title="Elapsed time covered by the telemetry recording"></dd></div>
                   <div><dt>Weather:</dt> <dd id="map-weather" title="Estimated from recorded cloud darkness and track wetness"></dd></div>
-                  <div><dt id="map-track-label">Track Temp:</dt> <dd><span id="map-track-start"></span> through to <span id="map-track-finish"></span></dd></div>
-                  <div><dt id="map-air-label">Air Temp:</dt> <dd><span id="map-air-start"></span> through to <span id="map-air-finish"></span></dd></div>
+                  <div><dt id="map-track-label">Track Temp:</dt> <dd><span id="map-track-start"></span> → <span id="map-track-finish"></span></dd></div>
+                  <div><dt id="map-air-label">Air Temp:</dt> <dd><span id="map-air-start"></span> → <span id="map-air-finish"></span></dd></div>
+                  <div id="map-wetness-row" hidden><dt>Track Wetness:</dt> <dd id="map-wetness" title="Minimum wetness along the driving line"></dd></div>
+                  <div id="map-wind-row" hidden><dt>Wind:</dt> <dd id="map-wind" title="Recorded wind speed and heading"></dd></div>
                 </dl>
               </section>
               <section id="session-settings-group" aria-labelledby="session-settings-title">
@@ -242,7 +254,7 @@
               <section class="map-sector-times" aria-labelledby="map-sector-times-title">
                 <h3 id="map-sector-times-title">Sector Times</h3>
                 <table>
-                  <thead><tr><th scope="col">Sector</th><th scope="col" id="map-current-lap">Current Lap</th><th scope="col" id="map-fastest-lap">Fastest Lap</th><th scope="col">Optimal</th></tr></thead>
+                  <thead><tr><th scope="col">Sector</th><th scope="col" id="map-current-lap">Current Lap</th><th scope="col" id="map-fastest-lap">Fastest Lap</th><th scope="col">Optimal</th><th scope="col" id="map-reference-gap" hidden>vs Reference</th></tr></thead>
                   <tbody id="map-sector-rows"></tbody>
                 </table>
                 <small id="map-sector-note" hidden>Includes unconfirmed laps</small>
@@ -250,14 +262,9 @@
             </div>
             <div class="playbar"><button id="play" data-ui-icon="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Playback position"><output id="position"></output><select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
           </section>
-          <div id="active-lap-comparison" class="active-lap-comparison" hidden>
-            <strong>Lap Traces</strong>
-            <strong id="active-selected-lap" class="selected-color"></strong>
-            <span id="active-comparison-vs">vs</span>
-            <strong id="active-reference-lap" role="status"></strong>
-            <button id="change-active-reference" class="button-secondary" type="button">Change Reference</button>
-          </div>
-          <div id="charts"></div>
+          <section id="telemetry-graphs-panel" aria-label="Telemetry Graphs">
+            <div id="charts"></div>
+          </section>
         </div>
         <div class="plot-footer">
           <button id="reset-zoom" data-ui-icon="reset" class="button-secondary">Reset Zoom</button>
@@ -276,7 +283,8 @@
           </div>
         </div>
       </div>
-      <aside class="telemetry">
+      <button id="viewer-divider" type="button" aria-label="Resize telemetry sidebar"></button>
+      <aside class="telemetry" id="telemetry-sidebar">
         <div class="telemetry-head">
           <div class="telemetry-title-row" role="group" aria-label="Sidebar controls">
             <button id="show-track-view" data-ui-icon="circuit" type="button" aria-controls="track-location" aria-pressed="true">Track View</button>
@@ -310,6 +318,7 @@
                 <span class="track-road-key" title="Approximate road surface estimated from the GPS route">Estimated Road</span>
                 <span id="track-selected-key">Loaded Lap</span>
                 <span id="track-reference-key" hidden>Reference Lap</span>
+                <span id="track-line-spread-key" title="The lap traces are exaggerated sideways from the estimated centreline." hidden></span>
                 <span id="track-pedals-key" hidden><span class="track-braking">Brake</span> / <span class="track-throttle">Throttle</span></span>
               </div>
             </div>
@@ -322,6 +331,7 @@
               <h2 id="session-summary-title" data-ui-icon="summary">Session Summary</h2>
               <div class="session-summary-actions">
                 <button id="choose-summary-channels" data-ui-icon="sliders" type="button" aria-haspopup="dialog">Select Summary Channels</button>
+                <button id="export-summary-image" data-ui-icon="download" class="button-secondary" type="button" aria-label="Export Image for Vehicle Performance">Export Image</button>
                 <button id="toggle-summary-fullscreen" data-ui-icon="full" type="button" aria-haspopup="dialog">Full Screen</button>
                 <button id="pop-out-summary" data-ui-icon="pop" type="button">Pop Out</button>
               </div>
@@ -407,35 +417,46 @@
           <button id="settings-summary">Session summary</button>
         </div>
         <p id="settings-channel-note" hidden>Open a recording to choose its telemetry channels.</p>
+        <div class="appearance-settings">
+          <label>Racing Line Spread
+            <select id="racing-line-spread" title="Magnifies how far each lap runs left or right of the estimated track centreline.">
+              <option value="1">1×</option>
+              <option value="2">2×</option>
+              <option value="3">3×</option>
+            </select>
+          </label>
+        </div>
       </section>
       <section class="settings-section" aria-labelledby="appearance-title">
         <h3 id="appearance-title">Appearance</h3>
         <div class="actions colour-preset-actions">
-          <label for="colour-preset">Colour Preset</label>
+          <label for="colour-preset">Colour Theme</label>
           <select id="colour-preset"></select>
           <button id="save-colour-preset" data-ui-icon="save" type="button" aria-label="Save Preset for Interface Colours">Save Preset</button>
           <button id="remove-colour-preset" class="button-secondary" type="button" disabled>Remove Preset</button>
         </div>
+        <details class="element-colour-settings">
+          <summary>Custom Colours</summary>
+          <div class="appearance-settings">
+            <label>Interface colour
+              <select id="interface-colour-mode">
+                <option value="orange">Orange</option>
+                <option value="green" selected>Green</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+            <label id="custom-interface-colour" hidden>Custom interface colour<input type="color" id="interface-colour" value="#2a6204"></label>
+            <label>Interface background colour<input type="color" id="interface-background-colour" value="#101513"></label>
+            <label>Graph background colour<input type="color" id="graph-background-colour" value="#171e1a"></label>
+          </div>
+          <div id="element-colours" class="appearance-settings"></div>
+        </details>
         <div class="appearance-settings">
-          <label>Interface colour
-            <select id="interface-colour-mode">
-              <option value="orange">Orange</option>
-              <option value="green" selected>Green</option>
-              <option value="custom">Custom</option>
-            </select>
-          </label>
-          <label id="custom-interface-colour" hidden>Custom interface colour<input type="color" id="interface-colour" value="#2a6204"></label>
-          <label>Interface background colour<input type="color" id="interface-background-colour" value="#101513"></label>
-          <label>Graph background colour<input type="color" id="graph-background-colour" value="#171e1a"></label>
           <div class="text-scale-setting">
             <label for="text-scale">Text scale</label><output id="text-scale-value" for="text-scale">100%</output>
             <input type="range" id="text-scale" min="75" max="150" step="5" value="100">
           </div>
         </div>
-        <details class="element-colour-settings">
-          <summary>Custom Colours</summary>
-          <div id="element-colours" class="appearance-settings"></div>
-        </details>
         <button id="reset-interface-colours" type="button">Reset All Interface Colours</button>
       </section>
     <section class="settings-section" aria-labelledby="measurement-units-title">
