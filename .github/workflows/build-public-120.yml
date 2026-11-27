@@ -58,3 +58,4 @@ jobs:
           fi
           printf '\nSHA-256: `%s`\n' "$(sha256sum "$asset" | cut -d ' ' -f 1)" >> release-notes.md
           gh release create "$tag" "$asset" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest="$latest" --title "$title" --notes-file release-notes.md
+          python3 scripts/retain-releases.py --repo "$GITHUB_REPOSITORY" --published-tag "$tag" --apply
