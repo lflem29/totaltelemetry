@@ -19,6 +19,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          if [[ '${{ matrix.app }}' == server ]] &&
+             gh release view community-server-v1.1.11 -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            python3 scripts/retain-releases.py --repo "$GITHUB_REPOSITORY" --published-tag community-server-v1.1.11 --apply
+            exit 0
+          fi
           curl --retry 3 -fLsS https://github.com/electron/electron/releases/download/v42.0.0/electron-v42.0.0-win32-x64.zip -o electron.zip
           echo '2707fbf25e0e18211a00f90b97e0fb2a00cf10a17ef0fa9d873e177e1d3286bc  electron.zip' | sha256sum -c
           unzip -q electron.zip -d win
