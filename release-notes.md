@@ -1,3 +1,1 @@
-- Telemetry graphs snap into view below unpinned Session Details. Similar snapping applies at section boundaries in Sessions, Track Records, Training and Trophy Standings when there is enough room to scroll.
-- The top fade clears at an aligned section start and returns when you scroll away. The bottom fade continues to show content below.
-- Telemetry Graph Scroll Speed now defaults to 50%. Saved speeds stay in effect.
+- Circuit Paul Ricard displays the French flag, including when saved under a layout name or a Le Castellet alias.

@@ -115,8 +115,13 @@ const trackFlagImages = {
   us: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAVBAMAAADGNLEtAAAALVBMVEX////GU3LZjKGzGUINM2PsxtAYPWotT3hed5enma46WoBPa46zGkMkR3Jrgp+6ntXWAAAAiklEQVQY02Nwc0lJcQMSxghgw+CRVdaWkVXWooQEGFxaPLxKWjxcGJCBn1fJExAWRAJglUuAKlEEPdyXgA1A0e62LTu9bFt2CopF3iCh9LItKE5yX5tVe31tVgmq9pL0NLcy95RQJMAAdiUQo2ifCQUoKrECY0xgw6CEBWDXLogFYBfECrBahM1JAItMTcEiMDpsAAAAAElFTkSuQmCC',
 };
 const countryNames = new Intl.DisplayNames('en-AU',{type:'region'});
+function trackCountryCode(track) {
+  const name = trackCountryKey(track);
+  const paulRicard = /\b(?:(?:circuit ?)?paul ?ricard|le ?castellet|circuit du castellet)\b/.test(name);
+  return trackCountryCodes.get(paulRicard ? 'paul ricard' : name);
+}
 function trackCountryFlag(track, fallback) {
-  const country = trackCountryCodes.get(trackCountryKey(track)) ?? trackCountryCodes.get(trackCountryKey(fallback));
+  const country = trackCountryCode(track) ?? trackCountryCode(fallback);
   if (!country) return;
   const flag = node('img',undefined,'track-country-flag');
   flag.src = 'data:image/png;base64,' + trackFlagImages[country];
