@@ -18,6 +18,7 @@
       <button id="trainer-tab" data-ui-icon="wheel" type="button">Training</button>
       <button id="records-tab" data-ui-icon="watch" type="button">Records</button>
       <button id="open-trophy-standings" class="icon-button" type="button" aria-haspopup="dialog" aria-controls="trophy-standings">Trophies</button>
+      <button id="schedule-tab" data-ui-icon="calendar" type="button" aria-controls="schedule" aria-pressed="false" hidden>Schedule</button>
     </nav>
   </div>
   <div class="head-right"><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count" aria-live="polite">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
@@ -26,6 +27,10 @@
     <span id="header-race-lights"><i></i><i></i><i></i><i></i><i></i></span>
   </span>
 </header>
+<section id="schedule" aria-label="Schedule" hidden>
+  <p id="schedule-status" role="status">Loading LMU Portal…</p>
+  <button id="schedule-retry" type="button" hidden>Retry</button>
+</section>
 <div id="auto-load-session-notice" hidden role="status"><span>Auto-loading your last session…</span></div>
 <dialog id="trophy-standings" aria-labelledby="trophy-standings-title">
   <div class="dialog-title">
@@ -635,8 +640,8 @@
         <div class="appearance-settings">
           <label>Telemetry Graph Scroll Speed
             <select id="telemetry-graph-scroll-speed">
-              <option value="10">10%</option><option value="20">20%</option><option value="30">30%</option>
-              <option value="40">40%</option><option value="50" selected>50%</option><option value="60">60%</option>
+              <option value="10">10%</option><option value="20">20%</option><option value="30" selected>30%</option>
+              <option value="40">40%</option><option value="50">50%</option><option value="60">60%</option>
               <option value="70">70%</option><option value="80">80%</option><option value="90">90%</option>
               <option value="100">100%</option><option value="125">125%</option><option value="150">150%</option>
               <option value="175">175%</option><option value="200">200%</option>
@@ -768,6 +773,7 @@
       </section>
   </div>
   <div id="settings-panel-beta" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-beta" tabindex="0" hidden>
+    <label class="trainer-setting"><input id="enable-schedule" type="checkbox"><span>Enable Schedule (beta)</span></label>
     <label class="trainer-setting"><input id="enable-aero" type="checkbox"><span>Enable Aero Visualiser (beta)</span></label>
     <label class="trainer-setting"><input id="enable-suspension" type="checkbox"><span>Enable Suspension Visualiser (beta)</span></label>
   </div>

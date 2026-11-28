@@ -1,1 +1,3 @@
-Adds a secondary telemetry folder, a verified move tool with progress, and Recycle Bin cleanup for failed imports. Favourite cars use coloured class badges, total track time rounds to whole hours, and Clear Reference Lap uses an X.
+- Enable Schedule in Settings → Beta to open LMU Portal inside Total Telemetry.
+- My Recent Sessions shows coloured icons for Practice, Qualifying and Race. Date and Time, Session Type, Session Result, Best Lap, Timed Laps and Distance Driven use 150% text size. Distances display in whole units.
+- Telemetry Graph Scroll Speed defaults to 30%. Saved speeds still apply.

@@ -37,7 +37,7 @@ const builtIn = {
   'Wheel Slip': ['Ground Speed','Wheel Speed','ABS','TC'],
   Suspension: ['Susp Pos','Front3rdDeflection','Rear3rdDeflection']
 };
-const defaultTelemetryGraphScrollPercent = 50;
+const defaultTelemetryGraphScrollPercent = 30;
 let settings = {};
 let sessions = [], resultGameVersions = [], resultRecords = [];
 let scanBusy = false, runningScanAgain = false, scanKey;
@@ -224,6 +224,8 @@ const uiIconPaths = {
   wave: 'M2 12h4l3-8 5 16 3-8h5',
   wheel: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Zm0 7a2 2 0 1 0 0 4 2 2 0 0 0 0-4Zm-2.5 1L4 8m10.5 3L20 8m-8 6v7',
   watch: 'M10 2h4m-2 7v4m6-8 2-2M20 13a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z',
+  checkeredFlag: 'M4 22V3m0 1h16v12H4m5-12v12m6-12v12M4 10h16',
+  calendar: 'M4 6h16v15H4zM4 10h16M8 3v5m8-5v5',
   ruler: 'M3 8h18v8H3zM7 8v4m5-4v6m5-6v4',
   clock: 'M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0Zm-9-5v5l3 2',
   reset: 'M8 3H5a2 2 0 0 0-2 2v3m13-5h3a2 2 0 0 1 2 2v3m0 8v3a2 2 0 0 1-2 2h-3m-8 0H5a2 2 0 0 1-2-2v-3',
@@ -253,7 +255,7 @@ const uiIconPaths = {
   pause: 'M7 5h3v14H7zm7 0h3v14h-3z',
   globe: 'M21 12a9 9 0 1 0-18 0 9 9 0 0 0 18 0ZM3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z'
 };
-function addButtonIcon(button, key) {
+function uiIcon(key) {
   const namespace = 'http://www.w3.org/2000/svg';
   const icon = document.createElementNS(namespace, 'svg');
   icon.setAttribute('viewBox', '0 0 24 24');
@@ -261,11 +263,14 @@ function addButtonIcon(button, key) {
   const path = document.createElementNS(namespace, 'path');
   path.setAttribute('d', uiIconPaths[key]);
   icon.append(path);
+  return icon;
+}
+function addButtonIcon(button, key) {
   button.classList.add('icon-button');
   if (!button.childElementCount && button.textContent) {
     button.replaceChildren(node('span', button.textContent, 'icon-button-label'));
   }
-  button.prepend(icon);
+  button.prepend(uiIcon(key));
 }
 for (const button of document.querySelectorAll('[data-ui-icon]')) {
   addButtonIcon(button, button.dataset.uiIcon);
@@ -428,6 +433,40 @@ function syncVisualizerSettings() {
     if (!enabled && popoutWindows.has(name)) closePanelPopout(name);
   }
 }
+function syncScheduleSetting() {
+  const enabled = settings.scheduleEnabled === true;
+  $('enable-schedule').checked = enabled;
+  $('schedule-tab').hidden = !enabled;
+  if (!enabled && view === 'schedule') setView('library');
+}
+function syncScheduleView() {
+  if (!lmu.showSchedule) return;
+  const top = view === 'schedule' && $('schedule-retry').hidden &&
+    !document.querySelector('dialog[open], #auto-load-session-notice:not([hidden])')
+    ? Math.ceil($('schedule').getBoundingClientRect().top) : null;
+  void lmu.showSchedule(top).catch(() => {
+    if (top === null || view !== 'schedule') return;
+    $('schedule-status').textContent = 'LMU Portal could not be loaded.';
+    $('schedule-retry').hidden = false;
+  });
+}
+function openSchedule() {
+  $('schedule-status').textContent = 'Loading LMU Portal…';
+  $('schedule-retry').hidden = true;
+  setView('schedule');
+}
+$('schedule-tab').onclick = $('schedule-retry').onclick = openSchedule;
+$('enable-schedule').onchange = event => {
+  save({scheduleEnabled:event.target.checked});
+  syncScheduleSetting();
+};
+if (lmu.showSchedule) {
+  new ResizeObserver(syncScheduleView).observe(document.querySelector('.masthead'));
+  window.addEventListener('resize', syncScheduleView);
+  const scheduleOverlays = new MutationObserver(syncScheduleView);
+  document.querySelectorAll('dialog, #auto-load-session-notice').forEach(element =>
+    scheduleOverlays.observe(element,{attributeFilter:['open','hidden']}));
+}
 for (const [name, setting] of Object.entries(visualizerSettings)) {
   $('enable-' + name).onchange = event => {
     save({[setting]:event.target.checked});
@@ -445,6 +484,10 @@ function setView(name, recordScope) {
     }
   }
   view = name;
+  $('schedule').hidden = name !== 'schedule';
+  $('schedule-tab').classList.toggle('active', name === 'schedule');
+  $('schedule-tab').setAttribute('aria-pressed', String(name === 'schedule'));
+  syncScheduleView();
   $('trainer').hidden = name !== 'trainer';
   $('trainer-tab').classList.toggle('active', name === 'trainer');
   $('library').hidden = name !== 'library';
@@ -2482,18 +2525,38 @@ function recentSessionRow(session) {
   const result = node('td',undefined,'numeric-cell');
   if (Number.isInteger(finish) && finish > 0) result.append(node('strong',racePositionLabel(finish)));
   else result.textContent = '—';
-  const measure = (value, unit) => Number.isFinite(value) ? measurement(value,unit,1) : '—';
+  const distance = Number.isFinite(session.distanceKm) ? measurement(session.distanceKm,'km',0) : '—';
   row.append(
     timestamp,
     track,
-    node('td', session.session?.trim() || '—'),
+    recentSessionTypeCell(session.session),
     result,
     node('td', lapTime(session.best), 'session-metric session-best numeric-cell'),
     node('td', session.timed, 'session-metric numeric-cell'),
-    node('td', measure(session.distanceKm, 'km'), 'session-metric numeric-cell'),
+    node('td', distance, 'session-metric numeric-cell'),
     comparison
   );
   return row;
+}
+const recentSessionTypes = [
+  ['practice', 'wheel'],
+  ['qual', 'watch'],
+  ['race', 'checkeredFlag']
+];
+function recentSessionTypeCell(value) {
+  const label = value?.trim() || '—';
+  const cell = node('td');
+  const type = recentSessionTypes.find(([prefix]) => label.toLowerCase().startsWith(prefix));
+  if (!type) {
+    cell.textContent = label;
+    return cell;
+  }
+  const [prefix, icon] = type;
+  const badge = node('span', label, 'recent-session-type');
+  badge.dataset.type = prefix;
+  badge.prepend(uiIcon(icon));
+  cell.append(badge);
+  return cell;
 }
 function showLibraryLoading(loading) {
   $('library-loading').hidden = !loading;
@@ -8937,6 +9000,7 @@ lmu.onWindowFocus?.(updateWindowFocus);
   loadRecordNotifications();
   communityMinimumGameVersion = settings.communityMinimumGameVersion ?? null;
   syncVisualizerSettings();
+  syncScheduleSetting();
   if (settings.appVersion) {
     $('app-version').textContent = 'v' + settings.appVersion;
     $('app-version').hidden = false;

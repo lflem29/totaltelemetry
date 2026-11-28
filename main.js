@@ -1,4 +1,4 @@
-const {app, BrowserWindow, dialog, ipcMain, Menu, screen, safeStorage, shell} = require('electron');
+const {app, BrowserWindow, WebContentsView, dialog, ipcMain, Menu, screen, safeStorage, shell} = require('electron');
 const {execFile, spawn} = require('node:child_process');
 const {once} = require('node:events');
 const {randomUUID, randomBytes, createHash} = require('node:crypto');
@@ -952,6 +952,58 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   win.webContents.on('will-navigate', event => event.preventDefault());
 
+  const scheduleURL = new URL('https://lmuportal.com/');
+  let scheduleView;
+  function closeSchedule() {
+    if (!scheduleView) return;
+    if (!win.isDestroyed()) win.contentView.removeChildView(scheduleView);
+    scheduleView.webContents.close();
+    scheduleView = undefined;
+  }
+  win.on('closed', closeSchedule);
+  win.webContents.on('did-start-navigation', () => scheduleView?.setVisible(false));
+  ipcMain.handle('show-schedule', async ({sender, senderFrame}, top) => {
+    if (sender !== win.webContents || senderFrame !== win.webContents.mainFrame) return;
+    if (config.scheduleEnabled !== true) {
+      closeSchedule();
+      return;
+    }
+    if (!Number.isInteger(top) || top < 0) {
+      scheduleView?.setVisible(false);
+      return;
+    }
+    if (!scheduleView) {
+      scheduleView = new WebContentsView({webPreferences:{
+        partition:'lmu-schedule', nodeIntegration:false, contextIsolation:true, sandbox:true
+      }});
+      scheduleView.setVisible(false);
+      const contents = scheduleView.webContents;
+      contents.session.setPermissionCheckHandler(() => false);
+      contents.session.setPermissionRequestHandler((_, __, callback) => callback(false));
+      contents.setWindowOpenHandler(() => ({action:'deny'}));
+      const keepInPortal = (event, url) => {
+        if (URL.parse(event.url ?? url)?.origin !== scheduleURL.origin) event.preventDefault();
+      };
+      contents.on('will-navigate', keepInPortal);
+      contents.on('will-redirect', keepInPortal);
+      win.contentView.addChildView(scheduleView);
+    }
+    const [width, height] = win.getContentSize();
+    scheduleView.setBounds({x:0, y:Math.min(top,height), width, height:Math.max(0,height-top)});
+    scheduleView.setVisible(true);
+    const current = scheduleView;
+    if (!current.webContents.getURL() && !current.webContents.isLoadingMainFrame()) {
+      try {
+        await current.webContents.loadURL(scheduleURL.href);
+      } catch (error) {
+        if (scheduleView !== current) return;
+        console.warn('LMU Portal load failed:', error.code ?? error.message);
+        closeSchedule();
+        throw new Error('LMU Portal could not be loaded.');
+      }
+    }
+  });
+
   ipcMain.handle('focus-panel', ({sender, senderFrame}, key) => {
     if (sender !== win.webContents || senderFrame !== win.webContents.mainFrame) return;
     const child = popouts.get(key);
@@ -1006,9 +1058,10 @@ if (primaryInstance) app.whenReady().then(async () => {
     if (displayFields.telemetryGraphScrollPercent(changes.telemetryGraphScrollPercent)) {
       config.telemetryGraphScrollPercent = changes.telemetryGraphScrollPercent;
     }
-    for (const key of ['sortCornersByNumber', 'sortTrainerCornersByNumber', 'trainerShowFastestLap', 'trainerShowFastestCorner', 'sessionDetailsPinned']) {
+    for (const key of ['sortCornersByNumber', 'sortTrainerCornersByNumber', 'trainerShowFastestLap', 'trainerShowFastestCorner', 'sessionDetailsPinned', 'scheduleEnabled']) {
       if (typeof changes[key] === 'boolean') config[key] = changes[key];
     }
+    if (changes.scheduleEnabled === false) closeSchedule();
     if (typeof changes.previousStatsDriver === 'string' && config.primaryDriver) {
       const previous = changes.previousStatsDriver.trim().slice(0, 160);
       config.previousStatsDriver = driverIdentity(previous) === driverIdentity(config.primaryDriver) ? '' : previous;
@@ -1092,6 +1145,7 @@ if (primaryInstance) app.whenReady().then(async () => {
       trackRecordClientId,trackRecordSecretEncrypted,trackRecordDriverProfiles,previousRecordDriver:primaryDriver || previousRecordDriver};
     save(retained);
     config = retained;
+    closeSchedule();
     trackRecordSyncState = undefined;
     generation++;
     sessionIndex = [];

@@ -1,16 +1,16 @@
 Unicode true
 Name "Total Telemetry"
-OutFile "Total-Telemetry-1.2.31-Setup.exe"
+OutFile "Total-Telemetry-1.2.32-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Total Telemetry"
 InstallDirRegKey HKCU "Software\Total Telemetry" "InstallDir"
 RequestExecutionLevel user
 Icon "total-telemetry-icon.ico"
 UninstallIcon "total-telemetry-icon.ico"
 SetCompressor /SOLID lzma
-VIProductVersion "1.2.31.0"
+VIProductVersion "1.2.32.0"
 VIAddVersionKey "ProductName" "Total Telemetry"
 VIAddVersionKey "FileDescription" "Total Telemetry Setup"
-VIAddVersionKey "FileVersion" "1.2.31"
+VIAddVersionKey "FileVersion" "1.2.32"
 VIAddVersionKey "LegalCopyright" ""
 Page components
 Page directory
@@ -28,7 +28,7 @@ Section "!Total Telemetry"
   CreateShortcut "$SMPROGRAMS\Total Telemetry.lnk" "$INSTDIR\Total Telemetry.exe" "" "$INSTDIR\total-telemetry-icon.ico"
   WriteRegStr HKCU "Software\Total Telemetry" "InstallDir" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "DisplayName" "Total Telemetry"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "DisplayVersion" "1.2.31"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "DisplayVersion" "1.2.32"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "NoModify" 1
   WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\TotalTelemetry" "NoRepair" 1
