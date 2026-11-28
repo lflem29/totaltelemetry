@@ -7960,8 +7960,6 @@ function initHeaderCarAnimation() {
   const nav = trophyButton.parentElement;
   const car = $('header-race-car');
   const connection = $('server-connection');
-  const lightPanel = $('header-race-lights');
-  const lights = [...lightPanel.children];
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const minimumDelay = 10_000;
   const maximumDelay = 60_000;
@@ -7977,7 +7975,7 @@ function initHeaderCarAnimation() {
   const headerAvailable = () => !document.querySelector('dialog:modal,#auto-load-session-notice:not([hidden])');
   const randomBetween = (min,max) => min + Math.floor(Math.random() * (max - min + 1));
 
-  function positionLane(useWrappedRow = false) {
+  function positionLane() {
     const navEnd = trophyButton.getBoundingClientRect();
     const connectionBounds = connection.getBoundingClientRect();
     const headerBounds = header.getBoundingClientRect();
@@ -7988,7 +7986,7 @@ function initHeaderCarAnimation() {
       const brandBounds = brand.getBoundingClientRect();
       const aboveConnection = Math.max(nav.getBoundingClientRect().bottom,brandBounds.bottom);
       // When the header wraps, use the empty space to the left of the status buttons.
-      start = useWrappedRow && aboveConnection <= connectionBounds.top ? Math.max(brandBounds.left,end - 510) : end;
+      start = aboveConnection <= connectionBounds.top ? Math.max(brandBounds.left,end - 510) : end;
     }
     const width = end - start;
     if (width <= 0) {
@@ -8030,8 +8028,6 @@ function initHeaderCarAnimation() {
 
   function clearStartLights() {
     delete lane.dataset.raceStart;
-    lightPanel.classList.remove('top-row-off');
-    for (const light of lights) light.classList.remove('lit');
   }
 
   function releaseGrid(width) {
@@ -8071,8 +8067,11 @@ function initHeaderCarAnimation() {
       if (next < entries.length) {
         timer = window.setTimeout(launchCar,entries[next].time - (performance.now() - start));
       } else {
-        void Promise.allSettled([...activePasses].map(movement => movement.finished)).then(clearStartLights);
-        schedulePass();
+        void Promise.allSettled([...activePasses].map(movement => movement.finished)).then(() => {
+          if (lane.dataset.raceStart !== 'grid') return;
+          clearStartLights();
+          schedulePass();
+        });
       }
     }
     launchCar();
@@ -8081,10 +8080,14 @@ function initHeaderCarAnimation() {
   function countDown() {
     if (!canAnimate() || document.querySelector('dialog:modal')) return;
     introPending = false;
-    const width = positionLane(true);
+    const width = positionLane();
     if (!headerAvailable() || width < minimumGridWidth) return schedulePass();
-    lane.dataset.raceStart = 'countdown';
-    let next = 0;
+    lane.dataset.raceStart = 'all-red';
+    function bottomRow() {
+      if (!canAnimate() || !headerAvailable()) return resetSchedule();
+      lane.dataset.raceStart = 'bottom-red';
+      timer = window.setTimeout(lightsOut,320);
+    }
     function lightsOut() {
       if (!canAnimate() || !headerAvailable()) return resetSchedule();
       lane.dataset.raceStart = 'lights-out';
@@ -8094,17 +8097,7 @@ function initHeaderCarAnimation() {
         releaseGrid(lane.clientWidth);
       },200);
     }
-    function switchLight() {
-      if (!canAnimate() || !headerAvailable()) return resetSchedule();
-      if (next === lights.length) {
-        lightPanel.classList.add('top-row-off');
-        timer = window.setTimeout(lightsOut,320);
-        return;
-      }
-      lights[next++].classList.add('lit');
-      timer = window.setTimeout(switchLight,next === lights.length ? 550 : 320);
-    }
-    timer = window.setTimeout(switchLight,180);
+    timer = window.setTimeout(bottomRow,550);
   }
 
   function schedulePass() {
@@ -8136,8 +8129,8 @@ function initHeaderCarAnimation() {
     const stage = lane.dataset.raceStart;
     if (!stage && !activePasses.size) return;
     const previousWidth = lane.style.width;
-    const width = positionLane(Boolean(stage));
-    const awaitingGrid = stage === 'countdown' || stage === 'lights-out';
+    const width = positionLane();
+    const awaitingGrid = stage && stage !== 'grid';
     if (awaitingGrid ? width < minimumGridWidth : lane.style.width !== previousWidth) resetSchedule();
   });
   for (const control of [header,brand,nav,...connection.parentElement.children]) layoutObserver.observe(control);

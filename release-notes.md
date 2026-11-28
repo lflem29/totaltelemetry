@@ -1,4 +1,4 @@
-- The startup race uses round red lights, a clear lights-out signal, and an accelerating 62-car grid. The top navigation now reads Sessions, Telemetry, Training, Records, and Trophies.
+- The startup race uses three signals: both rows red, bottom row red, then lights out. The 62-car grid accelerates off the line, followed by occasional solo passes 10–60 seconds apart. The top navigation now reads Sessions, Telemetry, Training, Records, and Trophies.
 - Combined Session Summary charts display a separate reading beside each trace. Telemetry Graph Scroll Speed is adjustable in Settings → Display.
 - A Platinum trophy is worth five points and goes to the fastest driver when three or more drivers register a valid lap for the same circuit, layout and class.
 - Favourite cars show manufacturer badges in Total Distance Driven. Server Communication displays the connected Community Server version when available.

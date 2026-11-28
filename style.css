@@ -85,8 +85,8 @@ h1,h2,p{margin:0}h1{font-size:calc(42.0px * var(--text-scale));letter-spacing:-.
   background:repeating-linear-gradient(90deg,#0003 0 1px,transparent 1px 3px),
     repeating-linear-gradient(0deg,#0003 0 1px,transparent 1px 3px),
     linear-gradient(var(--lens-glint,var(--lens-face)) 0 3px,var(--lens-face) 3px 9px,var(--lens-edge) 9px)}
-#header-car-lane[data-race-start="countdown"] #header-race-lights:not(.top-row-off) i.lit::before,
-#header-car-lane[data-race-start="countdown"] #header-race-lights i.lit::after{
+#header-car-lane[data-race-start="all-red"] #header-race-lights i::before,
+#header-car-lane:is([data-race-start="all-red"],[data-race-start="bottom-red"]) #header-race-lights i::after{
   --lens-edge:#a4242e;--lens-face:#ff3f42;--lens-glint:#ff9681;
   filter:drop-shadow(0 0 3px #ff343a99)}
 #header-car-lane[data-race-start] #header-race-lights{display:flex}
