@@ -6027,7 +6027,6 @@ function chartTraceReading(prefix, value, width, reference, peak, unit) {
 
 const telemetryGraphColumn = $('plot-column');
 const telemetryGraphsPanel = $('telemetry-graphs-panel');
-const sessionDetailsCard = telemetryGraphColumn.querySelector('.map-card');
 function graphScrollContainer() {
   return popoutWindows.has('graphs') || telemetryGraphColumn.classList.contains('session-details-pinned')
     ? telemetryGraphsPanel : telemetryGraphColumn;
@@ -8111,7 +8110,7 @@ function initHeaderCarAnimation() {
   function schedulePass() {
     if (!canAnimate()) return;
     if (introPending) {
-      timer = window.setTimeout(countDown,400);
+      timer = window.setTimeout(countDown,3000);
       return;
     }
     timer = window.setTimeout(() => {
@@ -8549,18 +8548,30 @@ for (const edge of document.querySelectorAll(
   scrollFadeEdges.observe(edge,{box:'border-box'});
 }
 
-function attachSectionSnap(scroller, selector, {edge = 'top', inset = () => 0, enabled = () => true, observe = []} = {}) {
-  const snapDistance = 28;
+function attachSectionSnap(scroller, selector, {charts = false, inset = () => 0, enabled = () => true, observe = []} = {}) {
+  const snapDistance = charts ? 50 : 28;
   let lastTarget;
+  let previousStop = scroller.scrollTop;
   const viewportTop = () => scroller.getBoundingClientRect().top + scroller.clientTop;
-  const offsetTo = (target, top) => target.getBoundingClientRect()[edge] - top - inset(target);
+  function alignmentFor(target, top, scrollTop, maxScroll) {
+    const rect = target.getBoundingClientRect();
+    const offset = rect.top - top - inset(target);
+    // A chart near the end may only have room to align with the bottom edge.
+    if (charts && scrollTop + offset > maxScroll + 1) {
+      return {offset:rect.bottom - top - scroller.clientHeight, edge:'bottom'};
+    }
+    return {offset,edge:'top'};
+  }
 
   function updateAlignment() {
-    const offset = lastTarget && enabled() && scroller.contains(lastTarget) && lastTarget.getClientRects().length
-      ? Math.abs(offsetTo(lastTarget,viewportTop())) : Infinity;
+    const alignment = lastTarget && enabled() && scroller.contains(lastTarget) && lastTarget.getClientRects().length
+      ? alignmentFor(lastTarget,viewportTop(),scroller.scrollTop,scroller.scrollHeight - scroller.clientHeight) : null;
+    const gap = alignment ? Math.abs(alignment.offset) : Infinity;
     // Re-arm after leaving the snap area so small scrolls can move away freely.
-    if (offset > snapDistance) lastTarget = undefined;
-    scroller.classList.toggle('scroll-at-section-start',offset <= 1);
+    if (gap > snapDistance) lastTarget = undefined;
+    // A bottom-aligned chart can still leave a chart heading near the top edge.
+    scroller.classList.toggle('scroll-at-section-start',gap <= 1 && (charts || alignment.edge === 'top'));
+    if (charts) scroller.classList.toggle('scroll-at-section-end',gap <= 1 && alignment.edge === 'bottom');
   }
 
   scroller.addEventListener('scroll',updateAlignment,{passive:true});
@@ -8570,29 +8581,40 @@ function attachSectionSnap(scroller, selector, {edge = 'top', inset = () => 0, e
     const top = viewportTop();
     const scrollTop = scroller.scrollTop;
     const maxScroll = scroller.scrollHeight - scroller.clientHeight;
-    let nearest, distance = Infinity;
+    const movement = scrollTop - previousStop;
+    previousStop = scrollTop;
+    if (charts && (maxScroll <= 0 || !movement)) return;
+    // Prefer nearby chart headings unless the scroll is approaching the end.
+    const preferTop = charts && maxScroll - scrollTop > snapDistance;
+    let nearest, bestScore = Infinity;
     for (const target of scroller.querySelectorAll(selector)) {
       if (!target.getClientRects().length) continue;
-      const offset = offsetTo(target,top);
+      const {offset,edge} = alignmentFor(target,top,scrollTop,maxScroll);
       const position = scrollTop + offset;
       const gap = Math.abs(offset);
-      if (position <= 1 || position > maxScroll + 1 || gap > snapDistance || gap >= distance) continue;
-      nearest = target;
-      distance = gap;
+      if (position <= (charts ? -1 : 1) || position > maxScroll + 1 || gap > snapDistance) continue;
+      const score = gap + (preferTop && edge === 'bottom' ? snapDistance + 1 : 0);
+      if (score >= bestScore) continue;
+      nearest = {target,offset};
+      bestScore = score;
     }
-    if (!nearest || nearest === lastTarget) return;
+    if (!nearest) return;
+    const {target,offset} = nearest;
+    const distance = Math.abs(offset);
+    // Let small scrolls move away from a chart and let a reversal snap back to it.
+    if (target === lastTarget && (!charts || offset * movement <= 0)) return;
 
-    const offset = offsetTo(nearest,top);
     const focused = scroller.ownerDocument.activeElement;
     if (distance > 1 && focused !== scroller && scroller.contains(focused) && focused.matches(':focus-visible')) {
       const rect = focused.getBoundingClientRect();
-      const line = top + inset(nearest);
+      const line = top + inset(target);
       const bottom = top + scroller.clientHeight;
       if ((rect.top >= line && rect.top - offset < line) ||
           (rect.bottom <= bottom && rect.bottom - offset > bottom)) return;
     }
-    lastTarget = nearest;
+    lastTarget = target;
     if (distance > 1) scroller.scrollTop = scrollTop + offset;
+    previousStop = scroller.scrollTop;
     updateAlignment();
   });
 
@@ -8600,11 +8622,22 @@ function attachSectionSnap(scroller, selector, {edge = 'top', inset = () => 0, e
   for (const element of [scroller,...observe]) layout.observe(element);
 }
 
-attachSectionSnap(telemetryGraphColumn,'.map-card',{
-  edge:'bottom',
-  enabled:() => telemetryGraphsPanel.parentElement === telemetryGraphColumn && graphScrollContainer() === telemetryGraphColumn,
-  observe:[sessionDetailsCard,telemetryGraphsPanel]
+const telemetryChartList = $('charts');
+for (const scroller of [telemetryGraphColumn,telemetryGraphsPanel]) {
+  attachSectionSnap(scroller,'#charts > .chart',{
+    charts:true, enabled:() => scroller.contains(telemetryChartList) && graphScrollContainer() === scroller,
+    observe:[telemetryChartList,telemetryGraphsPanel,telemetryGraphColumn.querySelector('.map-card')]
+  });
+}
+attachSectionSnap(summaryPanel.querySelector('.session-summary-content'),'#session-charts > .summary-chart',{
+  charts:true, enabled:() => summaryCategory === 'vehicle', observe:[$('session-charts')]
 });
+for (const visualiser of ['aero','suspension']) {
+  const plots = $(visualiser + '-plots');
+  attachSectionSnap($(visualiser),`#${plots.id} > :is(.suspension-plot,.suspension-histograms)`,{
+    charts:true,observe:[plots]
+  });
+}
 const libraryTables = ['session-wrap','imported-laps-table'].map($);
 const libraryTabs = $('library-tabs');
 attachSectionSnap($('library'),'#session-wrap,#imported-laps-table',{

@@ -37,7 +37,14 @@
       animation:scroll-edge-fade 1ms steps(1,end) both;
       animation-timeline:scroll(self block)
     }
-    .scroll-at-section-start{--scroll-fade-top:linear-gradient(#000,#000)}
+    .scroll-at-section-start{
+      --scroll-fade-top:linear-gradient(#000,#000);
+      mask-image:var(--scroll-fade-bottom)!important
+    }
+    .scroll-at-section-end{
+      --scroll-fade-bottom:linear-gradient(#000,#000);
+      mask-image:var(--scroll-fade-top)!important
+    }
     @keyframes scroll-edge-fade{
       from{mask-image:var(--scroll-fade-bottom)}
       0.0001%,99.9999%{mask-image:var(--scroll-fade-top),var(--scroll-fade-bottom)}
