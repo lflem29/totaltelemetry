@@ -1,3 +1,4 @@
 - Enable Schedule in Settings → Beta to open LMU Portal inside Total Telemetry.
 - My Recent Sessions shows coloured icons for Practice, Qualifying and Race. Date and Time, Session Type, Session Result, Best Lap, Timed Laps and Distance Driven use 150% text size. Distances display in whole units.
 - Telemetry Graph Scroll Speed defaults to 30%. Saved speeds still apply.
+- The telemetry graph cursor is now a dashed white line.

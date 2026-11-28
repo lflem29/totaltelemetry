@@ -6953,7 +6953,14 @@ function paintChart(row) {
     }
   }
   if(cursor>=range[0] && cursor<=range[1]) {
-    ctx.strokeStyle=(elementColour('focus',lightGraphBackground ? '#172119' : '#e8f0dd'));ctx.beginPath();ctx.moveTo(x(cursor),top);ctx.lineTo(x(cursor),bottom);ctx.stroke();
+    ctx.save();
+    ctx.strokeStyle = '#fff';
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x(cursor), top);
+    ctx.lineTo(x(cursor), bottom);
+    ctx.stroke();
+    ctx.restore();
   }
   if(selection?.row===row) {
     const a=Math.max(left,Math.min(right,x(selection.initial))),b=Math.max(left,Math.min(right,x(selection.x)));
