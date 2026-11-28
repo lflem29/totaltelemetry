@@ -37,6 +37,7 @@ const builtIn = {
   'Wheel Slip': ['Ground Speed','Wheel Speed','ABS','TC'],
   Suspension: ['Susp Pos','Front3rdDeflection','Rear3rdDeflection']
 };
+const defaultTelemetryGraphScrollPercent = 50;
 let settings = {};
 let sessions = [], resultGameVersions = [], resultRecords = [];
 let scanBusy = false, runningScanAgain = false, scanKey;
@@ -622,7 +623,7 @@ function settingsFields() {
   $('interface-background-colour').value = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
   $('graph-background-colour').value = backgroundColour(settings.graphBackgroundColour, defaultGraphBackgroundColour);
   $('text-scale').value = settings.textScalePercent ?? 100;
-  $('telemetry-graph-scroll-speed').value = settings.telemetryGraphScrollPercent ?? 100;
+  $('telemetry-graph-scroll-speed').value = settings.telemetryGraphScrollPercent ?? defaultTelemetryGraphScrollPercent;
   $('racing-line-spread').value = racingLineSpread();
   $('settings-channels').disabled = !ready;
   $('settings-channel-note').hidden = ready;
@@ -6019,15 +6020,17 @@ function chartTraceReading(prefix, value, width, reference, peak, unit) {
   return trace;
 }
 
+const telemetryGraphColumn = $('plot-column');
+const telemetryGraphsPanel = $('telemetry-graphs-panel');
+const sessionDetailsCard = telemetryGraphColumn.querySelector('.map-card');
 function graphScrollContainer() {
-  const column = $('plot-column');
-  return popoutWindows.has('graphs') || column.classList.contains('session-details-pinned')
-    ? $('telemetry-graphs-panel') : column;
+  return popoutWindows.has('graphs') || telemetryGraphColumn.classList.contains('session-details-pinned')
+    ? telemetryGraphsPanel : telemetryGraphColumn;
 }
 
 let wheelScrollContainer, wheelScrollPercent, wheelRemainder = 0;
-$('telemetry-graphs-panel').addEventListener('wheel', event => {
-  const percent = settings.telemetryGraphScrollPercent ?? 100;
+telemetryGraphsPanel.addEventListener('wheel', event => {
+  const percent = settings.telemetryGraphScrollPercent ?? defaultTelemetryGraphScrollPercent;
   if (percent === 100 || event.defaultPrevented || !event.cancelable || event.ctrlKey || event.metaKey ||
       event.shiftKey || event.altKey || event.target.closest?.('select,input[type="number"],input[type="range"]')) return;
   const mode = event.deltaMode;
@@ -8540,6 +8543,79 @@ for (const edge of document.querySelectorAll(
 )) {
   scrollFadeEdges.observe(edge,{box:'border-box'});
 }
+
+function attachSectionSnap(scroller, selector, {edge = 'top', inset = () => 0, enabled = () => true, observe = []} = {}) {
+  const snapDistance = 28;
+  let lastTarget;
+  const viewportTop = () => scroller.getBoundingClientRect().top + scroller.clientTop;
+  const offsetTo = (target, top) => target.getBoundingClientRect()[edge] - top - inset(target);
+
+  function updateAlignment() {
+    const offset = lastTarget && enabled() && scroller.contains(lastTarget) && lastTarget.getClientRects().length
+      ? Math.abs(offsetTo(lastTarget,viewportTop())) : Infinity;
+    // Re-arm after leaving the snap area so small scrolls can move away freely.
+    if (offset > snapDistance) lastTarget = undefined;
+    scroller.classList.toggle('scroll-at-section-start',offset <= 1);
+  }
+
+  scroller.addEventListener('scroll',updateAlignment,{passive:true});
+  scroller.addEventListener('scrollend',() => {
+    updateAlignment();
+    if (!enabled()) return;
+    const top = viewportTop();
+    const scrollTop = scroller.scrollTop;
+    const maxScroll = scroller.scrollHeight - scroller.clientHeight;
+    let nearest, distance = Infinity;
+    for (const target of scroller.querySelectorAll(selector)) {
+      if (!target.getClientRects().length) continue;
+      const offset = offsetTo(target,top);
+      const position = scrollTop + offset;
+      const gap = Math.abs(offset);
+      if (position <= 1 || position > maxScroll + 1 || gap > snapDistance || gap >= distance) continue;
+      nearest = target;
+      distance = gap;
+    }
+    if (!nearest || nearest === lastTarget) return;
+
+    const offset = offsetTo(nearest,top);
+    const focused = scroller.ownerDocument.activeElement;
+    if (distance > 1 && focused !== scroller && scroller.contains(focused) && focused.matches(':focus-visible')) {
+      const rect = focused.getBoundingClientRect();
+      const line = top + inset(nearest);
+      const bottom = top + scroller.clientHeight;
+      if ((rect.top >= line && rect.top - offset < line) ||
+          (rect.bottom <= bottom && rect.bottom - offset > bottom)) return;
+    }
+    lastTarget = nearest;
+    if (distance > 1) scroller.scrollTop = scrollTop + offset;
+    updateAlignment();
+  });
+
+  const layout = new ResizeObserver(updateAlignment);
+  for (const element of [scroller,...observe]) layout.observe(element);
+}
+
+attachSectionSnap(telemetryGraphColumn,'.map-card',{
+  edge:'bottom',
+  enabled:() => telemetryGraphsPanel.parentElement === telemetryGraphColumn && graphScrollContainer() === telemetryGraphColumn,
+  observe:[sessionDetailsCard,telemetryGraphsPanel]
+});
+const libraryTables = ['session-wrap','imported-laps-table'].map($);
+const libraryTabs = $('library-tabs');
+attachSectionSnap($('library'),'#session-wrap,#imported-laps-table',{
+  inset:() => libraryTabs.getBoundingClientRect().height,
+  observe:[libraryTabs,...libraryTables]
+});
+const distanceSections = ['favourite-cars','favourite-tracks'].map($);
+attachSectionSnap($('results-distance'),'#favourite-cars,#favourite-tracks',{inset:() => 10,observe:distanceSections});
+const recordsTable = $('records-table');
+const recordHeadings = recordsTable.querySelector('thead');
+attachSectionSnap(recordsTable,'.records-track-group',{
+  inset:() => recordHeadings.getBoundingClientRect().height,
+  observe:[recordHeadings,$('record-rows')]
+});
+attachSectionSnap($('trainer'),'#trainer-analysis',{inset:() => 8,observe:[$('trainer-analysis')]});
+attachSectionSnap(trophyDialog,'.trophy-grid,#trophy-by-track',{inset:() => 12,observe:[$('trophy-content')]});
 
 function openPanelWindow(key,title) {
   const popup = window.open('about:blank', key, 'popup');
