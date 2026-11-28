@@ -1,5 +1,5 @@
-- Track Records separates LMP2 WEC and ELMS for filters, standings, trophies, and comparisons. Older LMP2 records use WEC.
-- Track Records has a Driver column beside Car.
-- My Recent Sessions has a Session Type column and uses date and time alone for entries older than a week.
-- The driver statistics panel fills the available height on wide windows and scales the totals with the window.
-- Separate ELMS record sharing requires the updated Community Server.
+- The startup race uses round red lights, a clear lights-out signal, and an accelerating 62-car grid. The top navigation now reads Sessions, Telemetry, Training, Records, and Trophies.
+- Combined Session Summary charts display a separate reading beside each trace. Telemetry Graph Scroll Speed is adjustable in Settings → Display.
+- A Platinum trophy is worth five points and goes to the fastest driver when three or more drivers register a valid lap for the same circuit, layout and class.
+- Favourite cars show manufacturer badges in Total Distance Driven. Server Communication displays the connected Community Server version when available.
+- When the app is in the background, decorative animations and routine scans pause. Returning to the app checks for new telemetry and indicates when a session is being loaded.

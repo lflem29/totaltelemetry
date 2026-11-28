@@ -12,25 +12,40 @@
 <header class="masthead">
   <div class="brand"><img class="brand-icon" src="total-telemetry-icon.png" alt="" width="44" height="44"><div>Total Telemetry <span id="app-version" hidden></span><small>LE MANS ULTIMATE</small></div></div>
   <div class="masthead-actions">
-    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave">Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button">Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
+    <nav aria-label="Views">
+      <button id="library-tab" data-ui-icon="folder" class="active">Sessions</button>
+      <button id="viewer-tab" data-ui-icon="wave">Telemetry</button>
+      <button id="trainer-tab" data-ui-icon="wheel" type="button">Training</button>
+      <button id="records-tab" data-ui-icon="watch" type="button">Records</button>
+      <button id="open-trophy-standings" class="icon-button" type="button" aria-haspopup="dialog" aria-controls="trophy-standings">Trophies</button>
+    </nav>
   </div>
-  <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
-  <span id="header-car-lane" aria-hidden="true"><span id="header-race-car"></span></span>
+  <div class="head-right"><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count" aria-live="polite">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
+  <span id="header-car-lane" aria-hidden="true">
+    <span id="header-race-car"></span>
+    <span id="header-race-lights"><i></i><i></i><i></i><i></i><i></i></span>
+  </span>
 </header>
+<div id="auto-load-session-notice" hidden role="status"><span>Auto-loading your last session…</span></div>
 <dialog id="trophy-standings" aria-labelledby="trophy-standings-title">
-  <div class="dialog-title"><h2 id="trophy-standings-title">Trophy Standings</h2><form method="dialog"><button class="button-secondary">Close</button></form></div>
-  <p>Shared track records · Gold 3 points · Silver 2 · Bronze 1</p>
+  <div class="dialog-title">
+    <div class="trophy-heading">
+      <h2 id="trophy-standings-title">Trophy Standings</h2>
+      <p class="trophy-scoring">Shared Track Records · Platinum 5 Points (3+ Drivers) · Gold 3 Points · Silver 2 Points · Bronze 1 Point</p>
+    </div>
+    <form method="dialog"><button class="button-secondary" data-ui-icon="close">Close</button></form>
+  </div>
   <p id="trophy-status" role="status"></p>
   <div id="trophy-content" hidden>
     <div class="trophy-grid">
       <div class="trophy-table" tabindex="0" role="region" aria-label="Driver rankings"><table>
-        <thead><tr><th scope="col">Rank</th><th scope="col">Driver</th><th scope="col" class="record-gold">Gold</th><th scope="col" class="record-silver">Silver</th><th scope="col" class="record-bronze">Bronze</th><th scope="col">Points</th></tr></thead>
+        <thead><tr><th scope="col">Rank</th><th scope="col">Driver</th><th scope="col" class="record-platinum">Platinum</th><th scope="col" class="record-gold">Gold</th><th scope="col" class="record-silver">Silver</th><th scope="col" class="record-bronze">Bronze</th><th scope="col">Points</th></tr></thead>
         <tbody id="trophy-rows"></tbody>
       </table></div>
       <div class="trophy-side">
         <section id="trophy-friend-card" hidden>
           <h3>Compare with a Friend</h3>
-          <label>Driver <select id="trophy-friend"></select></label>
+          <select id="trophy-friend" aria-label="Friend to Compare"></select>
           <p id="trophy-comparison"></p>
           <table>
             <thead><tr><th scope="col">Trophies</th><th scope="col">You</th><th scope="col" id="trophy-friend-name"></th></tr></thead>
@@ -39,29 +54,50 @@
         </section>
       </div>
     </div>
-    <section id="trophy-close-card" aria-labelledby="trophy-close-title" hidden>
-      <div>
-        <h3 id="trophy-close-title">Closest Chance to Move Up</h3>
-        <p id="trophy-close-contest"></p>
+    <section id="trophy-by-track" aria-labelledby="trophy-by-track-title">
+      <h3 id="trophy-by-track-title">Trophies by Track</h3>
+      <p id="trophy-by-track-empty"></p>
+      <div id="trophy-by-track-table" role="region" aria-labelledby="trophy-by-track-title" tabindex="0" hidden>
+        <table>
+          <thead><tr><th scope="col">Track</th><th scope="col">Layout</th><th scope="col">Class</th><th scope="col">Trophy</th></tr></thead>
+          <tbody id="trophy-by-track-rows"></tbody>
+        </table>
       </div>
-      <button id="trophy-view-contest" class="button-secondary" type="button">View Track Records</button>
     </section>
+    <div id="trophy-opportunities" class="trophy-opportunities" hidden>
+      <section id="trophy-close-card" aria-labelledby="trophy-close-title" hidden>
+        <div>
+          <h3 id="trophy-close-title">Closest Chance to Move Up</h3>
+          <p id="trophy-close-contest"></p>
+        </div>
+        <button id="trophy-view-contest" class="button-secondary" type="button">View Track Records</button>
+      </section>
+      <section id="trophy-easy-card" aria-labelledby="trophy-easy-title" hidden>
+        <div>
+          <h3 id="trophy-easy-title">Easy Points</h3>
+          <p id="trophy-easy-contest"></p>
+          <p>Record a Valid Lap to Collect Points</p>
+        </div>
+        <button id="trophy-view-easy-contest" class="button-secondary" type="button">View Track Records</button>
+      </section>
+    </div>
   </div>
 </dialog>
 
 <dialog id="server-events-dialog" aria-labelledby="server-events-title">
-  <div class="dialog-title"><h2 id="server-events-title">Server Communication</h2><form method="dialog"><button>Close</button></form></div>
+  <div class="dialog-title"><h2 id="server-events-title">Server Communication</h2><form method="dialog"><button class="button-secondary" data-ui-icon="close">Close</button></form></div>
   <p id="server-sync-health" role="status"></p>
+  <p id="server-version-row" hidden><strong>Server Version</strong> <span id="connected-server-version"></span></p>
   <h3 id="server-important-events-title">Important Events</h3>
   <p id="server-events-empty">No important events yet.</p>
   <ul id="server-events" aria-labelledby="server-important-events-title"></ul>
 </dialog>
 <dialog id="owner-records-dialog" aria-labelledby="owner-records-title">
-  <div class="dialog-title"><h2 id="owner-records-title">Shared Records and Lap Access</h2><form method="dialog"><button>Close</button></form></div>
+  <div class="dialog-title"><h2 id="owner-records-title">Shared Records and Lap Access</h2><form method="dialog"><button class="button-secondary" data-ui-icon="close">Close</button></form></div>
   <p id="owner-records-status" role="status"></p><ul id="owner-records-list"></ul>
 </dialog>
 <dialog id="notifications-dialog" aria-labelledby="notifications-title">
-  <div class="dialog-title"><h2 id="notifications-title">Notifications</h2><form method="dialog" class="notification-dialog-actions"><button id="dismiss-all-notifications" type="button" class="button-secondary" title="Dismiss all notifications that do not require a response" disabled>Dismiss All</button><button>Close</button></form></div>
+  <div class="dialog-title"><h2 id="notifications-title">Notifications</h2><form method="dialog" class="notification-dialog-actions"><button id="dismiss-all-notifications" type="button" class="button-secondary" title="Dismiss all notifications that do not require a response" disabled>Dismiss All</button><button class="button-secondary" data-ui-icon="close">Close</button></form></div>
   <p id="notifications-empty">No notifications.</p><ul id="notification-list"></ul>
 </dialog>
 <main>
@@ -186,18 +222,18 @@
     </div>
     <footer class="trainer-footer"><span class="trainer-trophy-summary"><strong id="trainer-awards"></strong> of <strong id="trainer-unlocked"></strong> unlocked achievements earned. <small class="trainer-unlock-note">Visit more tracks in Practice to unlock more.</small></span><progress id="trainer-awards-meter" aria-hidden="true"></progress><button id="trainer-trophies" type="button" aria-haspopup="dialog">View Training Achievements</button></footer>
   </section>
-  <dialog id="trainer-session-dialog" aria-labelledby="trainer-session-heading"><form method="dialog"><h2 id="trainer-session-heading">Choose a Different Session</h2><label for="trainer-session-choice">Practice session</label><select id="trainer-session-choice"></select><div class="trainer-dialog-actions"><button value="cancel">Cancel</button><button value="load">Load Session</button></div></form></dialog>
-  <dialog id="trainer-trophy-dialog" aria-labelledby="trainer-trophy-heading"><div class="trainer-chart-heading"><h2 id="trainer-trophy-heading">Training Achievements</h2><form method="dialog"><button>Close</button></form></div><p id="trainer-trophy-progress"></p><div class="trainer-completion"><progress id="trainer-completion-meter" aria-label="Unlocked achievements earned"></progress><strong id="trainer-percent"></strong></div><h3 id="trainer-trophy-track"></h3><p id="trainer-streak"></p><div id="trainer-trophy-cards"></div><div id="trainer-tracks" role="group" aria-label="Training achievement progress by track"></div></dialog>
+  <dialog id="trainer-session-dialog" aria-labelledby="trainer-session-heading"><form method="dialog"><h2 id="trainer-session-heading">Choose a Different Session</h2><label for="trainer-session-choice">Practice session</label><select id="trainer-session-choice"></select><div class="trainer-dialog-actions"><button class="button-secondary" value="cancel">Cancel</button><button value="load">Load Session</button></div></form></dialog>
+  <dialog id="trainer-trophy-dialog" aria-labelledby="trainer-trophy-heading"><div class="trainer-chart-heading"><h2 id="trainer-trophy-heading">Training Achievements</h2><form method="dialog"><button class="button-secondary" data-ui-icon="close">Close</button></form></div><p id="trainer-trophy-progress"></p><div class="trainer-completion"><progress id="trainer-completion-meter" aria-label="Unlocked achievements earned"></progress><strong id="trainer-percent"></strong></div><h3 id="trainer-trophy-track"></h3><p id="trainer-streak"></p><div id="trainer-trophy-cards"></div><div id="trainer-tracks" role="group" aria-label="Training achievement progress by track"></div></dialog>
   <section id="library">
     <div class="library-content">
       <div class="library-sessions">
         <dl class="loaded-sessions" aria-label="Loaded Sessions">
-          <div><dt>Loaded Session</dt><dd class="loaded-session-actions"><button id="clear-loaded-session" type="button" class="button-secondary" hidden>Clear Loaded Session</button></dd><dd id="loaded-session">No session loaded</dd></div>
-          <div><dt>Loaded Reference</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
+          <div><dt>Loaded Session</dt><dd class="loaded-session-actions"><button id="clear-loaded-session" data-ui-icon="close" type="button" class="button-secondary" hidden>Clear Loaded Session</button></dd><dd id="loaded-session">No session loaded</dd></div>
+          <div><dt>Loaded Reference</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" data-ui-icon="clearBookmark" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
         </dl>
         <div id="library-tabs" class="view-tabs" role="tablist" aria-label="Session Library Views">
           <button id="recent-sessions-title" type="button" role="tab" aria-selected="true" aria-controls="recent-sessions-panel">My Recent Sessions</button>
-          <button id="comparison-laps-title" type="button" role="tab" aria-selected="false" aria-controls="comparison-laps" tabindex="-1">Imported Laps</button>
+          <button id="comparison-laps-title" type="button" role="tab" aria-selected="false" aria-controls="comparison-laps" tabindex="-1">Community Laps</button>
         </div>
         <section id="recent-sessions-panel" role="tabpanel" aria-labelledby="recent-sessions-title" tabindex="0">
           <div id="recent-session-filters" class="filter-bar library-filter-bar">
@@ -238,7 +274,7 @@
         </section>
         <section id="comparison-laps" role="tabpanel" aria-labelledby="comparison-laps-title" tabindex="0" hidden>
           <div class="actions imported-laps-actions">
-            <button id="import-comparison-laps" data-ui-icon="importLap" class="button-secondary" type="button">Import Local Lap Files</button>
+          <button id="import-comparison-laps" data-ui-icon="importLap" class="button-secondary" type="button">Import a Locally Saved Lap File</button>
             <button id="browse-community-laps" data-ui-icon="globe" type="button">Browse the Community Server for Laps to Import</button>
           </div>
           <div id="imported-lap-filters" class="filter-bar library-filter-bar">
@@ -256,8 +292,8 @@
             </div>
           </div>
           <p id="comparison-import-status" role="status"></p>
-          <div id="imported-empty-state" class="list-empty"><p id="imported-laps-empty" hidden>No laps imported yet.</p></div>
-          <div class="table-wrap lap-list-table" id="imported-laps-table" role="region" aria-label="Imported Laps Table" tabindex="0" hidden>
+          <div id="imported-empty-state" class="list-empty"><p id="imported-laps-empty" hidden>No saved laps yet.</p></div>
+          <div class="table-wrap lap-list-table" id="imported-laps-table" role="region" aria-label="Community Laps Table" tabindex="0" hidden>
             <table aria-labelledby="comparison-laps-title">
               <thead><tr><th>Driver</th><th>Track</th><th>Layout</th><th>Car</th><th class="numeric-cell">Best Lap</th><th>Game Version</th><th>Actions</th></tr></thead>
               <tbody id="comparison-lap-list"></tbody>
@@ -288,15 +324,15 @@
   <section id="records" hidden>
     <div class="records-heading">
       <div class="actions records-heading-actions">
-        <button id="record-last-session" type="button">Filter By Last Session</button>
-        <button id="open-trophy-standings" class="button-secondary" type="button">Trophy Standings</button>
+        <button id="record-last-session" type="button">Filter by Last Session</button>
         <div class="records-ranking">
           <div id="record-medals" role="group" aria-label="Your Track Record Medals" hidden>
+            <span class="record-platinum">Platinum <strong id="record-platinum">0</strong></span>
             <span class="record-gold">Gold <strong id="record-gold">0</strong></span>
             <span class="record-silver">Silver <strong id="record-silver">0</strong></span>
             <span class="record-bronze">Bronze <strong id="record-bronze">0</strong></span>
           </div>
-          <label class="check"><input id="hide-friend-records" type="checkbox"> Hide Friend's Records</label>
+          <label class="check"><input id="hide-friend-records" type="checkbox"> Hide Friends’ Records</label>
         </div>
       </div>
     </div>
@@ -321,7 +357,6 @@
     <div class="records-feedback">
 
       <p id="records-loading" role="status" hidden></p>
-      <p id="friend-records-status" role="status"></p>
     </div>
     <div id="records-empty-state" class="list-empty"><p id="records-status" role="status"></p></div>
     <div id="records-table" class="table-wrap lap-list-table" role="region" aria-label="Track Records Table" tabindex="0" hidden><table>
@@ -335,7 +370,7 @@
       <p>Open a session or import a lap to view its telemetry.</p>
       <div class="viewer-empty-actions">
         <button id="viewer-open-recent" type="button">Open a Recent Session</button>
-        <button id="viewer-import-lap" class="button-secondary" type="button">Import a Lap</button>
+        <button id="viewer-import-lap" data-ui-icon="importLap" class="button-secondary" type="button">Import a Locally Saved Lap File</button>
       </div>
     </div>
   </section>
@@ -345,7 +380,7 @@
         <p id="viewer-loaded-session" class="viewer-lap-details selected-color"></p>
         <div class="viewer-lap-controls">
           <label for="lap-select">Select Lap</label>
-          <button id="clear-viewer-session" class="button-secondary" type="button">Clear Loaded Session</button>
+          <button id="clear-viewer-session" data-ui-icon="close" class="button-secondary" type="button">Clear Loaded Session</button>
         </div>
         <select id="lap-select"></select>
         <button id="export-best-lap" data-ui-icon="share" type="button" hidden disabled>Share Your Best Lap from This Session</button>
@@ -365,7 +400,7 @@
         </div>
         <div class="viewer-reference-picker">
           <div class="viewer-lap-controls">
-            <button id="remove-reference-session" class="button-secondary" type="button" hidden>Clear Reference Lap</button>
+            <button id="remove-reference-session" data-ui-icon="clearBookmark" class="button-secondary" type="button" hidden>Clear Reference Lap</button>
             <label for="reference-select">Select Reference Lap</label>
           </div>
           <select id="reference-select">
@@ -382,7 +417,7 @@
       <div class="plot-pane">
         <div class="plot-column" id="plot-column">
           <section class="map-card">
-            <div class="card-head"><h2>Session Details</h2><span id="session-details-matchup" hidden></span><span id="map-status"></span><div class="session-details-actions"><label class="check"><input id="show-track-reference" type="checkbox" checked disabled> Show Reference Trace</label><button id="pop-out-graphs" data-ui-icon="pop" class="button-secondary" type="button">Pop Out Telemetry Graphs</button><button id="pin-session-details" data-ui-icon="pin" class="button-secondary" type="button" aria-pressed="false" aria-label="Pin Session Details" title="Pin Session Details"></button><button id="toggle-map" type="button" aria-controls="map-content" aria-expanded="true" aria-label="Collapse Session Details"></button></div></div>
+            <div class="card-head"><div class="session-details-heading"><h2>Session Details</h2><span id="session-car-thumbnail" aria-hidden="true" hidden></span></div><span id="session-details-matchup" hidden></span><span id="map-status"></span><div class="session-details-actions"><label class="check"><input id="show-track-reference" type="checkbox" checked disabled> Show Reference Trace</label><button id="pop-out-graphs" data-ui-icon="pop" class="button-secondary" type="button">Pop Out Telemetry Graphs</button><button id="pin-session-details" data-ui-icon="pin" class="button-secondary" type="button" aria-pressed="false" aria-label="Pin Session Details" title="Pin Session Details"></button><button id="toggle-map" type="button" aria-controls="map-content" aria-expanded="true" aria-label="Collapse Session Details"></button></div></div>
             <div id="map-content">
               <section id="map-conditions" aria-labelledby="map-conditions-title">
                 <h3 id="map-conditions-title">Conditions</h3>
@@ -399,7 +434,10 @@
                 <h3 id="session-settings-title">In-Car Settings</h3>
                 <dl id="session-settings"></dl>
               </section>
-              <canvas id="map" aria-label="Recorded lap route"></canvas>
+              <div id="session-map">
+                <canvas id="map" aria-label="Recorded lap route"></canvas>
+                <span id="map-track-flag"></span>
+              </div>
               <section class="map-sector-times" aria-labelledby="map-sector-times-title">
                 <h3 id="map-sector-times-title">Sector Times</h3>
                 <table>
@@ -474,7 +512,7 @@
                 </select>
                 <label><input id="track-pedals" type="checkbox" checked> Brake and Throttle</label>
                 <span id="track-activations" class="actions" role="group" aria-label="Track driving aids"></span>
-                <button id="pop-out-track" data-ui-icon="pop" class="button-secondary" type="button">Pop Out</button>
+                <button id="pop-out-track" data-ui-icon="pop" class="button-secondary" type="button">Pop Out Track View</button>
               </div>
               <div class="track-location-key">
                 <span class="track-road-key" title="Approximate road surface estimated from the GPS route">Estimated Road</span>
@@ -495,7 +533,7 @@
                 <button id="choose-summary-channels" data-ui-icon="sliders" type="button" aria-haspopup="dialog">Select Summary Channels</button>
                 <button id="export-summary-image" data-ui-icon="download" class="button-secondary" type="button" aria-label="Export Image for Vehicle Performance">Export Image</button>
                 <button id="toggle-summary-fullscreen" data-ui-icon="full" type="button" aria-haspopup="dialog">Full Screen</button>
-                <button id="pop-out-summary" data-ui-icon="pop" class="button-secondary" type="button">Pop Out</button>
+                <button id="pop-out-summary" data-ui-icon="pop" class="button-secondary" type="button">Pop Out Session Summary</button>
               </div>
             </div>
             <div class="summary-performance-switch" role="group" aria-label="Session Summary Category">
@@ -567,11 +605,11 @@
   <p id="tpr-update-status" role="status"></p>
   <div class="actions">
     <button id="install-tpr-update" type="button" hidden>Install and Restart</button>
-    <form method="dialog"><button>Close</button></form>
+    <form method="dialog"><button class="button-secondary" data-ui-icon="close">Close</button></form>
   </div>
 </dialog>
 <dialog id="folders">
-  <form method="dialog"><div class="dialog-title"><h2>Settings</h2><button value="close" aria-label="Close">Close</button></div></form>
+  <form method="dialog"><div class="dialog-title"><h2>Settings</h2><button class="button-secondary" value="close" aria-label="Close" data-ui-icon="close">Close</button></div></form>
   <div id="settings-tabs" role="tablist" aria-label="Settings Sections">
     <button id="settings-tab-display" type="button" role="tab" aria-controls="settings-panel-display" aria-selected="true">Display</button>
     <button id="settings-tab-audio" type="button" role="tab" aria-controls="settings-panel-audio" aria-selected="false" tabindex="-1">Audio</button>
@@ -592,6 +630,15 @@
         </div>
         <p id="settings-channel-note" hidden>Open a recording to choose its telemetry channels.</p>
         <div class="appearance-settings">
+          <label>Telemetry Graph Scroll Speed
+            <select id="telemetry-graph-scroll-speed">
+              <option value="10">10%</option><option value="20">20%</option><option value="30">30%</option>
+              <option value="40">40%</option><option value="50">50%</option><option value="60">60%</option>
+              <option value="70">70%</option><option value="80">80%</option><option value="90">90%</option>
+              <option value="100" selected>100%</option><option value="125">125%</option><option value="150">150%</option>
+              <option value="175">175%</option><option value="200">200%</option>
+            </select>
+          </label>
           <label>Racing Line Spread
             <select id="racing-line-spread" aria-describedby="racing-line-spread-note">
               <option value="1">1×</option>
@@ -632,7 +679,7 @@
             <input type="range" id="text-scale" min="75" max="150" step="5" value="100">
           </div>
         </div>
-        <button id="reset-interface-colours" type="button">Reset All Interface Colours</button>
+        <button id="reset-interface-colours" class="button-secondary" type="button">Reset All Interface Colours</button>
       </section>
     <section class="settings-section" aria-labelledby="measurement-units-title">
       <h3 id="measurement-units-title">Measurement Units</h3>
@@ -729,12 +776,12 @@
   </div>
   </div>
   <div class="settings-footer">
-    <button id="reset-settings" type="button">Reset All Settings</button>
+    <button id="reset-settings" class="button-secondary" type="button">Reset All Settings</button>
     <button id="check-tpr-update" data-ui-icon="update" type="button" hidden>Check for Total Telemetry Updates</button>
   </div>
 </dialog>
 <dialog id="community-laps-dialog" aria-labelledby="community-laps-title">
-  <div class="community-dialog-header"><h2 id="community-laps-title">Community Laps</h2><form method="dialog" class="actions"><button id="close-community-laps" class="button-secondary">Close</button></form></div>
+  <div class="community-dialog-header"><h2 id="community-laps-title">Community Laps</h2><form method="dialog" class="actions"><button id="close-community-laps" class="button-secondary" data-ui-icon="close">Close</button></form></div>
   <form id="community-filter-form" class="filter-bar community-filters">
     <label>Track<select name="track" aria-label="Track"><option value="">All</option></select></label>
     <label>Layout<select name="layout" aria-label="Layout"><option value="">All</option></select></label>
@@ -763,11 +810,11 @@
     <button id="best-lap-export-local" type="button">Export Locally</button>
     <button id="best-lap-export-discord" type="button">Export to Discord</button>
     <button id="best-lap-export-community" type="button">Upload to Community Server</button>
-    <button id="best-lap-export-cancel" type="button">Cancel</button>
+    <button class="button-secondary" id="best-lap-export-cancel" type="button">Cancel</button>
   </div>
 </dialog>
 <dialog id="channel-dialog">
-  <form method="dialog"><div class="dialog-title"><h2>Select Telemetry Channels</h2><button value="close">Done</button></div></form>
+  <form method="dialog"><div class="dialog-title"><h2>Select Telemetry Channels</h2><button class="button-secondary" value="close">Done</button></div></form>
   <div class="actions channel-modes">
     <button id="channel-select-tab" aria-pressed="true">Select channels</button>
     <button id="channel-order-tab" aria-pressed="false">Order channels</button>
@@ -784,7 +831,7 @@
 </dialog>
 <dialog id="graph-dialog" aria-labelledby="graph-dialog-title">
   <form id="graph-form">
-    <div class="dialog-title"><h2 id="graph-dialog-title">Select Active Telemetry Graphs</h2><button type="button" id="cancel-graphs">Cancel</button></div>
+    <div class="dialog-title"><h2 id="graph-dialog-title">Select Active Telemetry Graphs</h2><button class="button-secondary" type="button" id="cancel-graphs">Cancel</button></div>
     <label class="check" hidden><input id="mergeSummaryBrakes" type="checkbox"> Merge Front and Rear Brake Temperatures</label>
     <label class="check" hidden><input id="mergeSummaryEngineTemperatures" type="checkbox"> Merge Engine Oil and Water Temperatures</label>
     <p id="summary-channel-note" hidden>Top Speed, PRM peak, temperatures, and tyre pressures show the highest reading per lap. Virtual Energy and Fuel show usage per lap. Finish-line channels show the last reading before the crossing. ABS and TC time active is measured in seconds.</p>
@@ -806,13 +853,13 @@
 </dialog>
 <dialog id="merge-dialog">
   <form id="merge-form">
-    <div class="dialog-title"><h2 id="merge-title">Chart Overlays</h2><button type="button" id="cancel-merge">Cancel</button></div>
+    <div class="dialog-title"><h2 id="merge-title">Chart Overlays</h2><button class="button-secondary" type="button" id="cancel-merge">Cancel</button></div>
     <input id="merge-search" type="search" placeholder="Find a channel" aria-label="Find a graph channel">
     <div id="merge-options"></div>
     <div class="actions"><span id="merge-count"></span><button id="submit-merge">Apply</button></div>
   </form>
 </dialog>
-<dialog id="preset-dialog"><form id="preset-form" method="dialog"><h2 id="preset-dialog-title">Save Telemetry Preset</h2><label>Preset name<input id="preset-name" required maxlength="60"></label><div class="actions"><button type="button" id="cancel-preset">Cancel</button><button>Save</button></div></form></dialog>
+<dialog id="preset-dialog"><form id="preset-form" method="dialog"><h2 id="preset-dialog-title">Save Telemetry Preset</h2><label>Preset name<input id="preset-name" required maxlength="60"></label><div class="actions"><button class="button-secondary" type="button" id="cancel-preset">Cancel</button><button>Save</button></div></form></dialog>
 <dialog id="confirm-primary-driver" aria-labelledby="confirm-primary-driver-title">
   <h2 id="confirm-primary-driver-title">Confirm Your Driver Name</h2>
   <label>Recorded driver name <select id="primary-driver-choice"></select></label>

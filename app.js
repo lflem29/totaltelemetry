@@ -50,6 +50,8 @@ let referenceSessionLapId;
 let manualReference = undefined;
 let loadGeneration = 0, ready = false;
 let view = 'library';
+let windowFocus = 'main';
+let resumeTrainerScan;
 const listScrollPositions = new Map();
 const listScrollContainers = {
   library:['library','session-wrap','imported-laps-table','results-distance'],
@@ -73,6 +75,144 @@ function node(tag, text, className) {
   if (className) el.className = className;
   return el;
 }
+function trackCountryKey(name) {
+  return String(name ?? '').normalize('NFD').replace(/\p{M}/gu,'').toLowerCase()
+    .replace(/[^a-z0-9]+/g,' ').trim();
+}
+const tracksByCountry = {
+  bh: ['Bahrain','Bahrain International','Bahrain International Circuit','Sakhir'],
+  be: ['Spa','Spa-Francorchamps','Circuit de Spa-Francorchamps'],
+  br: ['Interlagos','Autódromo José Carlos Pace','Autódromo de Interlagos'],
+  fr: ['Le Mans','Circuit de la Sarthe','Le Mans 24h','24 Heures du Mans','Mulsanne Circuit',
+    'Paul Ricard','Circuit Paul Ricard','Le Castellet'],
+  it: ['Monza','Autodromo Nazionale Monza','Autodromo Nazionale di Monza',
+    'Imola','Autodromo Enzo e Dino Ferrari','Autodromo Internazionale Enzo e Dino Ferrari'],
+  jp: ['Fuji','Fuji Speedway','Fuji International Speedway'],
+  pt: ['Algarve','Algarve International Circuit','Autódromo Internacional do Algarve','Portimão','Portimão Circuit'],
+  qa: ['Qatar','Lusail','Lusail International','Lusail International Circuit','Losail International Circuit'],
+  es: ['Barcelona','Catalunya','Circuit de Barcelona','Circuit de Catalunya','Circuit de Barcelona-Catalunya'],
+  gb: ['Silverstone','Silverstone Circuit','Silverstone International'],
+  us: ['Sebring','Sebring International Raceway','COTA','Circuit of the Americas',
+    'Daytona','Daytona International Speedway','Laguna Seca','WeatherTech Raceway Laguna Seca',
+    'Road Atlanta','Michelin Raceway Road Atlanta','Long Beach','Grand Prix of Long Beach',
+    'Streets of Long Beach','Streets of Long Beach Circuit'],
+};
+const trackCountryCodes = new Map(Object.entries(tracksByCountry).flatMap(([country,names]) =>
+  names.map(name => [trackCountryKey(name),country])));
+// Public-domain PNGs from Flagpedia, embedded for offline use on Windows.
+const trackFlagImages = {
+  be: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAjBAMAAAAUF1WdAAAAD1BMVEXvM0AAAAD92iX4oi2okRgdxzYaAAAAGUlEQVQoz2MQBAMRJTAwYICAUcFRwWEhCADCrTMjCu9IjwAAAABJRU5ErkJggg==',
+  bh: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAYCAMAAAC/Wk/yAAAANlBMVEXaKRz52Nb98O/dOS3ysKvbLiH/+vn////odm7hU0n41NHfRjv75ePunJbqhn7voZvri4Tzt7OphiblAAAAaUlEQVQoz52TSw6AMAhES0tLsX7vf1kXJkY35OmsJ8ADJtmtqdcUyB7Ky2BGs9aRUdZCKh6e2IxNncKE4G8YQTB5c9RaK4SxeS8UJgL/Y6StOQxdz3UaZhR0QvwUOigMfdwPUYDhkjCuJ9MHCXu7EJvFAAAAAElFTkSuQmCC',
+  br: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAcCAMAAAAkyw3kAAAAkFBMVEUAlED/ywAwJoEOlzwemjdQSI83oDHjxQZKpC2fthhGN3NAM3VZU5fywAjEmyQ/NYf5yQFoU101K4OVd0OvuRRzdKTSwQuOshx8ryFjqifCvQ+p0MFGP4y8w8q+0tKXrLjwyATrxwXltRC+lyhkXp+JdW12XlWkgji0uM+rqnXr8vDS593K4tmZflSJj7ROQ3x/jyqZAAAA70lEQVQ4y82T2RKCMAxFTaEKBSwUcQEUF9y3//87IwVxpEp9cbyPmTNZbpJO56/U7WphxghgZLRzVg9QPasFM20oZX9MOpmDFwaOE4QeLCbv08UAfUYKsT5AbKq5sY8ceQhJf6zyZIiNeawGmYeB4atThhxiPzsektku4i6SW8VQ0hOAtStE6kZZMkVyI2NPTpmDypOqMo2SLGVVdGA2QAchLtnLKWqAdemAins+eifzaaN0PUzICTYniurpWb2hwp6lQzjFjJzQnC5V9lSGr8ppXC5Wbwx/WeH1wwr1j+KLM9M/XPkKvs4r6D/Xz3QDO1IMs+uu/zEAAAAASUVORK5CYII=',
+  es: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAApVBMVEX6vQCtFRnBPxP3tgCkSRTxsQC9miCtkjL3ugDcdwrVkwndpwauUEi3k3ecLQyvGx01YomtXy3Zhha+gw+4LiCzn4jKeBKyYgjmoAOkXUK/RhC1kJmmKh+0oKCbYwN5OAWWHxSVi0HypQNcdGsDAgC9g1j6vgSWhnLfsSXCn169cE24eBuaNwzQaiOYagW8bxWIOhqoKhPLdq4yUHR+UgVZLWaBHkAs3esWAAAAk0lEQVQ4y+WTVxLDIAxESQwBAwb33tKc3sv9j5YbWJp8JvurNzsrzYpMkCI/BU6RIt9phqIcJSOpEGBu7c2WA+iXOWmbtTmTACh42PdelSgwp+d2nXdvTjuAc3X5vL6qJo4XQEZ9qd8PXaR7yDE5GFOf6XbNRrmB8cgcKaUraJm5z4NiE4RLH3FyIUaG6Pb85XN9AIg9CvrV7UGSAAAAAElFTkSuQmCC',
+  fr: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAbBAMAAAD8PtBdAAAAD1BMVEUAJlT////OESbvr7aqtsYrjF9NAAAAGUlEQVQoz2NgAAMWQTAwUgIDhlHBUUG8ggBpKyX5efKDZQAAAABJRU5ErkJggg==',
+  gb: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAUCAMAAADImI+JAAAANlBMVEX////w8vfyxcx8jbJCWpAOLHFVa5sBIWnIEC7WTGLnv8qAkLTheYpecqHx0digrMfz3+T21dqBS5WQAAAApUlEQVQoz8WTyxpFMAyEpyqOuhTv/7IntImmurAzC59kfsIIhA5wnn6iASMLgzbIT2Fk6joUaAUKBsiJm+kJ0iyuR1mQBam8Cex1dINkZ6EesSZwrR8JfdYWl7AcbCRw5ypytYmPpy6w3X6jL8HXL6PxOODgTPYEcnXmFe94cuBsdJzwpIFrRwK3WPkJLQqL2aUoUVisXjOvLizWWNyMVljrV0gz/wdhEi0lRIbcAAAAAElFTkSuQmCC',
+  it: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAbBAMAAAD8PtBdAAAAElBMVEXOKzcAkkb///+q28EBkkbvt7tlcfnnAAAAGUlEQVQoz2NwFAQBYSUwCGCAgFHBUUG8ggBTFC/I4rFoIQAAAABJRU5ErkJggg==',
+  jp: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAAOVBMVEW8AC3dfJPMPF7ILFHQTGvuvcjADzn////55urjkaXyzte9BTHqrbvDHEP++fr77/Hst8PmobHXZ4H4lhdsAAAAcUlEQVQ4y9XTuw6AIAyF4XKVclXf/2FNjDF0OMjgwj9/YWgLbZPRkjA4Zhc+YbB0Z8MYHp6efB7BmOgtRQyroQ6aCmEm0Q6hklBBqCXUEHoJPYRm9kUr4QkhS8gQttK70vBmHM1tRkyS/7me+Xtc+hdeTWcZDIhvaeAAAAAASUVORK5CYII=',
+  pt: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAbCAMAAAA5zj1cAAAA3lBMVEX/AAAAZgDjeAn6AAAEYwDcogDtUwqbtwDmXhr5QT76fHz+/v62xOLf5PJ6pgC/zgCpvAD1LwCYswCjuADuYyutwwD6MC/1ZwDXxADjjADuSgDsAADllgDkqgDo3wDkswDvIwDZ1wDSqQBclgDopwDpxADoaxJ+rADcjwreTADrNwCKqwA1fgBRhgDM0gAZbQDq6gDrOgD8EhLvRAr22M3qk1L6OTbsfip4lMmZrNg7hADjFADRggDyBADkmDXcvzH0dFOTrhryRjl9jiS2ozbcXEvrMwAAWgDz9fry9PltbfP7AAAA0ElEQVQ4y+XTxxKCQBAEUNgl56CIAZUgihkQzDn//w95t8rBs/b5naZ7CPItxKf8MKRGEf4CDstl0+s47SLYNaj7KKqvexUYDjTuhuMY9zkvhOBkOg0ZIcsEJtzYGICKMbZ4UZJE3toiBoAGq3ElUZbFEkdXEQDH7ATNF8vlYo7ajg1AljXz/CnLD4unG1UA+gp11WeSNNMPnaAGQMo1zygVhBTtm806dEdFHVxOScLvWi5d0Iw2JI+9fq1RKep6paoaHbT0b9bjM/j/fuYzfAEwIRPN3DfXmAAAAABJRU5ErkJggg==',
+  qa: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAQBAMAAACW+SCeAAAAKlBMVEX///+KFTiWLEzPnq3ly9OiRWH+/f2+fJH+/Pz8+PncuMPcucOxY3uwYXgli/3YAAAAQElEQVQY02NgAAE2d0VBJAAWY+CwxSLIMCsQi0ojQSwqWbCoZDPFptIZm0psTsIqiF27KbFOwu742djMtCHsJAAW/xQZyhbn1gAAAABJRU5ErkJggg==',
+  us: 'iVBORw0KGgoAAAANSUhEUgAAACgAAAAVBAMAAADGNLEtAAAALVBMVEX////GU3LZjKGzGUINM2PsxtAYPWotT3hed5enma46WoBPa46zGkMkR3Jrgp+6ntXWAAAAiklEQVQY02Nwc0lJcQMSxghgw+CRVdaWkVXWooQEGFxaPLxKWjxcGJCBn1fJExAWRAJglUuAKlEEPdyXgA1A0e62LTu9bFt2CopF3iCh9LItKE5yX5tVe31tVgmq9pL0NLcy95RQJMAAdiUQo2ifCQUoKrECY0xgw6CEBWDXLogFYBfECrBahM1JAItMTcEiMDpsAAAAAElFTkSuQmCC',
+};
+const countryNames = new Intl.DisplayNames('en-AU',{type:'region'});
+function trackCountryFlag(track, fallback) {
+  const country = trackCountryCodes.get(trackCountryKey(track)) ?? trackCountryCodes.get(trackCountryKey(fallback));
+  if (!country) return;
+  const flag = node('img',undefined,'track-country-flag');
+  flag.src = 'data:image/png;base64,' + trackFlagImages[country];
+  flag.alt = countryNames.of(country.toUpperCase());
+  flag.title = flag.alt;
+  return flag;
+}
+function trackLabel(tag, text, venue) {
+  const label = node(tag,text);
+  const flag = trackCountryFlag(venue,text);
+  if (flag) label.prepend(flag);
+  return label;
+}
+
+function carNameKey(name) {
+  return String(name ?? '').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+const carManufacturers = {
+  adess: ['ADESS','ADE'],
+  alpine: ['Alpine','ALP','a424'],
+  astonmartin: ['Aston Martin','AM','valkyrie','vantage'],
+  bmw: ['BMW','BMW','mhybridv8','m4lmgt3'],
+  cadillac: ['Cadillac','CAD','vseriesr'],
+  chevrolet: ['Chevrolet','CHEV','corvette','z06lmgt3','c8rgte'],
+  duqueine: ['Duqueine','DUQ','d09'],
+  ferrari: ['Ferrari','FER','499p','296lmgt3','488gte'],
+  ford: ['Ford','FORD','mustang'],
+  genesis: ['Genesis','GEN','gmr001'],
+  ginetta: ['Ginetta','GIN','g61ltp325'],
+  glickenhaus: ['Glickenhaus','SCG','scg007'],
+  isottafraschini: ['Isotta Fraschini','IF','tipo6'],
+  lamborghini: ['Lamborghini','LAM','huracan','sc63'],
+  lexus: ['Lexus','LEX','rcflmgt3'],
+  ligier: ['Ligier','LIG','jsp325','jsp320'],
+  mclaren: ['McLaren','MCL','720s'],
+  mercedes: ['Mercedes-AMG','AMG','mercedes','amg'],
+  oreca: ['ORECA','ORECA','07gibson'],
+  peugeot: ['Peugeot','PEU','9x8'],
+  porsche: ['Porsche','POR','963','911'],
+  toyota: ['Toyota','TOY','gr010','tr010'],
+  vanwall: ['Vanwall','VAN','vandervell'],
+};
+const manufacturerPrefixes = Object.entries(carManufacturers).flatMap(([id,[name,,...aliases]]) =>
+  [name,...aliases].map(alias => [carNameKey(alias),id]));
+// Rasterised marks from Simple Icons (CC0); the Lexus emblem is from Wikimedia Commons (Lexus Logo.svg).
+const manufacturerBadgeImages = {
+  astonmartin: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAALCAYAAAA5vw7pAAACw0lEQVR4AayUWYiOURjHjy1L1qxhkD3LjS3LhS3JcmO/IUshW4Qi2eVC1pJIoVCSbEWUXaHkgqwhRGhmavaZZpqmmd/v63un6Zv5mubrq+d3/s973vOe5zznfc5pHEIogG9p5A9ztYNE60DHX0hnrBwTKGPSAWkkg7n2w1gYHGcMehJ6QDpjFZtAZyY9Ao0g0ZrQ0Qrcva5oL5gKwyGy1jhtwV1viWobaV7Dlzhv0MWgNbeB9uD8rgE39KeZBr2hGxjT2E3x67LLdGZEH2/l4Rocg2UwC0aDu4mEXJp86Af2I2EXjUF3oJZhKdoM3sNVWAnaU5q30BEuwg1YAo7z2yv4UZxR+MYoRI2JBP+aMWfysBQOg2uNbUiUAH1hPs0IWAV34DashmhyF/iE5xag3aM5By7MeSzFmzwfgn0wETTn3YZzEBxfgtqHxOwB7TzQ/CuPcYpB868vx3HBd9E1MBIWQMwMHHPizSR0PDgwD3WntqBzwVJBQibNAVgHP+A/7AUX/godBO7+V/QCuGMLUUvHv/sd/yM8hL4wAVz4ZvQ3aJbOHBwTd0Nz8N1Mz9UU/GpLTCB6cQZnCPSETWAClkkX/NOwBwzm7vzCvw/boQ9YWtatO+44N8BxnhPVRe9k3FEwwRWosUz4FH4bKALPg0l1x7cyzqK1LFkCNQf6y603x2bxwkDvUBfnTl7Cfwkm4Th1A8/Wt0m6e8d5tkwsg0X46gf0BTwC/9AJ1D7r31hreTY2ktwcmPxt3W8G0m0gD/xQ/AowgeloJzAwEqIzoO9BVNfTeOvNQE3eby0JN+MTfTVvNx7rt1QScNZhNP5eb53z+P/AHba8PBeWgf2T6R8Hz8ES+ol6/c1GP4N/z0vBQ28ZVdLXIEs1gShIOY417K1yHX83eFV6ATzD99byYN/CzwZvExP3lvMbLwlvN16lZlUAAAD///Ksso0AAAAGSURBVAMAGvex5/r9UeIAAAAASUVORK5CYII=',
+  bmw: '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',
+  cadillac: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAATCAYAAADWOo4fAAAC+klEQVR4AdSXWchNURSA928ohKKkiBQyvBhClJQHyoM3IkmJB2UqSjxQPCgPKDI8KPFgiEyZh1DGFIqIB5ExMmQW4vtu52i795z7n/v/Un+tb6+911p7n732Pnufe5uFEL7BrybKNxNoz+SVrxR1TQTnylRDBxNwB6bQagXrYAns+k/wmJplJT2c63z0ZxNAh50Uj2EubISJMCliNvXJDWAkfeJxyusL8d8oyHXi2oIL/BLtYoc0AdqhuwU8g/4wLmIA9YbI1Ho6HcbvhIpg8s+JVzpbSJyA7acUbcAMj6FTzlBvyEE/S79q5+oe/uMFcW7uQJoE3cJfO6BhuQV0gUH/iIGMk8dqfEUXpiOxyjKLlPIdOJQ4ZqLL382e2G7WyBHiy8eJ23X4i8r0JPBkokuqPIHXJWsIs9AX4WFEekYwFRYvBieZh8+Ln5FXdy6Lk6c6ZlINFa/Qj8TjNbWdeo+INdSztvsU9jwZjsM7eys6i17Yz2Xg1R4/+wAxnk1UcA7qEuU7oPGLBaSvE9WqUofXQfP4hN/tr4UP9InlYNJ4keg/KiuB/Yn3TaLrU07cJPJYxAAzamQz8Z7DlAe0ldMWMVkJ7E4C+qLzJhXbxxC3pwpb8DWW3oyhpDthvURWAumrs48IPzRuZzWMn0BsHh/xNQYP8A7GUPZaxGQloH89hdfmfbSHaQQ6j3n4qsl3nO0KMIQYP5g/0V4MvgHefJdo+01ai66QvAScVAuiL4CD3UKfgDnwDm5HePXRrFmW0uMaXIZR8Aj8zeUPyaHUn4BfcmOcywLaFZKXgIGuhK/RYBq+813RroKH3JvKw2vMCux+4o2ZRv0tuOqokmg35j2tu9APFK9lf6oMo3Ee7OfY2rvRtp9fcM+Xz8FUKdUSqIwOwd8urk5rnD6gOfoquGpO2m+H1+YqbKPBmA5oV3ID2v8ed9CvYBNcAccwzjFNxtcWczGpNYGsUf25MB5HS3AifdD+PNfmLslYbNvAc2VMJ+ru1lF0o+Q3AAAA///S3ki/AAAABklEQVQDAG2FVqyrUYjKAAAAAElFTkSuQmCC',
+  chevrolet: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAQCAYAAABQrvyxAAABKklEQVR4AcxWPQ4BYRD1U0hcQUMkKo0LiNZPp9ISvQOIRpTiArQKrShEpRJnoFC5gUYivEmszI4tvtnZWPJezJu8b2ZeopBK2D9PjLAQz8MjigDht0fwMsoASdyjIex2BAXoYOxcQVhN0Oz68soApJc4p6cgrCZodklvgQ7m29dcoD6BE0fCpoLrXM83DZhelwEawlSBHjoSNhVc53q+tpi+hb7zAHs0OK4QN/BfkBeHNEnzAFVqMOZYHXd5FgfQT/tBPS/AggTjhdVxl1kcUAQ5Sp6gAGmILsixg5gpCbsKrvOPYuqBawqw4o133cf3QEnYVXCdXxZTa1xTgAwaGwPx1ATN7hE23cEPKEALykI8N0Gzeyw3UQDZC6u1/0jD7vG9izKAb/CvxAsAAP//yF+R4gAAAAZJREFUAwC8q5ERNgGzZAAAAABJRU5ErkJggg==',
+  ferrari: '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',
+  ford: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAASCAYAAAAdZl26AAAEgklEQVR4AazWd+j/UxTH8Y+9N9myd8mM7FFWyCp/kBGSwh+SlZCRRGREFJmRkc0fyMymzJBNslf2fD5+fp+v7+/3/X1/v2+/fDqvzzn3nnvf95xzzz33zjqYuZ95SzR1m3Bd+C38PRX+qP3LZJCn1v+eztwt4ouHmSKGTGTi7A06PrwdGPJ+/PywajgrzBkWDVuGPcIB4ehw+mQcE9dHt1WysXPEzwhrBt/6IO7b98f3DbOEGdKMHLilL4jex/Fnw3ph1/BF2ClcGd4IFv46/ni4M4jspfGzJ+OSuD66x5KNNefNZN/YMf5l2DnsHT6bDLt0ffK4NC0HFm60lPDBY5NXCr+Gh8OP4d6wQVgsiL5IieZstckgtZ6u/VUQgNgU9GctQYhNoiX7903Rt8ajtb8P1j4p7js/xOcPU9DUDjyR9oGwYLg72NYP4yuE0SRyDN68TpEUKUYN5RfqvyEsFTjHqdGQkmukmx6tkvKjwIZb44sEQWRf4r80dIDBIrV/3S+Hn8NBYTySt0+mFGnz3kpGn/fH4G/jF4ehY+8knxu2C9sGaSeNEidEhzfKt56KHxes6dwNOCAy39XJiffih4WJ0KkNYtjc8dWDNFs6bhekFydrTlpj5QQLPxQXxaGu5hh6vR42xcaQwiDAC6Wx3iwcED2nnjH1T4hE8cFGbhxE+6o4RzaJbxTk6z3xmaF1mnRhmB69lFKG3M8BpVCOydf6Z0ivNEIURfquZNXlhPi6wRY/HxcdOZw4QreNSOMLzoVMUHbHHzUYrJbymrAjB+ITIpXA1jofwwkuIZFXUTgmN+dLKZVstfFSYq769glHBQdYvwA4E84M/bXpZIN0TpwYceC5hh4c1PrYuLR8mhuDNIlNIhXikCRRjw0Yz1AOyXt90tOOkK/oT2qpJM7Ja7UdTmXzwORzwkTo0wbtGZ7jwKYJcni4YM1pksgbP1QqlSvWcLtuGH8kuD+ujiPO4ox0QZHp3bra39ThRo8NGG8X3Pav1qGYxMYlZf32tJsx6K8EkfNu8b6R33WNIQvsV6/tB4d1mdp3BHO3jyPRYcARNTittIq4i0naXFC/ObHBPP25saXOu8nunpPjLrDYGBIkNtpRNv/JAaN+6s/FdHPcbSev70seTaqNycO+ixI+CYjORbZ+jeWCwiAlfcctK/cXqB857LsTgkAITOJg2f6eCZ4bsSmIY86OsTelYSubJ9Xo2iMkirZX1ESBwYxiKGP0iyIwajhxWMFerIOOMwyqOdDmLHk09MOhddopBeDM5CFJL28vNqg6nja7pdwhjNBwB0Y6EtyQLoq1kz205Lrc5ZDxe9XvzpASif8LSQkpZGfsivOoOgkIG9ZqFU8JlTDxP2LQf62xkpNuu0RAdfEGcnhE+LKG2zF5bDF139PCs9kD7LT0o3FibU+VreOCwVBzvURVJ233itR1vlQ9acOGpkybZuTAcBaDz6vhyWAhu3N57XmD+i0f7YpD5mJzEF1GR6YH8inJnsZKpkPu1aliscFzW5B8e5fGecZLr8Tp0z8AAAD//7SjKewAAAAGSURBVAMAqV4J2lfnvtgAAAAASUVORK5CYII=',
+  lamborghini: 'iVBORw0KGgoAAAANSUhEUgAAACkAAAAwCAYAAACMuVOlAAAGd0lEQVR4AcyYdagtVRSH59nx7OZh1x8WFopYWNiJjYmtYIuBiYEiYnchdqFgi4qBiF2gDzsQCxW79fsOe727Z87M3BP36Tus36zYa/ass3PtPVUx/G8CVfwK/qnBm9gWBePAwDRMkDPz1Z/BHcBgYCX6FE2fx+G/gKfAQDRMkN/zRQNcA74KsK4L4UEzIujzJHwGsDYYiKx4oBd5yXcNALFDdvehSHatmBt5BbAnGIr80KAVTM+LuwODewZ+PjgIGNQR8JPBGeA68Ch4AjwIrgRbgJ5pmCB/5yvrAlttTfjR4GbwELgb3ASuASeA3cDOYC9wKbgB+OfOho9KwwRZrfwPDN+Bz8GH4F3wPvgMaAu8ij4HWAkcAxYGrTSWQcaHtkR4CdjFthxiLb2SrP6ZJNazsQ7yCz5zL7CVNoBfC+zWr+AHgDqaps6Y28YqSFvPYObNK89kZ/pl6PqI7ZFXBNKLPtowbJCzU7lroa2HWEsu+LZwXng7ystA2tRHG4YJ0rH0LZXPAtpoJgrnB/mOczW6rf4b3GEBa6ZBgnQpscsWb662q8QuXSez7oM8D3AnugLeSv0GeSK1uRbC+qKV8R4PzgJBbgDKs/I4EzRSv0Ge1ljT6AW34nI8CHI8h3xsCHW8nyAPSRU44O3upPbMNkuesRT9nXSZu9bBCnXoJ8ijUgV23dNJ7pe5fjoGzZ4uqrx8cUWfpPYT5IK85dYHK/bw0SMWwM+cEla4E8l34HE4qJL5Z9VW9Bqk3aHvN6kG9+Ykjspew2N98CMYjcyUunz8cJexxmD6pfljHwmukUlsZRunUtdKxc19NGDVOnuvQV6eXt4lcdkiPnqAa+S5+P0EPGaYZyKWKBrBlK5UoNJLkI7F6XQG7jIevEy13A6jcooayW8cSak7zHJwjxqwEt2XtDzTT6Zi1DE5LZ55Fz+P7gHLsemivhR6r/RCchwHF7BJtESS3kq8xPyXJUNFMcXKTfmYcXvMF+fwc8wZhHV7xFD2aLEQDuaQz8E3AjnFhOl7dnuImi2vqUc5Fm0XfM848sPSu1vDVwd2u3axTFEU7j7+GUFxmfy3ZcuIdtKI2JNkgqvjgTyiRWIDwNShWLqcSJ6PNDqZzIYM+C4NVbQFuWTVGf0RYLeZDzprb0S3xW2BO5GDnFTKwT9A0UcgdqhukmxLySWgRG1BVhNVXzS9+gRhR+D4dMl4HdmZ+wA8KOp1uNhCXrXsF4WJm6YJy805PaBZ5LF4J4WE8VFZ0kts+aQ5nmwB4d6bzCU2saSVFb9hkuuebUDCbvf+yG7+EndPmd6EeI5HLW7hoZ+YYAXotWTr2PQX1JaWjQ78sqWs7YvqnwzkG4Frruuwx4zbkt9ccPNP/Sc2Bek9Dn5F9fDukmIXCcsDtkbIcmex3G6UN8HhY4Cux/rYsnLXYXco5cbF3H+lg+NP7k2ETW8XeUNmd5lRWya28pHh4SR/BG87A71HuWP5T7j1epmAWKamlsy9rGRvDCa9VmYXmCzEzKWocIGWB/wzyqfysPVhJXLBty43i+gtA6zN0NuCtOnt1k2o3rON47PtIH8KfpLL1HEIGwIT2egN1A6ZmTscrMvDXOw26vd3PCqPtiBtAceFF1OnV97L1TlRHFO2GmLhlufBajEVUE3pXGI8LVLUIXeod5CWBtEDiCPUFqRelju4lat4G4Pj1PHnH1HGNIl2TVL+/hvY4uYCsUPewkWCkZ97OoU+DELehnzs7Y+jwQj/uePTRR1zhxy/HYHHWsDrlW3gQcsi/AX6orogvQ2LSpwwIcu385FwVeL3JC6z60zllG1BJ4Y7knov8E93+dUFmV97eEubv+R4C91tzm0xlp84k6+XHL6G+1GXIcRiPh4/gDZyonaVV4M0WQgnk4eQ5V6Cyl06/LhjyxtbbSK2RieByYdDwrXPyaBstpOvrb5ThSfLqq1rMc8zH1spXvAoa0uox52OwyJaSXs+ix2n/hF3LqFs9+tXRf6dSDJKPtWWPCeVxi5h19kKrmGpqHg2CeaKZtqq5pBe2iv3C1cH37HnVlOoIg/Sw7oplT5xRn5MJUOeM16P3ZlrK8VpElPf5L5vHbZo6xnHbeq8hupzuze0DW6TzxwtmS8j7jLxRdc692z1tkt6yycbDNIBP3X2hZggmrxDdHu0O+xebf85DNKE1fEQH89bMmz/KzdIs2A3fQMxzZdPUfgXAAD//+p1QccAAAAGSURBVAMA158Z4i6qP88AAAAASUVORK5CYII=',
+  lexus: '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',
+  mclaren: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAHCAYAAABOfc6SAAABUUlEQVR4AdSSTStFURSGj+sjwkSi+BWUosjARMqAAQkDQwZmRBRiImMTYzHyA0wxkP9hYEARIR/X85zO0ul0f8C9p/fZ71prr87e++xTSmrnaWerK/AF5aAWDjDKZt/hBY6hAf5VzQdoYpcncAstUAeLEPolKFU6wDATj+A1YamuGM278UpyTmJugWCnQBd5J0R9jbgZtiFqW8SNYL6J38MGTIM6ZXiGN6iHcvEAZxSvoQOUC/wQjIDyS7jRPC7iXJ4BkvEcu8QPcAjGU/gY+Gvs4/ZO4gdgnz15LqgvgTpnaINUcQCv65XKHKxDyAUuI8FXQe0xeKXSS1yUfYMUfe83XtQsBTeNpbLHtW7IhiDk+2eyxD/DD7qc5al5gD6iT2iFHjiCkF9sIhI85rziuIX8DUTtiV7Vz+DCWCo3lAbZcJe5PcF8Vgv7iADPx6RJ8gcAAP//YKHkAwAAAAZJREFUAwA0yEerqKtgwgAAAABJRU5ErkJggg==',
+  mercedes: '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',
+  peugeot: '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',
+  porsche: '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',
+  toyota: 'iVBORw0KGgoAAAANSUhEUgAAADAAAAAhCAYAAACfiCi5AAAFTUlEQVR4AbSYV6gsRRCG15wTxosRETFgejALPiiCvoiZq2IAr4oBA5gFE2bFHEEFFQVRHwTFLIgoBlT0SRC9mHMWc/i+dntOb53uPbOee5f6u6r+qp7pnp7tMIsOFsxveS6zPjgNPAX+acDY6cQ2ANZBzU7+bwdW47a3gdzQH7HngyvA7qAlxi4n+D6wjvX/wL4drAEmlkk7cCt3+At8CY4GLfFJx1iNM2dxinngc+C1b0T3lj4d8AZPcEWf1jHoso5Pcm+4RQK2x4+yHUTM2w/uC5DFax+P470eQy8GxooVxiWcRdAh3gOd5QOMrYCN2RD9CCjlHJwVQZSVIM4FpTyMsybwWl7zE+wse2L8Cc4GTRnXge+pdQkoxZv5Z32rJIN9UfBL98LSCbbXXBtuHVDKxTjfgKrUOrAcmQ5h+RQdBZ9SOdykTZMDYcxDJTmZ8jiQxdhR2Wnoj+HN8+ljJlmF0jbZNswpiR1YldBPIErtnY45+v7J1WIHiuvALcDXA5Xk0lTOXMytpNg2O9OFYge+6iKjxk6jbtPLF/+BjJdBFl+P/Bo4BWd+nF6rEczXSeGyA98mpl44tS1ZD3VsbrzErhYB+xT+6oVdM73XDbXAkOvamjuwP4GVQRaH3RUz++rfKM4ALdm5CLxZ2Nl8PhvorUFLnHW8Vxk/H+cqkMW2On0PcgceyJGh9o935dAu1WU4f4OXwLKglMNLZwb7sBD3tXoFzms762COyAV4blNQnTyoZQfmYPivRyV5NJX/FfLxacj5B/2ZFGeGDEcRavAuhdOh73AJOdcQwoNDKXI9tSv7tnBeG9XJr1gldxd+FhfYOXbAVTaT6ustCiyNHTmopmxE5CPwaYDcenB9xQVxmZB8c/CvtgNbBPLJ4OueRGGP70MvbLmbG3ivuIhCD16zKDDXDhT+WNON1iFkOKTCd9B5GWpW4q7UB+M1hf8l79XropN0IF7wAIgVgDcVmEmcwZx2bdTjMOJ+9E3gWpDFOsIV3weT+Yl0rQNLTXSF6ck2/ERoG+WGTByMfwK4F8xGXB9G6tc64AwxkjShM26O33HCa8X0vSJhB54J5HnBn9RNC0yj0kENvi99TUh82g7EJ74uSdOGCq6veGxs5e7SCvTglyDHszSqk3l24LPOnTJemDKzNaOuTb+tSp62WrEW/0YIuADOtwPycWl3VfTgYqwvnHlybu2Lg4ehHPcQn+0+ejOSNgelOCl0e6F7iDgfozp5r7P6GS8WaZ6VCzeZbqmTQfEqmETeDsluY9KqnEfAuPOxOsOYw+Rcnblx+usi6ObsyMI/Arv8bFKefQk1xXvbBttSJnUjHAPxPGold4h91wYPMtYRd1J8B1yty02YHPSM4vHRe8dEJ5mOix3wPOqusUsYGr+gywMJblVcwMqAXyJsSMmdWToNe1/4+EpDDWybm0LthNgBSYfXoftdZwh9P4E4nPFVG6Yk5UbMnORUCmN+0auEEuVBxZyH8LwnKolben3blohc1DqQY742ceEw5ucW9/VxF2tMeOhR13BqjYTzo5dPtjsqwmVx/+SWPvsjelwHTPSGVn5Hp4DvobOKu0ZPUuV/xyOhB5EiPZl+MLAxyaHYGLwOfM/9AODrgduJnAvqKR1TMWbqgFUcvk0wHMJn0Q4xKon1XTM+xJPPqE2jnrpyXO1D2YZ6XheVxM64e5Xz1Of3qBRoFTagFavxu0Fax0XpDuyWbFoJ1DjT/K/5v3Ca9Vuou1f5XrAxvRJDkl/o/MLmkxLO++5CPXyXXx9CtcFzEH5h2BLtRzTr+l87Ft8RQk0m/wIAAP//rMp6TgAAAAZJREFUAwBnbN88eJEzxwAAAABJRU5ErkJggg==',
+};
+function carLabel(tag, text, ...names) {
+  const label = node(tag,text);
+  const manufacturer = [...names,text].map(carNameKey)
+    .map(name => manufacturerPrefixes.find(([prefix]) => name.startsWith(prefix))?.[1]).find(Boolean);
+  if (manufacturer) {
+    const [name,initials] = carManufacturers[manufacturer];
+    const badge = node('span',undefined,'car-manufacturer-badge');
+    badge.dataset.manufacturer = manufacturer;
+    badge.role = 'img';
+    badge.setAttribute('aria-label',name);
+    badge.title = name;
+    const image = manufacturerBadgeImages[manufacturer];
+    if (image) badge.style.setProperty('--manufacturer-mark','url(data:image/png;base64,' + image + ')');
+    else badge.dataset.initials = initials;
+    label.prepend(badge);
+  }
+  return label;
+}
+
+// First livery row for each model in the Le Mans 2026 sprite atlas.
+const sessionCarSprites = [
+  [0,/^(astonmartin)?valkyrie/], [2,/^(toyota)?tr010/], [4,/^(cadillac)?vseriesr/],
+  [5,/^(bmw)?mhybridv8/], [6,/^(genesis)?gmr001/], [9,/^(alpine)?a424/],
+  [12,/^(ferrari)?499p/], [15,/^(peugeot)?9x8/], [18,/^oreca07/],
+  [37,/^(chevrolet)?(corvette)?z06/], [38,/^(mclaren)?720s/], [40,/^(ferrari)?296/],
+  [41,/^(astonmartin)?vantage.*(lm)?gt3/], [43,/^(bmw)?m4.*(lm)?gt3/],
+  [50,/^(mercedes)?amg.*(lm)?gt3/], [54,/^(ford)?mustang/], [55,/^(lexus)?rcf/],
+  [59,/^(porsche)?911.*gt3/],
+];
+function renderSessionCarThumbnail(session) {
+  const thumbnail = $('session-car-thumbnail');
+  const names = [session?.model,session?.car].map(carNameKey);
+  const sprite = sessionCarSprites.find(([, pattern]) => names.some(name => pattern.test(name)));
+  thumbnail.hidden = !sprite;
+  if (sprite) thumbnail.style.backgroundPositionY = sprite[0] / 61 * 100 + '%';
+}
+
 const uiIconPaths = {
   folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2M3 7v12h16l3-8H7l-4 8',
   wave: 'M2 12h4l3-8 5 16 3-8h5',
@@ -88,6 +228,7 @@ const uiIconPaths = {
   bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12a2 2 0 0 0 4 0',
   sliders: 'M5 3v5m0 4v9m7-18v9m0 4v5m7-18v2m0 4v12M2 8h6v4H2zm7 4h6v4H9zm7-7h6v4h-6z',
   bookmark: 'M10 3H6a1 1 0 0 0-1 1v17l7-4 7 4v-9M17 2v8m-4-4h8',
+  clearBookmark: 'M10 3H6a1 1 0 0 0-1 1v17l7-4 7 4v-9M13 6h8',
   request: 'M8 3v10m-4-4 4 4 4-4M3 15v5h8m11-4a5 5 0 1 1-10 0 5 5 0 0 1 10 0Zm-5-3v3l2 1',
   close: 'M6 6l12 12M18 6 6 18',
   trash: 'M3 6h18M9 6V4h6v2m4 0-1 14H6L5 6m5 4v6m4-6v6',
@@ -128,30 +269,12 @@ function option(select, label, value) {
   el.value = value;
   select.append(el);
 }
-const headerStatus = $('status');
-function fitHeaderStatus() {
-  headerStatus.style.removeProperty('font-size');
-  if (!headerStatus.textContent || !headerStatus.clientWidth) return;
-  const naturalWidth = headerStatus.scrollWidth;
-  if (naturalWidth <= headerStatus.clientWidth) return;
-  const baseSize = parseFloat(getComputedStyle(headerStatus).fontSize);
-  const fitted = Math.max(10, Math.floor(baseSize * headerStatus.clientWidth / naturalWidth * 10) / 10);
-  headerStatus.style.fontSize = Math.min(baseSize, fitted) + 'px';
-}
-new ResizeObserver(fitHeaderStatus).observe(headerStatus);
-document.fonts.ready.then(fitHeaderStatus);
-
 const statusTimers = new WeakMap();
 function setStatus(element, text, {error = false, temporary = true} = {}) {
   clearTimeout(statusTimers.get(element));
   statusTimers.delete(element);
   element.classList.toggle('status-error', error);
   element.textContent = text;
-  if (element === headerStatus) {
-    if (text) headerStatus.title = text;
-    else headerStatus.removeAttribute('title');
-    fitHeaderStatus();
-  }
   if (text && temporary) {
     statusTimers.set(element, setTimeout(() => setStatus(element, ''), 20_000));
   }
@@ -238,8 +361,8 @@ function updateLoadedReferenceLabel(label) {
     (label.dataset.referenceLap == null || String(reference.lap.id) === label.dataset.referenceLap));
 }
 function referenceLapCells(driver, track, layout, car, time, version) {
-  return [node('td', driver || 'Unknown Driver'), node('td', track || 'Unknown'),
-    node('td', layout || 'Unknown'), node('td', car || 'Unknown'),
+  return [node('td', driver || 'Unknown Driver'), trackLabel('td', track || 'Unknown',track || layout),
+    node('td', layout || 'Unknown'), carLabel('td', car || 'Unknown'),
     node('td', lapTime(time), 'numeric-cell session-best'), node('td', version || 'Unknown')];
 }
 function renderSessionDetailsMatchup(session, currentLap, comparison) {
@@ -270,7 +393,7 @@ function renderLoadedSessions() {
     const details = [session.driver, session.trackLayout !== session.track ? session.trackLayout : '',
       session.car, session.recorded && dateLabel(session.recorded),
       currentLap?.number != null ? 'Lap ' + currentLap.number : '', time];
-    output.replaceChildren(node('strong', session.track || session.filename), details.filter(Boolean).join(' · '));
+    output.replaceChildren(trackLabel('strong', session.track || session.filename,session.trackName), details.filter(Boolean).join(' · '));
   };
   renderSessionDetailsMatchup(selected, lap, secondary ? reference : null);
   show('loaded-session', selected, lap, 'No session loaded');
@@ -306,7 +429,7 @@ for (const [name, setting] of Object.entries(visualizerSettings)) {
   };
   $(name + '-tab').onclick = () => openVisualiser(name);
 }
-function setView(name) {
+function setView(name, recordScope) {
   const changingView = name !== view;
   if (changingView) {
     if (view === 'records') notifiedRecord = undefined;
@@ -331,7 +454,7 @@ function setView(name) {
   if (!showTelemetry) stop();
   if (name === 'library') { renderLibrary(); renderLoadedSessions(); }
   if (name === 'records') {
-    renderRecords();
+    renderRecords(recordScope);
     void refreshFriendRecords();
     if (changingView) {
       void refreshSharedRecordLaps();
@@ -466,7 +589,6 @@ function applyAppearance() {
   root.style.setProperty('--graph-bg', graphBackground);
   root.style.setProperty('--graph-text', lightGraphBackground ? '#171e1a' : '');
   root.style.setProperty('--text-scale', String(textScale()));
-  fitHeaderStatus();
   for (const popup of popoutWindows.values()) {
     if (!popup.closed) popup.document.documentElement.style.cssText = root.style.cssText;
   }
@@ -500,6 +622,7 @@ function settingsFields() {
   $('interface-background-colour').value = backgroundColour(settings.interfaceBackgroundColour, defaultInterfaceBackgroundColour);
   $('graph-background-colour').value = backgroundColour(settings.graphBackgroundColour, defaultGraphBackgroundColour);
   $('text-scale').value = settings.textScalePercent ?? 100;
+  $('telemetry-graph-scroll-speed').value = settings.telemetryGraphScrollPercent ?? 100;
   $('racing-line-spread').value = racingLineSpread();
   $('settings-channels').disabled = !ready;
   $('settings-channel-note').hidden = ready;
@@ -541,10 +664,10 @@ previousStatsDriverSelect.onchange = async () => {
 function resultsDistanceKey() {
   return JSON.stringify([settings.results,settings.primaryDriver,settings.previousStatsDriver]);
 }
-function favouriteDistanceRow(name, km) {
+function favouriteDistanceRow(label, km) {
   const item = node('li');
   const row = node('div', undefined, 'favourite-distance-row');
-  row.append(node('span',name),node('small',distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
+  row.append(label,node('small',distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
   item.append(row);
   return item;
 }
@@ -568,14 +691,14 @@ function renderResultsDistance() {
     const value = node('dd', favourites.length ? undefined : '—');
     if (favourites.length) {
       const list = node('ol');
-      list.append(...favourites.map(({car,km}) => favouriteDistanceRow(car,km)));
+      list.append(...favourites.map(({car,km}) => favouriteDistanceRow(carLabel('span',car),km)));
       value.append(list);
     }
     return [node('dt', category), value];
   }));
   const tracks = preferred?.favouriteTracks ?? [];
   $('favourite-tracks').hidden = !tracks.length;
-  $('favourite-track-list').replaceChildren(...tracks.map(({track,km}) => favouriteDistanceRow(track,km)));
+  $('favourite-track-list').replaceChildren(...tracks.map(({track,km}) => favouriteDistanceRow(trackLabel('span',track),km)));
   $('distance-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverChoices.length);
   const problem = report?.data?.errors;
   $('distance-status').textContent = report?.error
@@ -763,10 +886,10 @@ function matchesReferenceSession(session) {
   return compatibleReferenceSessions(selected,session);
 }
 
-function bindTelemetryRow(row, open) {
+function bindOpenableRow(row, open, title = 'Open in Telemetry Viewer') {
   row.classList.add('session-row');
   row.tabIndex = 0;
-  row.title = 'Open in Telemetry Viewer';
+  row.title = title;
   row.onclick = event => {
     if (!event.target.closest('button')) void open();
   };
@@ -781,17 +904,17 @@ function renderComparisonLaps() {
   const imported = [...(settings.comparisonLaps ?? [])].reverse();
   const entries = filterLibraryEntries('imported-lap-filters', imported).filter(entry =>
     !compatibleReferencesOnly || entry.path === selected.path || matchesReferenceSession(entry));
-  $('imported-laps-empty').textContent = !imported.length ? 'No laps imported yet.' :
-    compatibleReferencesOnly ? noCompatibleReferences : 'No imported laps match these filters.';
+  $('imported-laps-empty').textContent = !imported.length ? 'No saved laps yet.' :
+    compatibleReferencesOnly ? noCompatibleReferences : 'No saved laps match these filters.';
   $('imported-laps-table').hidden = !entries.length;
   $('imported-load-guide').hidden = !entries.length;
-  setListCount('imported-list-count',entries.length,imported.length,'Imported Lap');
+  setListCount('imported-list-count',entries.length,imported.length,'Lap');
   $('imported-laps-empty').hidden = Boolean(entries.length);
   positionListActions('imported',!entries.length);
   $('comparison-lap-list').replaceChildren(...entries.map(entry => {
     const row = node('tr');
     const actions = node('td');
-    bindTelemetryRow(row,() => openImportedLap(entry));
+    bindOpenableRow(row,() => openImportedLap(entry));
     const add = node('button', useAsReferenceLabel, 'reference-add');
     addButtonIcon(add, 'bookmark');
     add.hidden = !matchesReferenceSession(entry) || selected.path === entry.path;
@@ -905,7 +1028,7 @@ function communityLapRow(lap, ownerActions) {
         settings.comparisonLaps = await lmu.importCommunityLap(lap.id);
         renderLibrary();
         add.replaceWith(node('span', 'Imported', 'telemetry-status'));
-        communityStatus.textContent = 'Lap saved to Imported Laps.';
+        communityStatus.textContent = 'Lap saved to Community Laps.';
       } catch (error) {
         communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
       } finally {
@@ -1036,6 +1159,7 @@ $('community-server-form').onsubmit = async event => {
     serverSyncUntil = 0;
     lastServerSync = null;
     serverSyncError = false;
+    communityServerVersion = '';
     serverEvents.length = 0;
     renderServerStatus();
     refreshRecordsFromScan();
@@ -1086,13 +1210,17 @@ function recordClassLabel({carClass,lmp2Variant}) {
   return carClass === 'LMP2' ? (lmp2Variant === 'ELMS' ? 'LMP2 ELMS' : 'LMP2 WEC') : carClass;
 }
 
-function recordClassCell(session) {
-  const label = recordClassLabel(session) || 'Unknown';
-  const cell = node('td', label);
-  if (!carClasses.includes(session.carClass)) return cell;
+function recordClassBadge(session) {
+  if (!carClasses.includes(session.carClass)) return;
+  const label = recordClassLabel(session);
   const badge = node('span', label, 'record-class-badge');
   badge.dataset.class = label.toLowerCase();
-  cell.replaceChildren(badge);
+  return badge;
+}
+
+function recordClassCell(session) {
+  const cell = node('td');
+  cell.append(recordClassBadge(session) ?? (recordClassLabel(session) || 'Unknown'));
   return cell;
 }
 
@@ -1140,7 +1268,7 @@ function updateRecordsLoading() {
   $('records-status').hidden = initial;
 }
 function refreshRecordsFromScan() {
-  if (view !== 'records') return;
+  if (view !== 'records' || windowFocus === 'background') return;
   if (recordsFilters.contains(document.activeElement) && document.activeElement.tagName === 'SELECT') {
     recordsRefreshPending = true;
     return;
@@ -1171,6 +1299,7 @@ let serverSyncUntil = 0;
 let serverStatusTimer;
 let lastServerSync = null;
 let serverSyncError = false;
+let communityServerVersion = '';
 const importantServerActions = new Map([
   ['Sending Request','Telemetry Request Sent'],['Sending Response','Request Response Sent'],
   ['Uploading Lap','Lap Uploaded'],['Downloading Lap','Lap Downloaded'],
@@ -1229,6 +1358,9 @@ function renderServerEvents() {
   $('server-sync-health').textContent = !settings.communityConfigured ? 'Community Server is not configured.' :
     serverSyncError ? 'Sync failed. Retrying automatically.' + lastSync :
     lastServerSync ? 'Syncing is working.' + lastSync : 'Waiting for the first sync.';
+  $('server-version-row').hidden = !settings.communityConfigured;
+  $('connected-server-version').textContent = communityServerVersion ?
+    'v' + communityServerVersion : lastServerSync ? 'Not Reported' : 'Unavailable';
   $('server-events-empty').hidden = !!serverEvents.length;
   $('server-events').replaceChildren(...serverEvents.map(({time,text}) =>
     node('li',time.toLocaleTimeString() + ' · ' + text)));
@@ -1351,7 +1483,7 @@ function addRecordNotification(key,text,options = {}) {
     if (dismissed) delete recordNotifications[dismissed];
   }
   writeRecordNotifications();
-  if (window.matchMedia('(prefers-reduced-motion: no-preference)').matches) {
+  if (windowFocus === 'main' && window.matchMedia('(prefers-reduced-motion: no-preference)').matches) {
     notificationArrival?.cancel();
     const bell = $('notifications-button').querySelector('svg');
     notificationArrival = bell.animate(
@@ -1359,6 +1491,18 @@ function addRecordNotification(key,text,options = {}) {
       {duration:1200, easing:'ease-in-out'});
   }
   if (settings.notificationSound === true) playNotificationChime();
+}
+let systemNoticeSequence = 0;
+function notifySystem(text, {error = false} = {}) {
+  if (text) addRecordNotification('system:' + Date.now() + ':' + (++systemNoticeSequence),text,{systemWarning:error});
+}
+function setTrackRecordSyncNotice(text) {
+  const key = 'system:track-record-sync';
+  const current = recordNotifications[key];
+  if (current?.text === text) return;
+  delete recordNotifications[key];
+  if (text) addRecordNotification(key,text,{systemWarning:true});
+  else if (current) writeRecordNotifications();
 }
 function resolveRecordNotification(key) {
   recordNotifications[key].dismissed = true;
@@ -1378,7 +1522,7 @@ function renderRecordNotifications() {
   $('notifications-empty').hidden = !!pending.length;
   $('dismiss-all-notifications').disabled = !pending.some(([,entry]) => !entry.requestId);
   $('notification-list').replaceChildren(...pending.map(([key,entry]) => {
-    const item = node('li',entry.text);
+    const item = node('li',entry.text,entry.systemWarning ? 'system-warning' : undefined);
     const actions = node('div',undefined,'actions');
     item.append(actions);
     if (entry.requestId) {
@@ -1584,6 +1728,7 @@ async function refreshFriendRecords(changed = false) {
     const result = await lmu.syncTrackRecords();
     const {records,minimumGameVersion} = Array.isArray(result) ? {records:result,minimumGameVersion:null} : result;
     if (generation !== friendConnectionGeneration) return;
+    communityServerVersion = result.serverVersion || '';
     const availabilityChanged = privateRequestsAvailable !== (result.privateRequestsAvailable === true);
     privateRequestsAvailable = result.privateRequestsAvailable === true;
     const policyChanged = minimumGameVersion !== communityMinimumGameVersion;
@@ -1594,7 +1739,7 @@ async function refreshFriendRecords(changed = false) {
       refreshRecordsFromScan();
     }
     rememberFriendRecordTimes(records);
-    if (view === 'records') void refreshTrophyStandings().catch(() => {});
+    if (view === 'records' && windowFocus !== 'background') void refreshTrophyStandings().catch(() => {});
     let syncStatus = '';
     if (!privateRequestsAvailable) syncStatus = 'Update the Community Server to share Track Records and request telemetry.';
     else if (settings.shareTrackRecords && !settings.primaryDriver) syncStatus = 'Confirm your primary driver to share Track Records.';
@@ -1605,21 +1750,21 @@ async function refreshFriendRecords(changed = false) {
           minimumGameVersion + ') or have no recognised game version.'
         : 'No official laps for your primary driver are available to share. Check that the LMU Results folder is set.';
     }
-    $('friend-records-status').textContent = syncStatus;
     const requests = lmu.trackRecordRequest ? await lmu.trackRecordRequest('list') : null;
     if (generation !== friendConnectionGeneration) return;
+    setTrackRecordSyncNotice(syncStatus);
     lastServerSync = new Date();
     serverSyncError = false;
-    void checkTprUpdate();
+    if (windowFocus !== 'background') void checkTprUpdate();
     if ($('server-events-dialog').open) renderServerEvents();
     if (requests) await updateRecordRequests(requests);
   } catch (error) {
     if (generation === friendConnectionGeneration) {
       serverSyncError = true;
       if ($('server-events-dialog').open) renderServerEvents();
-      $('friend-records-status').textContent = error.message.includes('route is no longer available')
+      setTrackRecordSyncNotice(error.message.includes('route is no longer available')
         ? 'Update the Community Server to sync Track Records.'
-        : 'Friends’ records could not sync. Retrying automatically.';
+        : 'Friends’ records could not sync. Retrying automatically.');
     }
   } finally {
     friendSyncBusy = false;
@@ -1700,7 +1845,9 @@ for (const medal of $('record-medals').children) medal.prepend(trophyIcon());
 
 const trophyDialog = $('trophy-standings');
 const trophyFriend = $('trophy-friend');
-const trophyMedals = ['Gold','Silver','Bronze'];
+const trophyMedals = [
+  {name:'Platinum',points:5}, {name:'Gold',points:3}, {name:'Silver',points:2}, {name:'Bronze',points:1}
+];
 const trophyButton = $('open-trophy-standings');
 trophyButton.prepend(trophyIcon());
 
@@ -1716,12 +1863,15 @@ function calculateTrophyStandings(records, ownKey) {
     if (!entries.has(driver) || entries.get(driver).time > record.time) entries.set(driver,record);
   }
   const drivers = new Map();
+  const trackTrophies = [];
   let chance;
   for (const entries of contests.values()) {
     const ranked = [...entries.entries()].sort((a,b) => a[1].time - b[1].time);
-    let rank = 0, nextRank = 0;
+    const winnerMedal = ranked.length >= 3 ? 0 : 1;
+    const medalForRank = rank => rank === 0 ? winnerMedal : rank + 1;
+    let rank = 0, nextRank = 0, earnedMedal;
     for (const [index,[key,record]] of ranked.entries()) {
-      if (!drivers.has(key)) drivers.set(key,{key,name:record.driver,medals:[0,0,0],points:0});
+      if (!drivers.has(key)) drivers.set(key,{key,name:record.driver,medals:trophyMedals.map(() => 0),points:0});
       if (ranked.length < 2) continue;
       if (index > 0 && ranked[index-1][1].time !== record.time) {
         nextRank = rank;
@@ -1729,21 +1879,42 @@ function calculateTrophyStandings(records, ownKey) {
       }
       if (rank < 3) {
         const driver = drivers.get(key);
-        driver.medals[rank]++;
-        driver.points += 3 - rank;
+        const medal = medalForRank(rank);
+        driver.medals[medal]++;
+        driver.points += trophyMedals[medal].points;
+        if (key === ownKey) earnedMedal = medal;
       }
       if (key === ownKey && rank > 0) {
         const gap = record.time - ranked[nextRank][1].time;
-        if (nextRank < 3 && (!chance || gap < chance.gap)) chance = {record,gap,rank:nextRank};
+        if (nextRank < 3 && (!chance || gap < chance.gap)) chance = {record,gap,medal:medalForRank(nextRank)};
       }
     }
+    trackTrophies.push({record:ranked[0][1],medal:earnedMedal,eligible:ranked.length >= 2,
+      driverCount:ranked.length,hasOwnRecord:entries.has(ownKey)});
   }
   const standing = [...drivers.values()].sort((a,b) => b.points - a.points ||
-    b.medals[0] - a.medals[0] || b.medals[1] - a.medals[1] || a.name.localeCompare(b.name));
-  return {standing,chance};
+    b.medals[0] - a.medals[0] || b.medals[1] - a.medals[1] || b.medals[2] - a.medals[2] || a.name.localeCompare(b.name));
+  trackTrophies.sort((a,b) => a.record.track.localeCompare(b.record.track) ||
+    a.record.layout.localeCompare(b.record.layout) ||
+    (recordClassLabel(a.record) || '').localeCompare(recordClassLabel(b.record) || ''));
+  const unentered = ownKey ? trackTrophies.filter(contest => !contest.hasOwnRecord) : [];
+  const easyPoints = unentered.find(contest => contest.driverCount === 1) ??
+    unentered.find(contest => contest.driverCount === 2);
+  return {standing,chance,trackTrophies,easyPoints};
 }
 
-function showTrophyStandings({ownKey,standing,chance}) {
+function viewTrophyContest(record) {
+  notifiedRecord = undefined;
+  setCompatibleReferencesOnly(false);
+  $('hide-friend-records').checked = false;
+  trophyDialog.close();
+  const {track,layout,carClass,lmp2Variant} = record;
+  setView('records',{trackName:track,trackLayout:layout,carClass,lmp2Variant});
+  $('records-table').scrollTop = 0;
+  $('record-track').focus({preventScroll:true});
+}
+
+function showTrophyStandings({ownKey,standing,chance,trackTrophies,easyPoints}) {
   $('trophy-content').hidden = !standing.length;
   $('trophy-status').textContent = standing.length ? '' : 'No eligible shared lap times yet.';
   $('trophy-status').hidden = Boolean(standing.length);
@@ -1771,30 +1942,59 @@ function showTrophyStandings({ownKey,standing,chance}) {
       const difference = own.points - friend.points;
       $('trophy-friend-name').textContent = friend.name;
       $('trophy-comparison').textContent = difference
-        ? Math.abs(difference) + (Math.abs(difference) === 1 ? ' point ' : ' points ') +
-          (difference > 0 ? 'ahead of ' : 'behind ') + friend.name
-        : 'Tied on points with ' + friend.name;
-      $('trophy-comparison-rows').replaceChildren(...trophyMedals.map((medal,index) => {
+        ? Math.abs(difference) + (Math.abs(difference) === 1 ? ' Point ' : ' Points ') +
+          (difference > 0 ? 'Ahead of ' : 'Behind ') + friend.name
+        : 'Tied on Points with ' + friend.name;
+      $('trophy-comparison-rows').replaceChildren(...trophyMedals.map(({name},index) => {
         const row = node('tr');
-        row.append(node('th',medal,'record-' + medal.toLowerCase()),node('td',String(own.medals[index])),
+        row.append(node('th',name,'record-' + name.toLowerCase()),node('td',String(own.medals[index])),
           node('td',String(friend.medals[index])));
         return row;
       }));
     };
     trophyFriend.onchange();
   }
+  $('trophy-by-track-table').hidden = !ownKey;
+  const trophyEmpty = $('trophy-by-track-empty');
+  trophyEmpty.hidden = Boolean(ownKey);
+  trophyEmpty.textContent = 'Confirm your driver name to see your trophies.';
+  $('trophy-by-track-rows').replaceChildren(...trackTrophies.map(({record,medal:index,eligible}) => {
+    const medal = trophyMedals[index]?.name;
+    const trophy = node('span',medal ?? (eligible ? 'Not Earned' : 'Needs a Second Driver'),
+      'track-trophy ' + (medal ? 'record-' + medal.toLowerCase() : 'track-trophy-missing'));
+    const icon = trophyIcon();
+    icon.setAttribute('aria-hidden','true');
+    trophy.prepend(icon);
+    const cell = node('td');
+    cell.append(trophy);
+    if (!eligible) {
+      const detail = normaliseDriverName(record.driver) === ownKey
+        ? 'You’re the Only Driver with a Registered Lap'
+        : 'Only ' + record.driver + ' Has Registered a Lap';
+      cell.append(node('small',detail,'track-trophy-detail'));
+    }
+    const row = node('tr');
+    row.append(trackLabel('td',record.track),node('td',record.layout),recordClassCell(record),cell);
+    bindOpenableRow(row,() => viewTrophyContest(record),'View Track Records');
+    return row;
+  }));
+  $('trophy-opportunities').hidden = !chance && !easyPoints;
   $('trophy-close-card').hidden = !chance;
   if (chance) {
-    const {record,gap,rank} = chance;
-    $('trophy-close-contest').textContent = [record.track,record.layout !== record.track ? record.layout : '',
-      recordClassLabel(record),number(gap,3) + ' s off ' + trophyMedals[rank].toLowerCase()].filter(Boolean).join(' · ');
-    $('trophy-view-contest').onclick = () => {
-      notifiedRecord = undefined;
-      setCompatibleReferencesOnly(false);
-      $('hide-friend-records').checked = false;
-      trophyDialog.close();
-      renderRecords({...record,trackName:record.track,trackLayout:record.layout});
-    };
+    const {record,gap,medal} = chance;
+    const description = [record.track,record.layout !== record.track ? record.layout : '',
+      recordClassLabel(record),number(gap,3) + ' s off ' + trophyMedals[medal].name].filter(Boolean).join(' · ');
+    $('trophy-close-contest').replaceChildren(trackLabel('span',description,record.track));
+    $('trophy-view-contest').onclick = () => viewTrophyContest(record);
+  }
+  $('trophy-easy-card').hidden = !easyPoints;
+  if (easyPoints) {
+    const {record,driverCount} = easyPoints;
+    const description = [record.track,record.layout !== record.track ? record.layout : '',
+      recordClassLabel(record),driverCount === 1 ? '1 Friend Has Registered a Lap' : '2 Friends Have Registered Laps']
+      .filter(Boolean).join(' · ');
+    $('trophy-easy-contest').replaceChildren(trackLabel('span',description,record.track));
+    $('trophy-view-easy-contest').onclick = () => viewTrophyContest(record);
   }
 }
 
@@ -1821,7 +2021,7 @@ trophyButton.onclick = async () => {
   const load = ++trophyLoad;
   const connection = friendConnectionGeneration;
   $('trophy-status').hidden = false;
-  $('trophy-status').textContent = 'Loading shared Track Records…';
+  $('trophy-status').textContent = 'Loading Shared Track Records…';
   $('trophy-content').hidden = true;
   trophyDialog.showModal();
   try {
@@ -1838,8 +2038,8 @@ function renderRecordMedals() {
   const own = current?.standing.find(driver => driver.key === current.ownKey);
   $('record-medals').hidden = !own || $('hide-friend-records').checked;
   if (!own) return;
-  ['gold','silver','bronze'].forEach((medal,index) => {
-    $('record-' + medal).textContent = own.medals[index];
+  trophyMedals.forEach(({name},index) => {
+    $('record-' + name.toLowerCase()).textContent = own.medals[index];
   });
 }
 
@@ -1867,7 +2067,8 @@ function sharedRecordLapKey(session, lap) {
 }
 
 async function refreshSharedRecordLaps(force = false) {
-  if (!settings.communityConfigured || !lmu.listCommunityLaps || (sharedRecordLookupActive && !force)) return;
+  if (windowFocus === 'background' || !settings.communityConfigured || !lmu.listCommunityLaps ||
+      (sharedRecordLookupActive && !force)) return;
   const lookup = ++sharedRecordLookup;
   sharedRecordLookupActive = true;
   const shared = new Set();
@@ -1875,7 +2076,7 @@ async function refreshSharedRecordLaps(force = false) {
     let pageCount = 1;
     for (let page = 1; page <= pageCount; page++) {
       const result = await lmu.listCommunityLaps({page, background:true});
-      if (lookup !== sharedRecordLookup || result.page !== page) return;
+      if (windowFocus === 'background' || lookup !== sharedRecordLookup || result.page !== page) return;
       for (const lap of result.laps) shared.add(sharedRecordLapKey(lap,lap));
       pageCount = result.pageCount;
     }
@@ -2003,7 +2204,7 @@ function renderRecords(lastSession) {
     const trackKey = JSON.stringify([track, layout]);
     if (previousTrack !== trackKey) {
       const group = node('tr', undefined, 'records-track-group');
-      const title = node('th', [track,layout !== track ? layout : ''].filter(Boolean).join(' · '));
+      const title = trackLabel('th',[track,layout !== track ? layout : ''].filter(Boolean).join(' · '),track);
       title.colSpan = 11;
       group.append(title);
       rows.push(group);
@@ -2035,7 +2236,7 @@ function renderRecords(lastSession) {
       time.textContent = lapTime(bestLap.time);
       telemetryCell.append(node('span',status,'telemetry-status'));
       if (imported) {
-        bindTelemetryRow(row,() => openImportedLap(imported));
+        bindOpenableRow(row,() => openImportedLap(imported));
         addLoadedLapLabel(time,imported.path,imported.lap.id);
         const action = node('button',useAsReferenceLabel,'reference-add');
         action.type = 'button';
@@ -2067,7 +2268,7 @@ function renderRecords(lastSession) {
               if (connection === friendConnectionGeneration) await updateRecordRequests(requests);
             }
           } catch (error) {
-            if (connection === friendConnectionGeneration) $('friend-records-status').textContent = error.message;
+            if (connection === friendConnectionGeneration) notifySystem(error.message,{error:true});
           } finally {
             pendingRecordRequests.delete(friend.id);
             refreshRecordsFromScan();
@@ -2075,7 +2276,7 @@ function renderRecords(lastSession) {
         };
         referenceCell.append(action);
       } else if (friend.requestable && !settings.primaryDriver) {
-        referenceCell.textContent = 'Confirm Your Driver';
+        referenceCell.textContent = 'Confirm Your Driver Name';
       }
       if (canCompare) {
         const compare = node('button','Compare Best Laps','reference-add');
@@ -2090,12 +2291,12 @@ function renderRecords(lastSession) {
         };
         referenceCell.prepend(compare);
       } else if (imported && ownRecord?.session.resultOnly) {
-        referenceCell.prepend(node('small','Your best lap has no telemetry'));
+        referenceCell.prepend(node('small','Your Best Lap Has No Telemetry'));
       }
     } else {
       time.textContent = lapTime(bestLap.time);
       if (session.path) {
-        bindTelemetryRow(row,() => openSession(session,bestLap));
+        bindOpenableRow(row,() => openSession(session,bestLap));
         addLoadedLapLabel(time,session.path,bestLap.id);
         telemetryCell.append(node('span','Ready to Open','telemetry-status'));
         if (settings.communityConfigured && lmu.exportBestLap &&
@@ -2123,8 +2324,8 @@ function renderRecords(lastSession) {
       if (session.path) referenceCell.append(addReference);
       addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
     }
-    if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
-    row.append(recordClassCell(session), node('td', car), node('td', session.driver || 'Unknown Driver'), time,
+    if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity Unconfirmed'));
+    row.append(recordClassCell(session), carLabel('td',car,session.car), node('td', session.driver || 'Unknown Driver'), time,
       ...[0, 1, 2].map(index => node('td', Number.isFinite(bestLap.sectors?.[index])
         ? number(bestLap.sectors[index], 3) + ' s' : '—', 'numeric-cell')),
       node('td', dateLabel(session.recorded, australianDate), 'record-date'),
@@ -2237,24 +2438,31 @@ function recentSessionRow(session) {
     if (Date.now() - date > oneWeek) timestamp.textContent = dateAndTime;
     else timestamp.append(node('strong', weekdayPeriod(date)), node('small', dateAndTime));
   }
-  const track = node('td');
-  const trackName = node('strong', session.track || session.filename);
+  const track = node('td',undefined,'recent-session-track');
+  const venue = session.trackName || session.track || session.filename;
+  const layout = session.trackLayout || session.track;
+  const trackTitle = layout && trackCountryKey(layout) !== trackCountryKey(venue) ? venue + ' · ' + layout : venue;
+  const trackName = trackLabel('strong',trackTitle,venue);
   const addReference = node('button', useAsReferenceLabel, 'reference-add');
   addButtonIcon(addReference, 'bookmark');
   addReference.hidden = !matchesReferenceSession(session) || (selected.path === session.path &&
     !session.laps.some(item => item.kind === 'complete' && item.id !== lap?.id));
   addReference.type = 'button';
-  addReference.setAttribute('aria-label', addReference.textContent + ': ' + (session.track || session.filename) + ' · ' + dateLabel(session.recorded));
+  addReference.setAttribute('aria-label', addReference.textContent + ': ' + trackTitle + ' · ' + dateLabel(session.recorded));
   addReference.setAttribute('aria-pressed', String(referenceSessionPath === session.path));
   addReference.onclick = event => {
     event.stopPropagation();
     selectReferenceSession(session.path);
   };
-  bindTelemetryRow(row,() => openSession(session));
-  const layout = session.trackLayout;
-  track.append(trackName, node('small', [
-    layout && layout !== session.track ? layout : '', session.car, session.driver
-  ].filter(Boolean).join(' · ')));
+  bindOpenableRow(row,() => openSession(session));
+  const details = node('small');
+  const parts = [recordClassBadge(session) ?? recordClassLabel(session),
+    session.car && carLabel('span',session.car,session.model),session.driver].filter(Boolean);
+  for (const [index, part] of parts.entries()) {
+    if (index) details.append(' · ');
+    details.append(part);
+  }
+  track.append(trackName,details);
   addLoadedLapLabel(track,session.path);
   const comparison = node('td', undefined, 'session-comparison');
   comparison.append(addReference);
@@ -2310,13 +2518,20 @@ async function autoLoadNewTelemetry(recordings, folder) {
   const [latest,...older] = available;
   if (!latest) return false;
   for (const recording of older) pendingTelemetry.delete(recording.path);
-  selectSummaryCategory('vehicle');
-  await openSession(latest);
-  if (ready || selected?.path !== latest.path) pendingTelemetry.delete(latest.path);
-  return true;
+  const notice = $('auto-load-session-notice');
+  notice.hidden = false;
+  try {
+    selectSummaryCategory('vehicle');
+    await openSession(latest);
+    if (ready || selected?.path !== latest.path) pendingTelemetry.delete(latest.path);
+    return true;
+  } finally {
+    notice.hidden = true;
+  }
 }
 
 async function scan() {
+  if (windowFocus === 'background') return;
   refreshResultsDistance();
   if (scanBusy) { runningScanAgain = true; return; }
   if (!settings.telemetry && !settings.results) { renderLibrary(); return; }
@@ -2328,6 +2543,7 @@ async function scan() {
   if (initialScan) showLibraryLoading(true);
   try {
     const response = await lmu.scan();
+    if (windowFocus === 'background') return;
     if (response.stale || telemetryFolder !== settings.telemetry || resultsFolder !== settings.results) {
       runningScanAgain = true;
       return;
@@ -2376,7 +2592,7 @@ async function scan() {
       showLibraryLoading(false);
       renderLibrary();
     }
-    if (!scanFailed) setStatus($('status'), 'Folder scan failed', {error:true});
+    if (!scanFailed) notifySystem('Folder scan failed', {error:true});
     scanFailed = true;
     $('issues').hidden = false;
     $('issue-list').replaceChildren(node('li', error.message));
@@ -2388,7 +2604,7 @@ async function scan() {
 }
 function save(change) {
   Object.assign(settings, change);
-  void lmu.save(change).catch(error => { setStatus($('status'), error.message, {error:true}); });
+  void lmu.save(change).catch(error => { notifySystem(error.message, {error:true}); });
 }
 function fitLapDropdown(select, labels) {
   const style = getComputedStyle(select);
@@ -2704,7 +2920,7 @@ async function exportBestLap(target) {
       rememberSharedRecordLap(session,exportedLap);
     }
     bestLapExportDialog.close();
-    setStatus($('status'), (target === 'discord' ? 'Sent to Discord · ' : target === 'community' ? 'Uploaded to Community Server · ' : 'Exported ') + filename);
+    notifySystem((target === 'discord' ? 'Sent to Discord · ' : target === 'community' ? 'Uploaded to Community Server · ' : 'Exported ') + filename);
   } catch (error) {
     setStatus(bestLapExportStatus, error.message, {error:true});
   } finally {
@@ -3147,7 +3363,7 @@ function extraSummaryOptions(session) {
       renderSessionSummary();
     }).catch(error => {
       if (extraSummary !== request) return;
-      setStatus($('status'), error.message, {error:true});
+      notifySystem(error.message, {error:true});
     });
   }
   return names.map(name => {
@@ -3255,16 +3471,15 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
     ? number(value, telemetryDecimalPlaces(summaryChannelKeys[channel] ?? channel, summaryDecimalDefault(channel))) + (unit ? ' ' + unit : '')
     : '—';
   const heading = node('strong', label);
-  const readout = node('span', '', 'summary-chart-readout');
   const plot = node('div', null, 'summary-chart-body');
   section.append(node('div', null, 'summary-chart-header'), plot);
   section.firstElementChild.append(heading);
-  if (secondReadings) {
-    readout.classList.add('summary-pair-readout');
+  const secondColour = pair && summaryChannelColour(secondKey);
+  if (pair) {
     const legend = node('span', undefined, 'summary-pair-legend');
     pair.names.forEach((name,index) => {
       const item = node('span',name);
-      item.style.color = summaryChannelColour(pair.channels[index]);
+      item.style.color = index === 0 ? colour : secondColour;
       legend.append(item);
     });
     section.firstElementChild.append(legend);
@@ -3280,20 +3495,26 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
   if (isUsage) {
     points = points.filter(point => Number.isFinite(point.value)).sort((a, b) => a.lapNumber - b.lapNumber);
   }
-  const pointLabel = point => point.label + (secondReadings
-    ? ' · ' + pair.names[0] + ' ' + format(point.value) + ' · ' + pair.names[1] + ' ' + format(point.second,secondKey)
-    : ' · ' + format(point.value));
-  const readoutWidth = points.reduce((width, point) => Math.max(width, pointLabel(point).length), 0);
-  readout.style.width = 'calc(' + readoutWidth + 'ch + 12px)';
   const thresholdFor = channel => convert('',hotTemperature(selected?.carClass,
     ['frontBrakes','rearBrakes'].includes(channel) ? 'brakes' : channel),'°C');
   const threshold = thresholdFor(firstKey);
   const secondThreshold = pair ? thresholdFor(secondKey) : undefined;
-  const isHot = (value, limit = threshold) => Number.isFinite(limit) && Number.isFinite(value) && value >= limit;
+  const isHot = (value, limit) => Number.isFinite(limit) && Number.isFinite(value) && value >= limit;
+  const series = (pair
+    ? [['value',firstKey,colour,threshold],['second',secondKey,secondColour,secondThreshold]]
+    : [['value',firstKey,colour,threshold]]).map(([field,channel,traceColour,limit],index) => {
+    const badge = node('span', '', 'summary-chart-readout');
+    badge.style.setProperty('--summary-chart-colour', traceColour);
+    const name = pair ? pair.names[index] + ' ' : '';
+    const describe = point => point.label + ' · ' + name + format(point[field],channel);
+    const characters = points.reduce((width, point) => Math.max(width, describe(point).length), 0);
+    badge.style.width = 'calc(' + characters + 'ch + 12px)';
+    return {field,traceColour,limit,badge,describe};
+  });
   const firstValues = points.map(point => point.value).filter(Number.isFinite);
   const secondValues = points.map(point => point.second).filter(Number.isFinite);
   const values = firstValues.concat(secondValues);
-  const hasWarnings = firstValues.some(value => isHot(value)) ||
+  const hasWarnings = firstValues.some(value => isHot(value,threshold)) ||
     secondValues.some(value => isHot(value,secondThreshold));
   heading.classList.toggle('temperature-hot', hasWarnings);
 
@@ -3319,8 +3540,11 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
     function draw(index) {
       active = index;
       const point = points[index];
-      readout.textContent = point ? pointLabel(point) : '';
-      readout.classList.toggle('temperature-hot', isHot(point?.value) || isHot(point?.second,secondThreshold));
+      for (const {field,limit,badge,describe} of series) {
+        const value = point?.[field];
+        badge.textContent = point && (!pair || Number.isFinite(value)) ? describe(point) : '';
+        badge.classList.toggle('temperature-hot', isHot(value,limit));
+      }
       const ratio = canvas.ownerDocument.defaultView.devicePixelRatio || 1;
       const pixelWidth = Math.round(width * ratio), pixelHeight = Math.round(height * ratio);
       if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
@@ -3329,11 +3553,30 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
       ctx.clearRect(0, 0, width, height);
       if (point) {
         const px = x(index);
-        const value = Number.isFinite(point.value) ? point.value : point.second;
-        const py = Number.isFinite(value) ? y(value) : height / 2;
-        const left = px + readout.offsetWidth + 8 <= width ? px + 8 : px - readout.offsetWidth - 8;
-        readout.style.left = Math.max(0, Math.min(width - readout.offsetWidth, left)) + 'px';
-        readout.style.top = Math.max(0, Math.min(height - readout.offsetHeight, py - readout.offsetHeight / 2)) + 'px';
+        const labels = series.filter(({badge}) => badge.textContent).map(({field,badge}) => {
+          const py = Number.isFinite(point[field]) ? y(point[field]) : height / 2;
+          const w = badge.offsetWidth, h = badge.offsetHeight;
+          const left = px + w + 8 <= width ? px + 8 : px - w - 8;
+          return {badge,w,h,py,left:Math.max(0, Math.min(width - w,left)),
+            top:Math.max(0, Math.min(height - h,py - h / 2))};
+        });
+        const [first,second] = labels;
+        if (second && first.top < second.top + second.h && second.top < first.top + first.h) {
+          const otherSide = first.left >= px ? px - second.w - 8 : px + 8;
+          if (otherSide >= 0 && otherSide + second.w <= width &&
+              (otherSide + second.w <= first.left || otherSide >= first.left + first.w)) {
+            second.left = otherSide;
+          } else if (first.h + second.h + 2 <= height) {
+            const [upper,lower] = first.py <= second.py ? labels : [second,first];
+            const divider = Math.max(upper.h + 1, Math.min(height - lower.h - 1,(upper.py + lower.py) / 2));
+            upper.top = Math.min(upper.top,divider - upper.h - 1);
+            lower.top = Math.max(lower.top,divider + 1);
+          }
+        }
+        for (const {badge,left,top} of labels) {
+          badge.style.left = left + 'px';
+          badge.style.top = top + 'px';
+        }
         ctx.strokeStyle = '#a4b3a766';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -3341,10 +3584,7 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
         ctx.lineTo(px, height);
         ctx.stroke();
       }
-      const series = secondReadings
-        ? [['value',colour,threshold],['second',summaryChannelColour(secondKey),secondThreshold]]
-        : [['value',colour,threshold]];
-      for (const [field,traceColour,limit] of series) {
+      for (const {field,traceColour,limit} of series) {
         ctx.strokeStyle = traceColour;
         ctx.setLineDash(field === 'second' ? [4,3] : []);
         ctx.lineWidth = 1.5;
@@ -3474,10 +3714,10 @@ function summaryChart(key, label, unit, readings, endpoints, secondReadings) {
   if (edgeValues) {
     const ends = node('div', null, 'summary-chart-endpoints');
     ends.append(...edgeValues.map((value, index) => node('span',
-      labels[index] + ' ' + format(value), isHot(value) ? 'temperature-hot' : undefined)));
+      labels[index] + ' ' + format(value), isHot(value,threshold) ? 'temperature-hot' : undefined)));
     plot.append(ends);
   }
-  plot.append(readout);
+  plot.append(...series.map(({badge}) => badge));
   return section;
 }
 function renderMapSectorTimes() {
@@ -4198,6 +4438,9 @@ function renderSessionSummary() {
   void updatePracticeReview();
   updateBestLapExport();
   renderMapSectorTimes();
+  renderSessionCarThumbnail(selected);
+  const flag = trackCountryFlag(selected?.trackName,selected?.track);
+  $('map-track-flag').replaceChildren(...(flag ? [flag] : []));
   const summary = selected?.sessionSummary;
   renderAdditionalConditions(summary?.conditionEndpoints);
   $('map-session-length').textContent = sessionLength(selected?.durationSeconds);
@@ -4732,6 +4975,11 @@ function openGraphPicker(event) {
 $('choose-graphs').onclick=openGraphPicker;
 $('settings-graphs').onclick=openGraphPicker;
 const telemetryNameFields = $('telemetry-name-fields');
+function telemetryDecimalDefaultLabel(key) {
+  const inherited = key === 'tyres' ? null : {tyres:settings.telemetryDecimals?.tyres};
+  return 'Default (' + telemetryDecimalPlaces(key, summaryDecimalDefault(key), inherited) + ')';
+}
+
 function renderTelemetryData() {
   const names = new Set([
     ...defaultTelemetryNames.keys(), ...Object.keys(settings.telemetryNames ?? {}),
@@ -4754,16 +5002,13 @@ function renderTelemetryData() {
     input.placeholder = defaultTelemetryNames.get(key) ?? key;
     input.value = telemetryName(key);
     input.setAttribute('aria-label', source + ' display name');
-    const decimals = node('input');
-    decimals.type = 'number';
-    decimals.min = '0';
-    decimals.max = '6';
-    decimals.step = '1';
+    const decimals = node('select');
+    decimals.dataset.channel = key;
     decimals.setAttribute('aria-label', source + ' decimal places');
     decimals.disabled = key === 'Engine RPM' || key === 'Gear';
-    const fallback = summaryDecimalDefault(key);
-    decimals.defaultValue = String(telemetryDecimalPlaces(key, fallback));
-    decimals.placeholder = String(telemetryDecimalPlaces(key, fallback, null));
+    option(decimals,telemetryDecimalDefaultLabel(key),'');
+    for (let places = 0; places <= 6; places++) option(decimals,String(places),String(places));
+    decimals.value = decimals.disabled ? '0' : String(settings.telemetryDecimals?.[key] ?? '');
     row.append(node('span', source), input, decimals);
     return row;
   }));
@@ -4785,13 +5030,16 @@ $('telemetry-names-form').onsubmit = event => {
     .map(input => [input.dataset.channel, input.value.trim()])
     .filter(([key, value]) => value && value !== (defaultTelemetryNames.get(key) ?? key));
   const telemetryDecimals = {...settings.telemetryDecimals};
-  for (const row of telemetryNameFields.children) {
-    const key = row.querySelector('input[type=text]').dataset.channel;
-    const decimals = row.querySelector('input[type=number]');
+  const decimalSelects = telemetryNameFields.querySelectorAll('select');
+  for (const decimals of decimalSelects) {
+    const key = decimals.dataset.channel;
     if (decimals.disabled || decimals.value === '') delete telemetryDecimals[key];
-    else if (decimals.value !== decimals.defaultValue) telemetryDecimals[key] = decimals.valueAsNumber;
+    else telemetryDecimals[key] = Number(decimals.value);
   }
   save({telemetryNames:Object.fromEntries(entries), telemetryDecimals});
+  for (const decimals of decimalSelects) {
+    decimals.options[0].textContent = telemetryDecimalDefaultLabel(decimals.dataset.channel);
+  }
   if (view === 'records') renderRecords();
   for (const input of telemetryNameFields.querySelectorAll('input')) input.defaultValue = input.value;
   $('telemetry-data-status').textContent = 'Telemetry data settings saved.';
@@ -5777,6 +6025,34 @@ function graphScrollContainer() {
     ? $('telemetry-graphs-panel') : column;
 }
 
+let wheelScrollContainer, wheelScrollPercent, wheelRemainder = 0;
+$('telemetry-graphs-panel').addEventListener('wheel', event => {
+  const percent = settings.telemetryGraphScrollPercent ?? 100;
+  if (percent === 100 || event.defaultPrevented || !event.cancelable || event.ctrlKey || event.metaKey ||
+      event.shiftKey || event.altKey || event.target.closest?.('select,input[type="number"],input[type="range"]')) return;
+  const mode = event.deltaMode;
+  if (!event.deltaY || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+  const scroller = graphScrollContainer();
+  if (scroller.scrollHeight <= scroller.clientHeight) return;
+  let pixels = event.deltaY;
+  if (mode === WheelEvent.DOM_DELTA_LINE) {
+    const lineHeight = scroller.ownerDocument.defaultView.getComputedStyle(scroller).lineHeight;
+    pixels *= parseFloat(lineHeight) || 16;
+  } else if (mode === WheelEvent.DOM_DELTA_PAGE) {
+    pixels *= scroller.clientHeight;
+  }
+  if (wheelScrollContainer !== scroller || wheelScrollPercent !== percent || wheelRemainder * pixels < 0) {
+    wheelScrollContainer = scroller;
+    wheelScrollPercent = percent;
+    wheelRemainder = 0;
+  }
+  const amount = pixels * percent / 100 + wheelRemainder;
+  const wholePixels = Math.trunc(amount);
+  wheelRemainder = amount - wholePixels;
+  event.preventDefault();
+  if (wholePixels) scroller.scrollBy({top:wholePixels,behavior:'instant'});
+}, {passive:false});
+
 function buildCharts() {
   updateActiveLapComparison();
   cornerEventMarkers = [];
@@ -5839,9 +6115,9 @@ function buildCharts() {
       exportImage.disabled = true;
       try {
         const saved = await exportChartImage(row, title, exportImage);
-        if (saved) setStatus($('status'), 'Exported ' + saved);
+        if (saved) notifySystem('Exported ' + saved);
       } catch (error) {
-        setStatus($('status'), error.message, {error:true});
+        notifySystem(error.message, {error:true});
       } finally {
         exportImage.disabled = false;
       }
@@ -6542,9 +6818,9 @@ exportSummaryButton.onclick = async () => {
     try { height = Math.ceil(image.getBoundingClientRect().height); }
     finally { measure.remove(); }
     const saved = await saveMarkupImage(image, width, height, [selected.track, title].filter(Boolean).join(' - '));
-    if (saved) setStatus($('status'), 'Exported ' + saved);
+    if (saved) notifySystem('Exported ' + saved);
   } catch (error) {
-    setStatus($('status'), error.message, {error:true});
+    notifySystem(error.message, {error:true});
   } finally {
     exportSummaryButton.disabled = false;
   }
@@ -7289,10 +7565,11 @@ function renderPlaybackPosition() {
   $('position-section').hidden = false;
 }
 function scheduleRender(){
-  if(renderRequested)return;
+  if(renderRequested || windowFocus === 'background')return;
   renderRequested=true;
   requestAnimationFrame(()=>{
     renderRequested=false;
+    if (windowFocus === 'background') return;
     renderVisualiserLaps();
     if (!ready) return;
     if (view === 'viewer' || popoutWindows.has('graphs')) {
@@ -7337,7 +7614,7 @@ function stop() {
   updatePlaybackButton(false);
 }
 function play() {
-  if(!ready)return;
+  if(!ready || windowFocus === 'background')return;
   if(playing){stop();return;}
   pinned=false;updatePin();
   if(playTime>=lap.end-.01)setTime(lap.start);
@@ -7543,7 +7820,7 @@ async function promptForColourScheme() {
     await lmu.save({colourSchemePromptVersion:version,...patch});
     settings.colourSchemePromptVersion = version;
   } catch (error) {
-    setStatus($('status'),error.message,{error:true});
+    notifySystem(error.message,{error:true});
   }
 }
 for(const [target, controls] of Object.entries(presetControls)){
@@ -7615,15 +7892,19 @@ for (const id of ['enable-shown', 'disable-shown']) $(id).onclick=()=>{
   save({enabled:[...enabled]});
   buildChannels();
 };
-$('pin-session-details').onclick = event => {
-  const button = event.currentTarget;
-  const locked = button.getAttribute('aria-pressed') !== 'true';
+function applySessionDetailsPin(locked) {
+  const button = $('pin-session-details');
   button.setAttribute('aria-pressed', String(locked));
   button.title = locked ? 'Unpin Session Details' : 'Pin Session Details';
   const scrollTop = graphScrollContainer().scrollTop;
   hideScrollThumbs(document.body);
   $('plot-column').classList.toggle('session-details-pinned', locked);
   graphScrollContainer().scrollTop = scrollTop;
+}
+$('pin-session-details').onclick = () => {
+  const locked = settings.sessionDetailsPinned !== true;
+  save({sessionDetailsPinned:locked});
+  applySessionDetailsPin(locked);
 };
 $('toggle-map').onclick=event=>{
   const map = $('map-content');
@@ -7675,67 +7956,201 @@ $('records-tab').onclick=()=>setView('records');
 function initHeaderCarAnimation() {
   const lane = $('header-car-lane');
   const header = lane.parentElement;
+  const brand = header.querySelector('.brand');
+  const nav = trophyButton.parentElement;
   const car = $('header-race-car');
-  const records = $('records-tab');
   const connection = $('server-connection');
+  const lightPanel = $('header-race-lights');
+  const lights = [...lightPanel.children];
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const minimumDelay = 10_000;
   const maximumDelay = 60_000;
   const carCount = 62;
   const wheelFrames = 8;
-  car.style.backgroundSize = `${wheelFrames * 100}% ${carCount * 100}%`;
-  let timer, animation;
+  const minimumGridWidth = 144;
+  // Atlas row ranges for Hypercar, LMP2 and LMGT3, in race-start order.
+  const groups = [[0,18],[18,37],[37,carCount]];
+  const activePasses = new Set();
+  let timer, introPending = false;
 
-  function driveAcrossHeader() {
-    if (headerStatus.textContent || document.querySelector('dialog:modal')) return;
-    const recordsBounds = records.getBoundingClientRect();
+  const canAnimate = () => windowFocus === 'main' && !document.hidden && !reducedMotion.matches;
+  const headerAvailable = () => !document.querySelector('dialog:modal,#auto-load-session-notice:not([hidden])');
+  const randomBetween = (min,max) => min + Math.floor(Math.random() * (max - min + 1));
+
+  function positionLane(useWrappedRow = false) {
+    const navEnd = trophyButton.getBoundingClientRect();
     const connectionBounds = connection.getBoundingClientRect();
-    const middle = (connectionBounds.top + connectionBounds.bottom) / 2;
-    const start = recordsBounds.right + 10;
-    const width = connectionBounds.left - 10 - start;
-    if (width <= 0 || middle <= recordsBounds.top || middle >= recordsBounds.bottom) return;
-
     const headerBounds = header.getBoundingClientRect();
+    const middle = (connectionBounds.top + connectionBounds.bottom) / 2;
+    const end = connectionBounds.left - 10;
+    let start = navEnd.right + 10;
+    if (middle <= navEnd.top || middle >= navEnd.bottom) {
+      const brandBounds = brand.getBoundingClientRect();
+      const aboveConnection = Math.max(nav.getBoundingClientRect().bottom,brandBounds.bottom);
+      // When the header wraps, use the empty space to the left of the status buttons.
+      start = useWrappedRow && aboveConnection <= connectionBounds.top ? Math.max(brandBounds.left,end - 510) : end;
+    }
+    const width = end - start;
+    if (width <= 0) {
+      lane.style.width = '0px';
+      return 0;
+    }
+
     lane.style.left = `${start - headerBounds.left}px`;
     lane.style.top = `${middle - headerBounds.top}px`;
     lane.style.width = `${width}px`;
+    return width;
+  }
+
+  function animateCar(sprite, row, width, duration, wheelRate, easing = 'linear') {
+    sprite.style.backgroundSize = `${wheelFrames * 100}% ${carCount * 100}%`;
+    sprite.style.backgroundPositionY = `${row / (carCount - 1) * 100}%`;
+    const movement = sprite.animate([
+      {transform:'translate(-100%, -50%)', opacity:1},
+      {transform:`translate(${width}px, -50%)`, opacity:1}
+    ],{duration,easing});
+    const wheels = sprite.animate([{backgroundPositionX:'0%'},{backgroundPositionX:'100%'}],
+      {duration:wheelFrames / wheelRate * 1000,iterations:Infinity,easing:`steps(${wheelFrames}, jump-none)`});
+    activePasses.add(movement);
+    const finish = () => {
+      activePasses.delete(movement);
+      wheels.cancel();
+      if (sprite !== car) sprite.remove();
+    };
+    void movement.finished.then(finish,finish);
+  }
+
+  function driveAcrossHeader() {
+    if (!headerAvailable()) return;
+    const width = positionLane();
     const carWidth = car.offsetWidth;
     if (width < carWidth + 24) return;
-    const carIndex = Math.floor(Math.random() * carCount);
-    car.style.backgroundPositionY = `${carIndex / (carCount - 1) * 100}%`;
-    animation = car.animate([
-      {transform:`translate(${-carWidth}px, -50%)`, opacity:1},
-      {transform:`translate(${width}px, -50%)`, opacity:1}
-    ],{duration:Math.max(1500, Math.min(3200, (width + carWidth) * 5)), easing:'linear'});
-    const wheels = car.animate([{backgroundPositionX:'0%'},{backgroundPositionX:'100%'}],
-      {duration:wheelFrames / 28 * 1000,iterations:Infinity,easing:`steps(${wheelFrames}, jump-none)`});
-    const stopWheels = () => wheels.cancel();
-    void animation.finished.then(stopWheels,stopWheels);
+    animateCar(car,randomBetween(0,carCount - 1),width,Math.max(850,Math.min(1900,(width + carWidth) * 2.8)),28);
+  }
+
+  function clearStartLights() {
+    delete lane.dataset.raceStart;
+    lightPanel.classList.remove('top-row-off');
+    for (const light of lights) light.classList.remove('lit');
+  }
+
+  function releaseGrid(width) {
+    lane.dataset.raceStart = 'grid';
+    const entries = [];
+    let time = 0;
+    for (const [first,end] of groups) {
+      for (let row = first; row < end; row++) {
+        if (row + 1 < end && (row === first || Math.random() < .82)) {
+          const farFirst = Math.random() < .5;
+          entries.push({row,time,side:farFirst ? 'far' : 'near'});
+          entries.push({row:++row,time:time + randomBetween(9,32),side:farFirst ? 'near' : 'far'});
+        } else {
+          entries.push({row,time,side:Math.random() < .5 ? 'near' : 'far'});
+        }
+        time += randomBetween(88,148);
+      }
+      time += 90;
+    }
+
+    const baseDuration = Math.max(450,Math.min(960,(width + 80) * .95));
+    const lastLaunch = entries.at(-1).time;
+    const start = performance.now();
+    let next = 0;
+    function launchCar() {
+      if (!canAnimate() || !headerAvailable()) return resetSchedule();
+      const {row,side,time:launchTime} = entries[next++];
+      const progress = launchTime / lastLaunch;
+      // Cars farther back are already rolling faster when they enter the visible gap.
+      const duration = baseDuration * (1.12 - .24 * progress);
+      const easing = `cubic-bezier(.36,${.14 + .12 * progress},.72,${.55 + .07 * progress})`;
+      const sprite = document.createElement('span');
+      sprite.className = 'header-grid-car';
+      sprite.dataset.gridLane = side;
+      lane.append(sprite);
+      animateCar(sprite,row,width,duration,48,easing);
+      if (next < entries.length) {
+        timer = window.setTimeout(launchCar,entries[next].time - (performance.now() - start));
+      } else {
+        void Promise.allSettled([...activePasses].map(movement => movement.finished)).then(clearStartLights);
+        schedulePass();
+      }
+    }
+    launchCar();
+  }
+
+  function countDown() {
+    if (!canAnimate() || document.querySelector('dialog:modal')) return;
+    introPending = false;
+    const width = positionLane(true);
+    if (!headerAvailable() || width < minimumGridWidth) return schedulePass();
+    lane.dataset.raceStart = 'countdown';
+    let next = 0;
+    function lightsOut() {
+      if (!canAnimate() || !headerAvailable()) return resetSchedule();
+      lane.dataset.raceStart = 'lights-out';
+      // Let the lead drivers react to the signal before entering the visible lane.
+      timer = window.setTimeout(() => {
+        if (!canAnimate() || !headerAvailable()) return resetSchedule();
+        releaseGrid(lane.clientWidth);
+      },200);
+    }
+    function switchLight() {
+      if (!canAnimate() || !headerAvailable()) return resetSchedule();
+      if (next === lights.length) {
+        lightPanel.classList.add('top-row-off');
+        timer = window.setTimeout(lightsOut,320);
+        return;
+      }
+      lights[next++].classList.add('lit');
+      timer = window.setTimeout(switchLight,next === lights.length ? 550 : 320);
+    }
+    timer = window.setTimeout(switchLight,180);
   }
 
   function schedulePass() {
-    if (document.hidden || reducedMotion.matches) return;
-    const delay = minimumDelay + Math.floor(Math.random() * (maximumDelay - minimumDelay + 1));
+    if (!canAnimate()) return;
+    if (introPending) {
+      timer = window.setTimeout(countDown,400);
+      return;
+    }
     timer = window.setTimeout(() => {
-      if (document.hidden || reducedMotion.matches) return;
+      if (!canAnimate()) return;
       driveAcrossHeader();
       schedulePass();
-    },delay);
+    },randomBetween(minimumDelay,maximumDelay));
   }
 
   function resetSchedule() {
     window.clearTimeout(timer);
-    animation?.cancel();
+    for (const movement of activePasses) movement.cancel();
+    clearStartLights();
     schedulePass();
   }
 
   document.addEventListener('visibilitychange',resetSchedule);
+  document.addEventListener('close',() => {
+    if (introPending && headerAvailable()) resetSchedule();
+  },true);
   reducedMotion.addEventListener('change',resetSchedule);
-  const layoutObserver = new ResizeObserver(() => animation?.cancel());
-  for (const control of [header,records.parentElement,connection,headerStatus]) layoutObserver.observe(control);
+  const layoutObserver = new ResizeObserver(() => {
+    const stage = lane.dataset.raceStart;
+    if (!stage && !activePasses.size) return;
+    const previousWidth = lane.style.width;
+    const width = positionLane(Boolean(stage));
+    const awaitingGrid = stage === 'countdown' || stage === 'lights-out';
+    if (awaitingGrid ? width < minimumGridWidth : lane.style.width !== previousWidth) resetSchedule();
+  });
+  for (const control of [header,brand,nav,...connection.parentElement.children]) layoutObserver.observe(control);
   schedulePass();
+  return {
+    reset:resetSchedule,
+    start() {
+      introPending = !reducedMotion.matches;
+      resetSchedule();
+    }
+  };
 }
-initHeaderCarAnimation();
+const headerCarAnimation = initHeaderCarAnimation();
 
 $('recent-session-filters').addEventListener('change', event => {
   if (event.target instanceof HTMLSelectElement) renderLibrary({resetRecentSessions:true});
@@ -7805,6 +8220,9 @@ $('text-scale').addEventListener('change', event => {
   save({textScalePercent:event.target.valueAsNumber});
   applyAppearance();
 });
+$('telemetry-graph-scroll-speed').onchange = event => {
+  save({telemetryGraphScrollPercent:Number(event.target.value)});
+};
 $('racing-line-spread').onchange = event => {
   save({racingLineSpread:Number(event.target.value)});
   scheduleRender();
@@ -7850,6 +8268,7 @@ for (const button of settingsFileButtons) {
         settings = result.settings;
         if (category === 'display') {
           cornerTimeLossOpen = settings.cornerTimeLossOpen !== false;
+          applySessionDetailsPin(settings.sessionDetailsPinned === true);
           enabled = new Set(settings.enabled ?? builtIn.Driving);
           setupPresets();
           if (Number.isFinite(settings.summaryHeight)) setSummaryHeight(settings.summaryHeight);
@@ -7881,7 +8300,7 @@ $('reset-settings').onclick = async () => {
   try {
     await lmu.resetSettings();
   } catch (error) {
-    setStatus($('status'), error.message, {error:true});
+    notifySystem(error.message, {error:true});
   } finally {
     button.disabled = false;
   }
@@ -8115,6 +8534,20 @@ function showScrollbar(event) {
 }
 document.addEventListener('scroll', showScrollbar, true);
 
+const scrollFadeEdges = new ResizeObserver(entries => {
+  for (const {target,borderBoxSize} of entries) {
+    const scroller = target.closest('#library,.lap-list-table,.trophy-table,#trophy-by-track-table,.map-card,#trainer');
+    const property = target.matches('.trainer-footer') ? '--trainer-footer-height' : '--scroll-fade-header';
+    const height = borderBoxSize[0].blockSize + scroller.clientTop;
+    scroller.style.setProperty(property,height + 'px');
+  }
+});
+for (const edge of document.querySelectorAll(
+  '#library-tabs, .lap-list-table thead, .trophy-table thead, #trophy-by-track-table thead, .map-card > .card-head, .trainer-footer'
+)) {
+  scrollFadeEdges.observe(edge,{box:'border-box'});
+}
+
 function openPanelWindow(key,title) {
   const popup = window.open('about:blank', key, 'popup');
   if (!popup) {
@@ -8178,7 +8611,7 @@ function togglePanelPopout(key, panel, title) {
   const button = $('pop-out-' + key);
   const label = button.querySelector('.icon-button-label');
   const originalLabel = label.textContent;
-  label.textContent = key === 'graphs' ? 'Dock Telemetry Graphs' : 'Dock Panel';
+  label.textContent = 'Dock ' + title;
   let graphHeader, graphToolbarHome;
   if (key === 'graphs') {
     const toolbar = $('telemetry-graphs-toolbar');
@@ -8264,10 +8697,53 @@ window.addEventListener('resize', () => {
   if (summaryPanel.ownerDocument === document) redrawSummaryPlots();
   scheduleRender();
 });
+let localScanTimer, friendSyncTimer, sharedRecordsTimer;
+let workTimersStarted = false;
+function scheduleWorkTimers() {
+  clearInterval(localScanTimer);
+  clearInterval(friendSyncTimer);
+  clearInterval(sharedRecordsTimer);
+  const inBackground = windowFocus === 'background';
+  friendSyncTimer = setInterval(() => void refreshFriendRecords(),inBackground ? 120_000 : 30_000);
+  if (inBackground) return;
+  localScanTimer = setInterval(scan,5000);
+  sharedRecordsTimer = setInterval(() => {
+    if (view === 'records') void refreshSharedRecordLaps();
+  },60_000);
+}
+function updateWindowFocus(focus) {
+  if (focus === windowFocus) return;
+  const wasInBackground = windowFocus === 'background';
+  windowFocus = focus;
+  document.documentElement.dataset.windowFocus = focus;
+  headerCarAnimation.reset();
+  if (focus !== 'main') notificationArrival?.cancel();
+  if (focus === 'background' && playing) stop();
+  if (wasInBackground) {
+    resumeTrainerScan?.();
+    resumeTrainerScan = undefined;
+    scheduleRender();
+  }
+  if (!workTimersStarted || (!wasInBackground && focus !== 'background')) return;
+  scheduleWorkTimers();
+  if (focus === 'background') return;
+  void scan();
+  void refreshFriendRecords();
+  void checkTprUpdate();
+  if (view === 'records') {
+    refreshRecordsFromScan();
+    void refreshSharedRecordLaps();
+    void refreshTrophyStandings().catch(() => {});
+  }
+  if (view === 'trainer') void scanDriverTrainer(sessions);
+}
+lmu.onWindowFocus?.(updateWindowFocus);
+
 (async()=>{
   settings=await lmu.settings();
   refreshTrainerColdThreshold();
   cornerTimeLossOpen = settings.cornerTimeLossOpen !== false;
+  applySessionDetailsPin(settings.sessionDetailsPinned === true);
   loadRecordNotifications();
   communityMinimumGameVersion = settings.communityMinimumGameVersion ?? null;
   syncVisualizerSettings();
@@ -8302,22 +8778,20 @@ window.addEventListener('resize', () => {
         choosingLmuFolder = false;
       }
     } catch (error) {
-      setStatus($('status'), error.message, {error:true});
+      notifySystem(error.message, {error:true});
     }
   }
   await promptForColourScheme();
+  headerCarAnimation.start();
   void scan();
-  void checkTprUpdate();
-  setInterval(scan,5000);
-  setInterval(() => void refreshFriendRecords(),30_000);
-  setInterval(() => {
-    if (view === 'records') void refreshSharedRecordLaps();
-  },60_000);
+  if (windowFocus !== 'background') void checkTprUpdate();
+  workTimersStarted = true;
+  scheduleWorkTimers();
   window.addEventListener('online',() => {
     void refreshFriendRecords(true);
-    void checkTprUpdate();
+    if (windowFocus !== 'background') void checkTprUpdate();
   });
-})().catch(error=>{setStatus($('status'), error.message, {error:true});});
+})().catch(error=>{notifySystem(error.message, {error:true});});
 
 const trainerTrophies = [
   ['First Clean Run', 'Complete three consecutive clean practice laps.'],
@@ -8363,12 +8837,18 @@ function trainerConsecutive(laps) {
   return runs;
 }
 
+function waitForTrainerForeground() {
+  if (windowFocus === 'background') return new Promise(resolve => { resumeTrainerScan = resolve; });
+}
+
 async function readTrainerSession(session, laps) {
   if (!laps.length) return [];
   let points = [], corners = [];
   const dataByLap = new Map();
   try {
-    const data = prepare(laps[0], await lmu.lap(session.path, laps[0].id));
+    const channels = await lmu.lap(session.path, laps[0].id);
+    await waitForTrainerForeground();
+    const data = prepare(laps[0],channels);
     dataByLap.set(laps[0].id, data);
     points = data.useDistance ? route(data) : [];
     if (points.length) {
@@ -8377,12 +8857,15 @@ async function readTrainerSession(session, laps) {
         .filter(({from,to}) => from >= 0 && to > from).slice(0,200);
     }
   } catch { /* Lap timing remains available when GPS or channel data is missing. */ }
+  await waitForTrainerForeground();
   const samples = await lmu.practiceReview(session.path, laps.map(lap => lap.id), corners.map(({from,to}) => [from,to]));
+  await waitForTrainerForeground();
   const samplesById = new Map(samples.map(sample => [sample.id,sample]));
   const stintNumbers = practiceStints(session.laps);
   const finalLaps = new Map(session.laps.filter(lap => stintNumbers.has(lap.id)).map(lap => [stintNumbers.get(lap.id),lap]));
   const groups = new Map();
   for (const lap of laps) {
+    await waitForTrainerForeground();
     const sample = samplesById.get(lap.id) ?? {};
     const number = stintNumbers.get(lap.id);
     const condition = sample.condition ?? 'unknown';
@@ -8392,7 +8875,12 @@ async function readTrainerSession(session, laps) {
     const brakes = [];
     if (corners.length) {
       try {
-        const data = dataByLap.get(lap.id) ?? prepare(lap, await lmu.lap(session.path,lap.id));
+        let data = dataByLap.get(lap.id);
+        if (!data) {
+          const channels = await lmu.lap(session.path,lap.id);
+          await waitForTrainerForeground();
+          data = prepare(lap,channels);
+        }
         for (const {from,to} of corners) {
           const approach = Math.max(data.extent[0], from - 100);
           brakes.push(mainCornerBraking(data, approach, (from + to) / 2, to).brakeOn?.distance);
@@ -8456,7 +8944,7 @@ function evaluateTrainerTrophies() {
 }
 
 async function scanDriverTrainer(source) {
-  if (scanKey === undefined || trainerScanPending || trainerScanSource === source) return;
+  if (windowFocus === 'background' || scanKey === undefined || trainerScanPending || trainerScanSource === source) return;
   trainerScanPending = true;
   trainerScanSource = source;
   const recordings = source.filter(session => /^practice/i.test(session.session) && trainerTrackKey(session)).sort((a,b) => b.recorded.localeCompare(a.recorded));
@@ -8524,6 +9012,8 @@ async function scanDriverTrainer(source) {
       if (!paths.has(recording)) { trainerCache.delete(recording); dirty = true; }
     }
     for (const [index, session] of recordings.entries()) {
+      if (index % 16 === 0) await new Promise(resolve => setTimeout(resolve,0));
+      await waitForTrainerForeground();
       nextTracks.set(trainerTrackKey(session),{name:session.trackName || session.track});
       const laps = trainerCleanLaps(session);
       const key = JSON.stringify([session.recordingStamp, session.recorded, session.laps.map(lap => [lap.id,lap.kind]), laps.map(lap => [lap.id,lap.start,lap.end,lap.time,lap.number])]);

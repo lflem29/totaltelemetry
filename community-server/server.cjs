@@ -473,7 +473,7 @@ function tprUpdates(directory) {
   };
 }
 
-async function serve(request, response, {root, expected, owner, syncTrackRecords, serveUpdates}) {
+async function serve(request, response, {root, expected, owner, syncTrackRecords, serveUpdates, serverVersion}) {
   const supplied = Buffer.from(request.headers.authorization || '');
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
     reply(response, 401, {error:'Incorrect community access key.'});
@@ -492,7 +492,7 @@ async function serve(request, response, {root, expected, owner, syncTrackRecords
     return syncTrackRecords(request,response,['owner-' + (recordOwnerRoute[1] || 'list'),recordOwnerRoute[2]]);
   }
   if (url.pathname === '/v1/track-records' && request.method === 'GET') {
-    return reply(response,200,{privateRecordProtocol:1,resultOnlyTrackRecords:true,lmp2Variants:true});
+    return reply(response,200,{privateRecordProtocol:1,resultOnlyTrackRecords:true,lmp2Variants:true,serverVersion});
   }
   if (url.pathname === '/v1/track-records' && request.method === 'POST') return syncTrackRecords(request,response);
   if (url.pathname === '/v1/track-records/requests' && request.method === 'GET') return syncTrackRecords(request,response,['list']);
@@ -535,7 +535,7 @@ async function serve(request, response, {root, expected, owner, syncTrackRecords
   reply(response, 404, {error:'Lap or route is unavailable.'});
 }
 
-function createCommunityServer({directory, key, ownerPassword, minimumGameVersion = '', updatesDirectory, onError = console.error}) {
+function createCommunityServer({directory, key, ownerPassword, minimumGameVersion = '', updatesDirectory, serverVersion, onError = console.error}) {
   if (typeof key !== 'string' || !validKey.test(key)) throw new Error('Enter an access key of 24–256 characters without spaces.');
   if (ownerPassword && (typeof ownerPassword !== 'string' || !/^[!-~]{12,256}$/.test(ownerPassword) || ownerPassword === key)) {
     throw new Error('Enter a separate owner password of 12–256 characters without spaces.');
@@ -547,7 +547,8 @@ function createCommunityServer({directory, key, ownerPassword, minimumGameVersio
   fs.mkdirSync(root, {recursive:true});
   if (updatesDirectory) fs.mkdirSync(updatesDirectory,{recursive:true});
   const serveUpdates = updatesDirectory ? tprUpdates(updatesDirectory) : null;
-  const options = {root,serveUpdates,syncTrackRecords:trackRecordsStore(root, minimumGameVersion), expected:Buffer.from('Bearer ' + key), owner:ownerPassword ? Buffer.from(ownerPassword) : null};
+  const options = {root,serveUpdates,serverVersion,syncTrackRecords:trackRecordsStore(root, minimumGameVersion),
+    expected:Buffer.from('Bearer ' + key),owner:ownerPassword ? Buffer.from(ownerPassword) : null};
   return http.createServer({requestTimeout:120_000}, (request, response) => {
     serve(request, response, options).catch(error => {
       onError(error.message);
@@ -595,6 +596,7 @@ if (require.main === module) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Set a valid TT_COMMUNITY_PORT.');
   const server = createCommunityServer({
     directory:process.env.TT_COMMUNITY_DATA || path.join(__dirname, 'data'),
+    serverVersion:require('./package.json').version,
     updatesDirectory:process.env.TT_TPR_UPDATES_DIRECTORY,
     key:process.env.TT_COMMUNITY_KEY, ownerPassword:process.env.TT_COMMUNITY_OWNER_PASSWORD, minimumGameVersion:process.env.TT_COMMUNITY_MINIMUM_GAME_VERSION
   });

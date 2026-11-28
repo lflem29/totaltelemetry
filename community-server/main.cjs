@@ -189,7 +189,7 @@ else {
       pending = true;
       let listener;
       try {
-        listener = createCommunityServer({...next, updatesDirectory:updatesDirectory(), onError:message => console.error(message)});
+        listener = createCommunityServer({...next, serverVersion:app.getVersion(), updatesDirectory:updatesDirectory(), onError:message => console.error(message)});
         await listen(listener, port, useHttps || scope === 'local' ? '127.0.0.1' : '0.0.0.0');
         if (useHttps) await startCaddy(hostname,port);
         saveSettings(next);

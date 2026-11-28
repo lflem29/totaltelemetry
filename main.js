@@ -338,6 +338,8 @@ async function refreshTrackRecords() {
   const state = trackRecordSyncState;
   const capabilities = await communityFetch(server,'',{method:'GET'},'/v1/track-records').then(async response =>
     JSON.parse((await readCommunityBody(response,8192)).toString('utf8')));
+  const serverVersion = typeof capabilities.serverVersion === 'string' &&
+    /^\d{1,9}\.\d{1,9}\.\d{1,9}$/.test(capabilities.serverVersion) ? capabilities.serverVersion : '';
   const privateRequestsAvailable = capabilities.privateRecordProtocol === 1;
   const supportsLmp2Variants = capabilities.lmp2Variants === true;
   if (state.supportsLmp2Variants !== supportsLmp2Variants) state.sent.clear();
@@ -401,7 +403,7 @@ async function refreshTrackRecords() {
     state.cursor = data.cursor;
     more = data.more === true;
   } while (pending.length || more);
-  return {records:[...state.received.values()],minimumGameVersion:state.minimumGameVersion,privateRequestsAvailable,eligibility};
+  return {records:[...state.received.values()],minimumGameVersion:state.minimumGameVersion,privateRequestsAvailable,eligibility,serverVersion};
 }
 
 async function uploadCommunityLap(server, source, session, lap, sender) {
@@ -442,16 +444,17 @@ let configPath;
 let watchers = [];
 let watchTimer;
 
-function watchFolders(win) {
+function watchFolders(win, windowFocus) {
   for (const watcher of watchers) watcher.close();
   watchers = [];
   clearTimeout(watchTimer);
   for (const folder of new Set([config.telemetry, config.results].filter(Boolean))) {
     try {
       const watcher = fs.watch(folder, () => {
+        if (windowFocus() === 'background') return;
         clearTimeout(watchTimer);
         watchTimer = setTimeout(() => {
-          if (!win.isDestroyed()) win.webContents.send('folder-change');
+          if (!win.isDestroyed() && windowFocus() !== 'background') win.webContents.send('folder-change');
         }, 250);
       });
       watcher.on('error', () => watcher.close());
@@ -490,11 +493,14 @@ const displayFields = {
   mergeSummaryBrakes:value => typeof value === 'boolean',
   mergeSummaryEngineTemperatures:value => typeof value === 'boolean',
   cornerTimeLossOpen:value => typeof value === 'boolean',
+  sessionDetailsPinned:value => typeof value === 'boolean',
   deltaChannels:settingsList, chartOverlays:settingsMap(value => settingsList(value) && value.length <= 3), graphOrder:settingsList, hiddenGraphs:settingsList, hiddenSummary:settingsList,
   interfaceColour:settingsColour, interfaceColourMode:value => ['green', 'orange', 'custom'].includes(value),
   interfaceBackgroundColour:settingsColour, graphBackgroundColour:settingsColour,
   racingLineSpread:value => [1, 2, 3].includes(value),
   textScalePercent:value => Number.isInteger(value) && value >= 75 && value <= 150,
+  telemetryGraphScrollPercent:value => Number.isInteger(value) && value >= 10 && value <= 200 &&
+    value % (value <= 100 ? 10 : 25) === 0,
   extraSummaryChannels:settingsList, summaryChannelOrder:settingsList, summaryChartHeights:settingsMap(settingsNumber),
   summaryHeight:settingsNumber, telemetrySidebarWidth:value => value === null || (Number.isFinite(value) && value >= 0 && value <= 100), extraGraphChannels:settingsList, telemetryNames:settingsMap(settingsText),
   telemetryDecimals:settingsMap(value => Number.isInteger(value) && value >= 0 && value <= 6)
@@ -808,6 +814,30 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   Menu.setApplicationMenu(null);
   const popouts = new Map();
+  function windowFocus() {
+    const focused = BrowserWindow.getFocusedWindow();
+    if (focused === win) return 'main';
+    return focused && [...popouts.values()].includes(focused) ? 'popout' : 'background';
+  }
+  let publishedFocus, focusTimer;
+  function publishWindowFocus() {
+    clearTimeout(focusTimer);
+    // A panel can gain focus immediately after the main window loses it.
+    focusTimer = setTimeout(() => {
+      if (win.isDestroyed() || win.webContents.isLoadingMainFrame()) return;
+      const focus = windowFocus();
+      if (focus === publishedFocus) return;
+      publishedFocus = focus;
+      win.webContents.send('window-focus',focus);
+    }, 50);
+  }
+  win.on('focus',publishWindowFocus);
+  win.on('blur',publishWindowFocus);
+  win.on('minimize',publishWindowFocus);
+  win.webContents.on('did-finish-load', () => {
+    publishedFocus = undefined;
+    publishWindowFocus();
+  });
   const panelTitles = {track:'Track View', summary:'Session Summary', graphs:'Telemetry Graphs', aero:'Aero Visualiser', suspension:'Suspension Visualiser'};
   win.webContents.setWindowOpenHandler(({url, frameName}) => {
     if (url !== 'about:blank' || !Object.hasOwn(panelTitles, frameName)) return {action:'deny'};
@@ -822,6 +852,10 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   win.webContents.on('did-create-window', (child, {frameName}) => {
     popouts.set(frameName, child);
+    child.on('focus',publishWindowFocus);
+    child.on('blur',publishWindowFocus);
+    child.on('minimize',publishWindowFocus);
+    publishWindowFocus();
     child.webContents.setWindowOpenHandler(() => ({action:'deny'}));
     child.webContents.on('will-navigate', event => event.preventDefault());
     if (config.windowPositions?.[frameName]?.maximized) child.maximize();
@@ -829,7 +863,10 @@ if (primaryInstance) app.whenReady().then(async () => {
       rememberWindow(frameName, child);
       save();
     });
-    child.on('closed', () => popouts.delete(frameName));
+    child.on('closed', () => {
+      popouts.delete(frameName);
+      publishWindowFocus();
+    });
   });
   if (config.windowPositions?.main?.maximized) win.maximize();
   win.on('close', () => {
@@ -891,7 +928,10 @@ if (primaryInstance) app.whenReady().then(async () => {
   ipcMain.handle('save-settings', (_, changes) => {
     const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'cornerTimeLossOpen', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
-    for (const key of ['sortCornersByNumber', 'sortTrainerCornersByNumber', 'trainerShowFastestLap', 'trainerShowFastestCorner']) {
+    if (displayFields.telemetryGraphScrollPercent(changes.telemetryGraphScrollPercent)) {
+      config.telemetryGraphScrollPercent = changes.telemetryGraphScrollPercent;
+    }
+    for (const key of ['sortCornersByNumber', 'sortTrainerCornersByNumber', 'trainerShowFastestLap', 'trainerShowFastestCorner', 'sessionDetailsPinned']) {
       if (typeof changes[key] === 'boolean') config[key] = changes[key];
     }
     if (typeof changes.previousStatsDriver === 'string' && config.primaryDriver) {
@@ -983,7 +1023,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     recentLapOutput.clear();
     pendingLapReads.clear();
     lapCacheBytes = 0;
-    watchFolders(win);
+    watchFolders(win, windowFocus);
     win.webContents.reload();
   });
   ipcMain.handle('folder', async (_, type) => {
@@ -1011,7 +1051,7 @@ if (primaryInstance) app.whenReady().then(async () => {
       config[type] = folder;
     }
     generation++;
-    watchFolders(win);
+    watchFolders(win, windowFocus);
     save();
     return publicSettings();
   });
@@ -1530,7 +1570,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     }
   }
   if (win.isDestroyed()) return;
-  watchFolders(win);
+  watchFolders(win, windowFocus);
   win.loadFile(path.join(__dirname, 'index.html'));
 });
 

@@ -2,6 +2,7 @@ const {contextBridge, ipcRenderer} = require('electron');
 contextBridge.exposeInMainWorld('lmu', {
   focusPanel: key => ipcRenderer.invoke('focus-panel', key),
   dockPanel: key => ipcRenderer.invoke('dock-panel', key),
+  onWindowFocus: callback => { ipcRenderer.on('window-focus', (_, focus) => callback(focus)); },
   settings: () => ipcRenderer.invoke('settings'),
   save: changes => ipcRenderer.invoke('save-settings', changes),
   transferSettingsFile: (action, category) => ipcRenderer.invoke('transfer-settings-file', action, category),
