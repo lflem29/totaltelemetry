@@ -6955,7 +6955,7 @@ function paintChart(row) {
   if(cursor>=range[0] && cursor<=range[1]) {
     ctx.save();
     ctx.strokeStyle = '#fff';
-    ctx.setLineDash([5, 4]);
+    ctx.setLineDash([6, 4]);
     ctx.beginPath();
     ctx.moveTo(x(cursor), top);
     ctx.lineTo(x(cursor), bottom);
