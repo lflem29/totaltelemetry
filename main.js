@@ -43,8 +43,9 @@ async function exportLapZip(session, lap, destination) {
   await backend('export-lap', {
     path:session.path, destination, start:lap.start, end:lap.end,
     track:session.track, car:session.model || session.car, carClass:session.carClass,
+    lmp2Variant:session.lmp2Variant,
     trackName:session.trackName, trackLayout:session.trackLayout, gameVersion:session.gameVersion,
-    driver:session.driver, lap:lap.number, time:lap.time, validity:lap.validity
+    driver:session.driver, lap:lap.number, time:lap.time, validity:lap.validity, sectors:lap.sectors
   });
 }
 
@@ -108,8 +109,7 @@ function communityOrigin({host, port, https}) {
   return new URL((https ? 'https://' : 'http://') + address + ':' + port).origin;
 }
 const {key:bundledCommunityKey, ...originalCommunityServer} = communityDefaults;
-const bundledCommunityServer = app.getName() === 'Total Telemetry TPR Edition'
-  ? {host:'127.0.0.1',port:443,https:true} : originalCommunityServer;
+const bundledCommunityServer = originalCommunityServer;
 
 function usesBundledCommunityKey(server) {
   return [bundledCommunityServer,originalCommunityServer].some(endpoint =>
@@ -203,7 +203,15 @@ function driverIdentity(name) {
   return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function suggestedDriver() {
+function primaryLapForSharing(session) {
+  if (!config.primaryDriver) throw new Error('Confirm your primary driver to share telemetry.');
+  if (driverIdentity(session.driver) !== driverIdentity(config.primaryDriver)) {
+    throw new Error('Only laps recorded under your primary driver can be shared.');
+  }
+  return {...session, driver:config.primaryDriver};
+}
+
+function recordedDriverChoices() {
   const drivers = new Map();
   for (const session of sessionIndex) {
     const name = session.driver?.trim();
@@ -216,10 +224,12 @@ function suggestedDriver() {
   const previous = config.previousRecordDriver;
   const previousKey = driverIdentity(previous);
   const previousLaps = drivers.get(previousKey)?.laps;
+  const choices = [...drivers.values()].filter(item => item.laps > 0)
+    .sort((a,b) => b.laps - a.laps || a.name.localeCompare(b.name));
   if (previousKey && (previousLaps || resultRecordIndex.some(session => driverIdentity(session.driver) === previousKey))) {
-    return {name:previous,laps:previousLaps || undefined};
+    return [{name:previous,laps:previousLaps || undefined}, ...choices.filter(item => driverIdentity(item.name) !== previousKey)];
   }
-  return [...drivers.values()].filter(item => item.laps > 0).sort((a,b) => b.laps - a.laps || a.name.localeCompare(b.name))[0];
+  return choices;
 }
 
 function trustedUpdateTransport(server) {
@@ -265,7 +275,7 @@ function recordedTrackRecordDate(session) {
   return '';
 }
 
-function localTrackRecords(minimumGameVersion, eligibility, supportsResultOnly) {
+function localTrackRecords(minimumGameVersion, eligibility, supportsResultOnly, supportsLmp2Variants) {
   const records = new Map();
   for (const session of supportsResultOnly ? [...sessionIndex,...resultRecordIndex] : sessionIndex) {
     if (driverIdentity(session.driver) !== driverIdentity(config.primaryDriver)) continue;
@@ -275,6 +285,13 @@ function localTrackRecords(minimumGameVersion, eligibility, supportsResultOnly) 
       gameVersion:session.gameVersion, recorded:recordedTrackRecordDate(session)
     };
     for (const [key,value] of Object.entries(fields)) fields[key] = String(value ?? '').trim().slice(0,160);
+    if (fields.carClass === 'LMP2' && session.lmp2Variant === 'ELMS') {
+      if (!supportsLmp2Variants) {
+        if (eligibility) eligibility.elmsRequiresServerUpdate = true;
+        continue;
+      }
+      fields.lmp2Variant = 'ELMS';
+    }
     if (!fields.driver || !fields.track || !fields.layout || !fields.car || !fields.recorded) continue;
     const laps = session.laps.filter(lap => lap.kind === 'complete' && Number.isFinite(lap.time) &&
       lap.time > 0 && lap.time <= 86400 && lap.validity === 'official');
@@ -284,7 +301,8 @@ function localTrackRecords(minimumGameVersion, eligibility, supportsResultOnly) 
       if (eligibility) eligibility.excludedSessions++;
       continue;
     }
-    const key = JSON.stringify([fields.driver,fields.track,fields.layout,fields.carClass || 'Unknown'].map(value => value.toLowerCase()));
+    const key = JSON.stringify([fields.driver,fields.track,fields.layout,fields.carClass || 'Unknown',fields.lmp2Variant || '']
+      .map(value => value.toLowerCase()));
     if (records.has(key) && records.get(key).time <= lap.time) continue;
     const bestSectors = session.bestSectors ?? [0,1,2].map(index => {
       const best = laps.reduce((min,entry) => {
@@ -321,13 +339,16 @@ async function refreshTrackRecords() {
   const capabilities = await communityFetch(server,'',{method:'GET'},'/v1/track-records').then(async response =>
     JSON.parse((await readCommunityBody(response,8192)).toString('utf8')));
   const privateRequestsAvailable = capabilities.privateRecordProtocol === 1;
+  const supportsLmp2Variants = capabilities.lmp2Variants === true;
+  if (state.supportsLmp2Variants !== supportsLmp2Variants) state.sent.clear();
+  state.supportsLmp2Variants = supportsLmp2Variants;
   state.privateRequestsAvailable = privateRequestsAvailable;
   const identity = privateRequestsAvailable ? trackRecordIdentity() : null;
   let eligibility;
   const unsent = () => {
     if (!identity || config.trackRecordClientId !== identity.client || !shareTrackRecords()) return [];
     eligibility = {excludedSessions:0,eligibleRecords:0};
-    const records = localTrackRecords(state.minimumGameVersion,eligibility,capabilities.resultOnlyTrackRecords === true);
+    const records = localTrackRecords(state.minimumGameVersion,eligibility,capabilities.resultOnlyTrackRecords === true,supportsLmp2Variants);
     eligibility.eligibleRecords = records.size;
     return [...records].filter(([key,record]) => {
       const sent = state.sent.get(key);
@@ -463,7 +484,7 @@ const displayFields = {
   turboPressureReference:value => value === 'absolute' || value === 'gauge',
   measurementUnits:value => isSettingsObject(value) && Object.keys(value).length === measurementUnitKeys.length &&
     measurementUnitKeys.every(key => ['metric','imperial'].includes(value[key])),
-  driverTrainerEnabled:value => typeof value === 'boolean', trainerColdTyreTemperature:settingsNumber,
+  trainerColdTyreTemperature:settingsNumber,
   heights:settingsMap(settingsNumber), enabled:settingsList, tyres:settingsText,
   colors:settingsMap(settingsColour), speedActivations:settingsMap(value => typeof value === 'boolean'),
   mergeSummaryBrakes:value => typeof value === 'boolean',
@@ -494,7 +515,8 @@ const settingsFileFields = new Map([
 ]);
 
 function publicSettings() {
-  const {discordWebhookEncrypted, communityKeyEncrypted, communityOwnerEncrypted, trackRecordClientId, trackRecordSecretEncrypted, previousRecordDriver, ...preferences} = config;
+  const {discordWebhookEncrypted, communityKeyEncrypted, communityOwnerEncrypted, trackRecordClientId, trackRecordSecretEncrypted,
+    previousRecordDriver, trackRecordDriverProfiles, ...preferences} = config;
   const communityServer = preferences.communityServer ?? bundledCommunityServer;
   const communityUsesBundledKey = Boolean(bundledCommunityKey) && !communityKeyEncrypted && usesBundledCommunityKey(communityServer);
   return {...preferences, communityServer, communityUsesBundledKey, shareTrackRecords:shareTrackRecords(),
@@ -867,8 +889,15 @@ if (primaryInstance) app.whenReady().then(async () => {
     await fs.promises.rename(temporary,trainerCachePath);
   });
   ipcMain.handle('save-settings', (_, changes) => {
-    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'driverTrainerEnabled', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'cornerTimeLossOpen', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
+    const allowed = ['shareTrackRecords', 'notificationSound', 'autoLoadTelemetry', 'aeroVisualizerEnabled', 'suspensionVisualizerEnabled', 'suspensionLimits', 'trainerColdTyreTemperature', 'measurementUnits', 'turboPressureReference', 'limit', 'heights', 'enabled', 'presets', 'graphPresets', 'graphOrder', 'cornerTimeLossOpen', 'tyres', 'colors', 'speedActivations', 'deltaChannels', 'chartOverlays', 'hotTemperatures', 'hotTemperaturesByClass', 'hiddenGraphs', 'hiddenSummary', 'mergeSummaryBrakes', 'mergeSummaryEngineTemperatures', 'interfaceColour', 'elementColours', 'colourPresets', 'interfaceColourMode', 'interfaceBackgroundColour', 'graphBackgroundColour', 'textScalePercent', 'racingLineSpread', 'extraSummaryChannels', 'summaryChannelOrder', 'summaryChartHeights', 'summaryHeight', 'telemetrySidebarWidth', 'extraGraphChannels', 'telemetryNames', 'telemetryDecimals', 'telemetryReminderSeen'];
     for (const key of allowed) if (Object.hasOwn(changes, key)) config[key] = changes[key];
+    for (const key of ['sortCornersByNumber', 'sortTrainerCornersByNumber', 'trainerShowFastestLap', 'trainerShowFastestCorner']) {
+      if (typeof changes[key] === 'boolean') config[key] = changes[key];
+    }
+    if (typeof changes.previousStatsDriver === 'string' && config.primaryDriver) {
+      const previous = changes.previousStatsDriver.trim().slice(0, 160);
+      config.previousStatsDriver = driverIdentity(previous) === driverIdentity(config.primaryDriver) ? '' : previous;
+    }
     if (changes.colourSchemePromptVersion === app.getVersion()) config.colourSchemePromptVersion = app.getVersion();
     save();
     return publicSettings();
@@ -907,6 +936,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     }
     const next = {...config};
     for (const [key, value] of Object.entries(data.settings)) {
+      if (category === 'display' && key === 'driverTrainerEnabled') continue;
       if (!Object.hasOwn(fields, key) || (value !== null && !fields[key](value))) {
         throw new Error('The settings file contains an invalid setting.');
       }
@@ -941,9 +971,9 @@ if (primaryInstance) app.whenReady().then(async () => {
     });
     if (result.response !== 1 || win.isDestroyed()) return;
     const {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied, colourSchemePromptVersion} = config;
-    const {trackRecordClientId,trackRecordSecretEncrypted,primaryDriver,previousRecordDriver} = config;
+    const {trackRecordClientId,trackRecordSecretEncrypted,primaryDriver,previousRecordDriver,trackRecordDriverProfiles} = config;
     const retained = {communityServer, communityKeyEncrypted, discordWebhookEncrypted, tprHttpsDefaultsApplied, colourSchemePromptVersion,
-      trackRecordClientId,trackRecordSecretEncrypted,previousRecordDriver:primaryDriver || previousRecordDriver};
+      trackRecordClientId,trackRecordSecretEncrypted,trackRecordDriverProfiles,previousRecordDriver:primaryDriver || previousRecordDriver};
     save(retained);
     config = retained;
     trackRecordSyncState = undefined;
@@ -961,7 +991,9 @@ if (primaryInstance) app.whenReady().then(async () => {
     if (!automatic && !['installation', 'telemetry', 'results'].includes(type)) return publicSettings();
     if (automatic && (process.platform !== 'win32' || config.telemetry || config.results)) return publicSettings();
     let folder;
-    const userData = automatic && await fs.promises.stat(path.join(defaultInstallation, 'UserData')).catch(() => null);
+    const userData = automatic
+      ? await fs.promises.stat(path.join(defaultInstallation, 'UserData')).catch(() => null)
+      : null;
     if (userData?.isDirectory()) {
       folder = defaultInstallation;
     } else {
@@ -986,24 +1018,39 @@ if (primaryInstance) app.whenReady().then(async () => {
   let distanceScan, distanceKey, distanceResult;
   ipcMain.handle('confirm-primary-driver', ({sender}, name) => {
     if (sender !== win.webContents) throw new Error('Confirm your driver from the main window.');
-    if (config.primaryDriver) return publicSettings();
-    if (typeof name !== 'string' || name !== suggestedDriver()?.name) {
-      throw new Error('The suggested driver changed. Rescan your telemetry and confirm again.');
+    if (typeof name !== 'string' || !recordedDriverChoices().some(driver => driver.name === name)) {
+      throw new Error('Choose a driver with a completed timed lap in your telemetry folder.');
     }
-    const sameDriver = driverIdentity(name) === driverIdentity(config.previousRecordDriver);
-    const next = {...config,primaryDriver:sameDriver ? config.previousRecordDriver : name,primaryDriverProfile:randomUUID()};
+    const key = driverIdentity(name);
+    if (key === driverIdentity(config.primaryDriver)) return publicSettings();
+    const profiles = new Map(Object.entries(config.trackRecordDriverProfiles ?? {}));
+    const current = config.primaryDriver || config.previousRecordDriver;
+    if (current) profiles.set(driverIdentity(current), {
+      name:current, profile:config.primaryDriverProfile,
+      client:config.trackRecordClientId, secret:config.trackRecordSecretEncrypted, statsAlias:config.previousStatsDriver
+    });
+    const restored = profiles.get(key);
+    profiles.delete(key);
+    const next = {...config, primaryDriver:restored?.name ?? name, primaryDriverProfile:restored?.profile ?? randomUUID(),
+      previousStatsDriver:restored?.statsAlias ?? '',
+      trackRecordDriverProfiles:Object.fromEntries(profiles)};
     delete next.previousRecordDriver;
-    if (!sameDriver) {
-      delete next.trackRecordClientId;
-      delete next.trackRecordSecretEncrypted;
+    delete next.trackRecordClientId;
+    delete next.trackRecordSecretEncrypted;
+    if (restored?.client && restored.secret) {
+      next.trackRecordClientId = restored.client;
+      next.trackRecordSecretEncrypted = restored.secret;
     }
     save(next);
     config = next;
     trackRecordSyncState = undefined;
+    generation++;
+    resultRecordIndex = [];
     return publicSettings();
   });
   ipcMain.handle('results-distance', async () => {
     const folder = config.results;
+    const {primaryDriver, previousStatsDriver} = config;
     if (!folder) return {drivers:[], errors:0};
     let files;
     try {
@@ -1016,10 +1063,10 @@ if (primaryInstance) app.whenReady().then(async () => {
       if (error.code === 'ENOENT') return {drivers:[], errors:0};
       throw error;
     }
-    const key = JSON.stringify([folder, files]);
+    const key = JSON.stringify([folder, files, primaryDriver, previousStatsDriver]);
     if (distanceKey === key && distanceResult) return distanceResult;
     if (distanceScan?.key === key) return distanceScan.promise;
-    const scan = {key, promise:backend('results-distance', {results:folder})};
+    const scan = {key, promise:backend('results-distance', {results:folder, primaryDriver, previousStatsDriver})};
     distanceScan = scan;
     try {
       const result = await scan.promise;
@@ -1040,7 +1087,7 @@ if (primaryInstance) app.whenReady().then(async () => {
       if (token !== generation) return {stale: true};
       sessionIndex = result.sessions;
       resultRecordIndex = result.resultRecords ?? [];
-      return {...result,suggestedDriver:config.primaryDriver ? null : suggestedDriver()};
+      return {...result,recordedDrivers:recordedDriverChoices()};
     }).finally(() => { activeScan = null; });
     return activeScan;
   });
@@ -1215,6 +1262,7 @@ if (primaryInstance) app.whenReady().then(async () => {
         item.laps.some(lap => lapMatchesRequest(item,lap,record.lapKey)));
       const lap = session?.laps.find(item => lapMatchesRequest(session,item,record.lapKey));
       if (!lap) throw new Error('Lap No Longer Available. Reconnect its recording folder or deny the request.');
+      const sharedSession = primaryLapForSharing(session);
       const accepted = await recordRequestCall(server,'/accept/' + id,'POST');
       await accepted.body?.cancel();
       try {
@@ -1224,7 +1272,8 @@ if (primaryInstance) app.whenReady().then(async () => {
       }
       const operation = 'requested-lap:' + id;
       communityProgress(sender,operation,'preparing');
-      await exportLapZip(session,lap,source);
+      await exportLapZip(sharedSession,lap,source);
+      if (identity.client !== config.trackRecordClientId) throw new Error('The primary driver changed. Open the request again.');
       const archive = await fs.openAsBlob(source,{type:'application/zip'});
       if (archive.size > communityMaxBytes) throw new Error('The lap ZIP exceeds 32 MiB.');
       let received = 0, percent = 0;
@@ -1251,7 +1300,7 @@ if (primaryInstance) app.whenReady().then(async () => {
           throw new Error('The confirmed driver was reset.');
         }
         communityProgress(sender,operation,'sharing');
-        communityLap = await uploadCommunityLap(connection,source,session,lap,sender);
+        communityLap = await uploadCommunityLap(connection,source,sharedSession,lap,sender);
       } catch (error) {
         communityShareError = error.message;
       }
@@ -1378,9 +1427,10 @@ if (primaryInstance) app.whenReady().then(async () => {
       ? session?.laps.find(item => item.time > 0 && item.time === session.best)
       : session?.laps.find(item => item.id === recordLapId && item.kind === 'complete' && item.validity === 'official' && item.time > 0);
     if (!lap) throw new Error('This session has no timed lap to export.');
+    const sharedSession = target === 'local' ? session : primaryLapForSharing(session);
     const url = target === 'discord' ? savedDiscordWebhook() : null;
     const community = target === 'community' ? configuredCommunity() : null;
-    const filename = lapZipFilename(session, lap);
+    const filename = lapZipFilename(sharedSession, lap);
     bestLapExportInProgress = true;
     let temporary;
     try {
@@ -1397,9 +1447,10 @@ if (primaryInstance) app.whenReady().then(async () => {
       }
       temporary = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'tt-export-'));
       const source = path.join(temporary, 'lap.zip');
-      await exportLapZip(session, lap, source);
-      if (community) await uploadCommunityLap(community, source, session, lap, sender);
-      else await uploadDiscordLap(url, source, filename, discordLapMessage(session, lap));
+      await exportLapZip(sharedSession, lap, source);
+      primaryLapForSharing(sharedSession);
+      if (community) await uploadCommunityLap(community, source, sharedSession, lap, sender);
+      else await uploadDiscordLap(url, source, filename, discordLapMessage(sharedSession, lap));
       return filename;
     } finally {
       if (temporary) await fs.promises.rm(temporary, {recursive:true, force:true}).catch(() => {});

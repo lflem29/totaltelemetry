@@ -52,7 +52,7 @@ let loadGeneration = 0, ready = false;
 let view = 'library';
 const listScrollPositions = new Map();
 const listScrollContainers = {
-  library:['library','session-wrap','imported-laps-table'],
+  library:['library','session-wrap','imported-laps-table','results-distance'],
   records:['records','records-table']
 };
 let enabled = new Set(builtIn.Driving), chartRows = [], readoutRows = [];
@@ -307,9 +307,9 @@ for (const [name, setting] of Object.entries(visualizerSettings)) {
   $(name + '-tab').onclick = () => openVisualiser(name);
 }
 function setView(name) {
-  if (name === 'trainer' && settings.driverTrainerEnabled !== true) name = 'library';
   const changingView = name !== view;
   if (changingView) {
+    if (view === 'records') notifiedRecord = undefined;
     for (const id of listScrollContainers[view] ?? []) {
       const element = $(id);
       if (!element.hidden) listScrollPositions.set(id,[element.scrollLeft,element.scrollTop]);
@@ -407,7 +407,8 @@ const interfaceColourOptions = [
   ['map-brake','Track Map Braking','#ff4545'], ['map-throttle','Track Map Throttle','#32e260'],
   ['abs','ABS Trace','#ff626c'], ['tc','Traction Control Trace','#45d4df'],
   ['cold','Cold Tyre Trace','#91d5ff'], ['prior-stint','Previous Stint Traces','#e0787d'],
-  ['other-laps','Other Lap Traces','#90ac98'], ['trophy','Earned Trophies','#f2cd79']
+  ['other-laps','Other Lap Traces','#90ac98'], ['fastest-corner','Fastest Corner Trace','#b28aff'],
+  ['trophy','Earned Training Achievements','#f2cd79']
 ];
 const elementColour = (key, fallback) => backgroundColour(settings.elementColours?.[key],fallback);
 const elementColourFields = interfaceColourOptions.map(([key,label,defaultColour]) => {
@@ -478,13 +479,14 @@ function applyAppearance() {
 function settingsFields() {
   $('check-tpr-update').hidden = !settings.tprUpdatesSupported;
   $('settings-primary-driver').textContent = settings.primaryDriver || 'Awaiting Confirmation';
-  $('settings-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
+  $('settings-confirm-driver').hidden = !lmu.confirmPrimaryDriver || (!settings.primaryDriver && !primaryDriverChoices.length);
+  $('settings-confirm-driver').textContent = settings.primaryDriver ? 'Change Primary Driver' : 'Confirm Your Driver';
+  refreshPreviousStatsDriver();
   $('share-track-records').checked = settings.shareTrackRecords === true;
   $('notification-sound').checked = settings.notificationSound === true;
   $('manage-track-records').disabled = !settings.communityOwnerConfigured;
   if (!$('settings-panel-telemetry-data').hidden || $('telemetry-name-fields').childElementCount) renderTelemetryData();
   $('auto-load-telemetry').checked = settings.autoLoadTelemetry !== false;
-  syncDriverTrainerSetting();
   const server = settings.communityServer;
   $('community-host').value = server?.host ?? '';
   $('community-port').value = server?.port ?? 8787;
@@ -505,10 +507,52 @@ function settingsFields() {
   refreshUnitFields();
 }
 let distanceReport, distanceRequest;
-const distanceNumber = new Intl.NumberFormat(undefined, {minimumFractionDigits:1, maximumFractionDigits:1});
+let savingPreviousStatsDriver = false;
+const distanceNumber = new Intl.NumberFormat(undefined, {maximumFractionDigits:0});
+const previousStatsDriverSelect = $('previous-stats-driver');
+function refreshPreviousStatsDriver() {
+  const primary = normaliseDriverName(settings.primaryDriver);
+  const resultsNames = distanceReport?.folder === settings.results ? distanceReport?.data?.driverNames ?? [] : [];
+  const names = new Map();
+  for (const name of [settings.previousStatsDriver, ...primaryDriverChoices.map(driver => driver.name), ...resultsNames]) {
+    const key = normaliseDriverName(name);
+    if (key && key !== primary && !names.has(key)) names.set(key,name);
+  }
+  setRecordOptions(previousStatsDriverSelect, 'None', [...names.values()].sort((a,b) => a.localeCompare(b)),
+    settings.previousStatsDriver);
+  previousStatsDriverSelect.disabled = !primary || savingPreviousStatsDriver;
+}
+previousStatsDriverSelect.onchange = async () => {
+  const status = $('previous-stats-driver-status');
+  status.textContent = '';
+  savingPreviousStatsDriver = true;
+  previousStatsDriverSelect.disabled = true;
+  try {
+    const saved = await lmu.save({previousStatsDriver:previousStatsDriverSelect.value});
+    settings.previousStatsDriver = saved.previousStatsDriver;
+    refreshResultsDistance();
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    savingPreviousStatsDriver = false;
+    refreshPreviousStatsDriver();
+  }
+};
+function resultsDistanceKey() {
+  return JSON.stringify([settings.results,settings.primaryDriver,settings.previousStatsDriver]);
+}
+function favouriteDistanceRow(name, km) {
+  const item = node('li');
+  const row = node('div', undefined, 'favourite-distance-row');
+  row.append(node('span',name),node('small',distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
+  item.append(row);
+  return item;
+}
 function renderResultsDistance() {
+  refreshPreviousStatsDriver();
   $('results-distance').hidden = !settings.results;
-  const totals = distanceReport?.data?.drivers ?? [];
+  const report = distanceReport?.key === resultsDistanceKey() ? distanceReport : undefined;
+  const totals = report?.data?.drivers ?? [];
   const driver = normaliseDriverName(settings.primaryDriver);
   const preferred = driver ? totals.find(total => normaliseDriverName(total.name || total.id) === driver) : undefined;
   $('distance-total').textContent = preferred ? distanceNumber.format(convert('',preferred.km,'km')) + ' ' + displayUnit('','km') : '';
@@ -524,26 +568,18 @@ function renderResultsDistance() {
     const value = node('dd', favourites.length ? undefined : '—');
     if (favourites.length) {
       const list = node('ol');
-      for (const favourite of favourites) {
-        const item = node('li', favourite.car);
-        item.append(node('small', distanceNumber.format(convert('',favourite.km,'km')) + ' ' + displayUnit('','km')));
-        list.append(item);
-      }
+      list.append(...favourites.map(({car,km}) => favouriteDistanceRow(car,km)));
       value.append(list);
     }
     return [node('dt', category), value];
   }));
   const tracks = preferred?.favouriteTracks ?? [];
   $('favourite-tracks').hidden = !tracks.length;
-  $('favourite-track-list').replaceChildren(...tracks.map(({track, km}) => {
-    const item = node('li', track);
-    item.append(node('small', distanceNumber.format(convert('',km,'km')) + ' ' + displayUnit('','km')));
-    return item;
-  }));
-  $('distance-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
-  const problem = distanceReport?.data?.errors;
-  $('distance-status').textContent = distanceReport?.error
-    ?? (!distanceReport ? 'Calculating distance from results files…'
+  $('favourite-track-list').replaceChildren(...tracks.map(({track,km}) => favouriteDistanceRow(track,km)));
+  $('distance-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverChoices.length);
+  const problem = report?.data?.errors;
+  $('distance-status').textContent = report?.error
+    ?? (!report ? 'Calculating distance from results files…'
       : !totals.length ? 'No driver distance available in the results files.'
       : preferred ? 'Estimated from ' + preferred.laps.toLocaleString() + ' laps in the results folder.'
       : driver ? 'No distance was found for ' + settings.primaryDriver + '.'
@@ -551,19 +587,20 @@ function renderResultsDistance() {
 }
 function refreshResultsDistance() {
   const folder = settings.results;
+  const key = resultsDistanceKey();
   if (distanceReport?.folder !== folder) distanceReport = undefined;
-  if (!folder || distanceRequest?.folder === folder) return;
-  const request = {folder};
+  if (!folder || distanceRequest?.key === key) return;
+  const request = {key};
   distanceRequest = request;
-  if (!distanceReport) renderResultsDistance();
+  if (distanceReport?.key !== key) renderResultsDistance();
   lmu.resultsDistance().then(data => {
-    if (settings.results !== folder || distanceRequest !== request) return;
-    if (JSON.stringify(data) === JSON.stringify(distanceReport?.data)) return;
-    distanceReport = {folder, data};
+    if (resultsDistanceKey() !== key || distanceRequest !== request) return;
+    if (distanceReport?.key === key && JSON.stringify(data) === JSON.stringify(distanceReport.data)) return;
+    distanceReport = {folder, key, data};
     renderResultsDistance();
   }).catch(() => {
-    if (settings.results !== folder || distanceRequest !== request) return;
-    distanceReport = {folder, error:'Could not calculate distance from the results folder.'};
+    if (resultsDistanceKey() !== key || distanceRequest !== request) return;
+    distanceReport = {folder, key, error:'Could not calculate distance from the results folder.'};
     renderResultsDistance();
   }).finally(() => {
     if (distanceRequest === request) distanceRequest = undefined;
@@ -573,39 +610,70 @@ function normaliseDriverName(name) {
   return String(name ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-let primaryDriverSuggestion;
+function chartDriverLabels() {
+  const knownName = value => {
+    const name = String(value ?? '').trim().replace(/\s+/g, ' ');
+    return /^unknown(?: driver)?$/i.test(name) ? '' : name;
+  };
+  const loaded = knownName(selected?.driver);
+  const compared = knownName(reference?.session.driver);
+  return [
+    loaded || loadedTraceLabel,
+    compared && normaliseDriverName(compared) !== normaliseDriverName(loaded) ? compared : referenceTraceLabel
+  ];
+}
+
+let primaryDriverChoices = [];
 let deferredDriverConfirmation = false;
-function offerPrimaryDriver(suggestion) {
-  if (!suggestion || settings.primaryDriver || !lmu.confirmPrimaryDriver) return;
-  primaryDriverSuggestion = suggestion;
-  $('primary-driver-suggestion').textContent = Number.isFinite(suggestion.laps)
-    ? suggestion.name + ' · ' + suggestion.laps.toLocaleString() + ' completed laps' : suggestion.name;
-  if (!deferredDriverConfirmation && !$('confirm-primary-driver').open) $('confirm-primary-driver').showModal();
+function updateDriverConfirmation() {
+  const selectedName = $('primary-driver-choice').value;
+  $('primary-driver-confirm').disabled = !selectedName ||
+    normaliseDriverName(selectedName) === normaliseDriverName(settings.primaryDriver);
+}
+function fillDriverChoices(current) {
+  const select = $('primary-driver-choice');
+  select.replaceChildren();
+  if (!primaryDriverChoices.length) option(select, 'No recorded driver names', '');
+  for (const driver of primaryDriverChoices) {
+    const label = Number.isFinite(driver.laps) ? driver.name + ' · ' + driver.laps.toLocaleString() + ' completed laps' : driver.name;
+    option(select, label, driver.name);
+  }
+  const preferred = primaryDriverChoices.find(driver => normaliseDriverName(driver.name) === normaliseDriverName(current));
+  if (preferred) select.value = preferred.name;
+  select.disabled = !primaryDriverChoices.length;
+  updateDriverConfirmation();
+}
+function openDriverPicker() {
+  $('confirm-primary-driver-title').textContent = settings.primaryDriver ? 'Change Primary Driver' : 'Confirm Your Driver Name';
+  $('primary-driver-status').textContent = primaryDriverChoices.length ? '' : 'Record a completed timed lap to add a driver name.';
+  fillDriverChoices(settings.primaryDriver);
+  $('confirm-primary-driver').showModal();
 }
 $('distance-confirm-driver').onclick = $('settings-confirm-driver').onclick = () => {
-  deferredDriverConfirmation = false;
   if ($('folders').open) $('folders').close();
-  offerPrimaryDriver(primaryDriverSuggestion);
+  openDriverPicker();
 };
+$('primary-driver-choice').onchange = updateDriverConfirmation;
 $('primary-driver-later').onclick = () => $('confirm-primary-driver').close();
 $('confirm-primary-driver').onclose = () => { deferredDriverConfirmation = true; };
 $('primary-driver-confirm').onclick = async () => {
   const button = $('primary-driver-confirm');
   button.disabled = true;
   try {
-    Object.assign(settings,await lmu.confirmPrimaryDriver(primaryDriverSuggestion.name));
+    Object.assign(settings,await lmu.confirmPrimaryDriver($('primary-driver-choice').value));
     friendConnectionGeneration++;
     recordRequests = [];
     $('confirm-primary-driver').close();
     loadRecordNotifications();
     settingsFields();
     renderResultsDistance();
+    resultRecords = [];
     refreshRecordsFromScan();
-    void refreshFriendRecords(true);
+    void scan();
   } catch (error) {
     $('primary-driver-status').textContent = error.message;
   } finally {
-    button.disabled = false;
+    updateDriverConfirmation();
   }
 };
 function bindTabs(listId, onChange) {
@@ -673,19 +741,26 @@ function syncCompatibleReferenceFilters() {
     input.parentElement.hidden = !selected;
   }
 }
+function setCompatibleReferencesOnly(checked) {
+  compatibleReferencesOnly = checked;
+  syncCompatibleReferenceFilters();
+}
 for (const input of document.querySelectorAll('.compatible-reference-filter input')) {
   input.onchange = () => {
-    compatibleReferencesOnly = input.checked;
-    syncCompatibleReferenceFilters();
+    setCompatibleReferencesOnly(input.checked);
     renderLibrary({resetRecentSessions:true});
   };
 }
-function matchesReferenceSession(session) {
-  if (!selected) return false;
-  const dimensions = value => [value.trackName || value.track, value.trackLayout || value.track, value.carClass]
+function compatibleReferenceSessions(first, second) {
+  if (!first || !second) return false;
+  const dimensions = value => [value.trackName || value.track, value.trackLayout || value.track, recordClassLabel(value)]
     .map(field => field?.trim().toLowerCase());
-  const current = dimensions(selected);
-  return dimensions(session).every((field,index) => Boolean(field && field === current[index]));
+  const current = dimensions(first);
+  return dimensions(second).every((field,index) => Boolean(field && field === current[index]));
+}
+
+function matchesReferenceSession(session) {
+  return compatibleReferenceSessions(selected,session);
 }
 
 function bindTelemetryRow(row, open) {
@@ -805,7 +880,7 @@ function beginCommunityOperation(operation) {
 function endCommunityOperation() {
   communityOperation = undefined;
   for (const control of communityFilters.elements) control.disabled = false;
-  for (const button of communityList.querySelectorAll('button')) button.disabled = button.textContent === 'Imported';
+  for (const button of communityList.querySelectorAll('button')) button.disabled = false;
   communityProgressBar.hidden = true;
   closeCommunityLaps.disabled = false;
 }
@@ -817,24 +892,28 @@ function communityLapRow(lap, ownerActions) {
   const source = server ? new URL('/v1/laps/' + lap.id,
     (server.https ? 'https://' : 'http://') + server.host + ':' + server.port).href : undefined;
   const imported = (settings.comparisonLaps ?? []).some(entry => entry.path === source);
-  const add = node('button', imported ? 'Imported' : 'Import Lap');
-  addButtonIcon(add, 'importLap');
-  add.type = 'button';
-  add.onclick = async () => {
-    if (communityOperation) return;
-    beginCommunityOperation('download');
-    try {
-      settings.comparisonLaps = await lmu.importCommunityLap(lap.id);
-      renderLibrary();
-      add.querySelector('.icon-button-label').textContent = 'Imported';
-      communityStatus.textContent = 'Lap saved to Imported Laps.';
-    } catch (error) {
-      communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
-    } finally {
-      endCommunityOperation();
-    }
-  };
-  action.append(add);
+  if (imported) {
+    action.append(node('span', 'Imported', 'telemetry-status'));
+  } else {
+    const add = node('button', 'Import Lap');
+    addButtonIcon(add, 'importLap');
+    add.type = 'button';
+    add.onclick = async () => {
+      if (communityOperation) return;
+      beginCommunityOperation('download');
+      try {
+        settings.comparisonLaps = await lmu.importCommunityLap(lap.id);
+        renderLibrary();
+        add.replaceWith(node('span', 'Imported', 'telemetry-status'));
+        communityStatus.textContent = 'Lap saved to Imported Laps.';
+      } catch (error) {
+        communityStatus.textContent = error.message.replace(/^Error invoking remote method '[^']+': Error: /, '');
+      } finally {
+        endCommunityOperation();
+      }
+    };
+    action.append(add);
+  }
   if (ownerActions && settings.communityOwnerConfigured) {
     const remove = node('button', 'Remove from Server', 'community-remove');
     remove.type = 'button';
@@ -995,12 +1074,26 @@ importComparisonButton.onclick = async () => {
 const recordFields = [
   ['track', 'All Tracks', session => session.trackName || session.track],
   ['layout', 'All Layouts', session => session.trackLayout || session.track],
-  ['class', 'All Classes', session => session.carClass],
+  ['class', 'All Classes', recordClassLabel],
   ['car', 'All Cars', session => session.model || session.car]
 ];
 
 function recordDimensions(session) {
   return recordFields.map(([, , read]) => read(session) || 'Unknown');
+}
+
+function recordClassLabel({carClass,lmp2Variant}) {
+  return carClass === 'LMP2' ? (lmp2Variant === 'ELMS' ? 'LMP2 ELMS' : 'LMP2 WEC') : carClass;
+}
+
+function recordClassCell(session) {
+  const label = recordClassLabel(session) || 'Unknown';
+  const cell = node('td', label);
+  if (!carClasses.includes(session.carClass)) return cell;
+  const badge = node('span', label, 'record-class-badge');
+  badge.dataset.class = label.toLowerCase();
+  cell.replaceChildren(badge);
+  return cell;
 }
 
 function recordedGameVersion(raw) {
@@ -1318,10 +1411,11 @@ function renderRecordNotifications() {
         viewRecord.onclick = () => {
           resolveRecordNotification(key);
           $('notifications-dialog').close();
+          setCompatibleReferencesOnly(false);
           $('hide-friend-records').checked = false;
           setView('records');
-          renderRecords({trackName:entry.record.track,trackLayout:entry.record.layout,
-            carClass:entry.record.carClass});
+          notifiedRecord = {...entry.record,key,scrollPending:true};
+          renderRecords({...entry.record,trackName:entry.record.track,trackLayout:entry.record.layout});
         };
         actions.append(viewRecord);
       }
@@ -1465,6 +1559,7 @@ async function updateRecordRequests(requests) {
 let friendRecords = [];
 let communityMinimumGameVersion = null;
 let unlockedRecordVersion = '';
+let notifiedRecord;
 function friendRecordBaselineKey() {
   const server = settings.communityServer;
   return 'track-record-baseline:' + JSON.stringify([server?.https,server?.host,server?.port,settings.primaryDriverProfile]);
@@ -1503,6 +1598,7 @@ async function refreshFriendRecords(changed = false) {
     let syncStatus = '';
     if (!privateRequestsAvailable) syncStatus = 'Update the Community Server to share Track Records and request telemetry.';
     else if (settings.shareTrackRecords && !settings.primaryDriver) syncStatus = 'Confirm your primary driver to share Track Records.';
+    else if (result.eligibility?.elmsRequiresServerUpdate) syncStatus = 'Update the Community Server to share LMP2 ELMS records.';
     else if (settings.shareTrackRecords && result.eligibility?.eligibleRecords === 0) {
       syncStatus = result.eligibility.excludedSessions
         ? 'No eligible records to share. Your official laps are below the server minimum game version (' +
@@ -1542,7 +1638,10 @@ $('share-track-records').onchange = event => {
     setStatus($('community-settings-status'),error.message,{error:true});
   });
 };
-$('hide-friend-records').onchange = () => renderRecords();
+$('hide-friend-records').onchange = () => {
+  notifiedRecord = undefined;
+  renderRecords();
+};
 
 function recordContestKey(dimensions) {
   return JSON.stringify(dimensions.slice(0,3).map(value => value.trim().toLowerCase()));
@@ -1557,7 +1656,7 @@ function localRecordCandidates() {
   });
 }
 function friendContestKey(record) {
-  return recordContestKey([record.track,record.layout,record.carClass || 'Unknown']);
+  return recordContestKey([record.track,record.layout,recordClassLabel(record) || 'Unknown']);
 }
 function friendDriverContestKey(record) {
   return JSON.stringify([normaliseDriverName(record.driver),friendContestKey(record)]);
@@ -1578,11 +1677,14 @@ function notifyBeatenRecords(records) {
   }
   for (const record of records) {
     const time = local.get(friendContestKey(record));
+    const oldKey = recordClassLabel(record) === 'LMP2 WEC'
+      ? JSON.stringify([normaliseDriverName(record.driver),recordContestKey([record.track,record.layout,'LMP2'])]) : '';
+    const priorTime = previous[friendDriverContestKey(record)] ?? previous[oldKey] ?? Infinity;
     if (normaliseDriverName(record.driver) === normaliseDriverName(settings.primaryDriver) ||
-        time === undefined || !(record.time < time) || (previous[friendDriverContestKey(record)] ?? Infinity) < time) continue;
+        time === undefined || !(record.time < time) || priorTime < time) continue;
     addRecordNotification('beaten-' + record.id + '-' + record.time,
-      record.driver + ' beat your ' + (record.carClass || 'class') + ' record at ' + record.track + ' · ' + lapTime(record.time),
-      {record:{track:record.track,layout:record.layout,carClass:record.carClass,car:record.car,gameVersion:record.gameVersion}});
+      record.driver + ' beat your ' + (recordClassLabel(record) || 'class') + ' record at ' + record.track + ' · ' + lapTime(record.time),
+      {record:{id:record.id,driver:record.driver,track:record.track,layout:record.layout,carClass:record.carClass,lmp2Variant:record.lmp2Variant}});
   }
 }
 function trophyIcon() {
@@ -1685,13 +1787,13 @@ function showTrophyStandings({ownKey,standing,chance}) {
   if (chance) {
     const {record,gap,rank} = chance;
     $('trophy-close-contest').textContent = [record.track,record.layout !== record.track ? record.layout : '',
-      record.carClass,number(gap,3) + ' s off ' + trophyMedals[rank].toLowerCase()].filter(Boolean).join(' · ');
+      recordClassLabel(record),number(gap,3) + ' s off ' + trophyMedals[rank].toLowerCase()].filter(Boolean).join(' · ');
     $('trophy-view-contest').onclick = () => {
-      compatibleReferencesOnly = false;
-      syncCompatibleReferenceFilters();
+      notifiedRecord = undefined;
+      setCompatibleReferencesOnly(false);
       $('hide-friend-records').checked = false;
       trophyDialog.close();
-      renderRecords({trackName:record.track,trackLayout:record.layout,carClass:record.carClass});
+      renderRecords({...record,trackName:record.track,trackLayout:record.layout});
     };
   }
 }
@@ -1796,6 +1898,7 @@ function rememberSharedRecordLap(session, lap) {
 
 function renderRecords(lastSession) {
   recordsRefreshPending = false;
+  const restoreNotifiedFocus = document.activeElement?.classList.contains('record-notification-target');
   const lastDimensions = lastSession && recordDimensions(lastSession);
   const candidates = localRecordCandidates();
   const localBest = new Map();
@@ -1893,9 +1996,10 @@ function renderRecords(lastSession) {
     return a.bestLap.time - b.bestLap.time || a.session.driver.localeCompare(b.session.driver);
   });
   const rows = [];
+  let notifiedRow;
   let previousTrack;
   for (const {session, bestLap, dimensions, version, friend} of records) {
-    const [track, layout, carClass, car] = dimensions;
+    const [track, layout, , car] = dimensions;
     const trackKey = JSON.stringify([track, layout]);
     if (previousTrack !== trackKey) {
       const group = node('tr', undefined, 'records-track-group');
@@ -1911,42 +2015,51 @@ function renderRecords(lastSession) {
     const referenceCell = node('td', undefined, 'session-comparison');
     const telemetryCell = node('td', undefined, 'record-telemetry');
     if (friend) {
+      if (notifiedRecord && (friend.id === notifiedRecord.id ||
+          notifiedRecord.key.startsWith('beaten-' + friend.id + '-') ||
+          (notifiedRecord.driver && friendDriverContestKey(friend) === friendDriverContestKey(notifiedRecord)))) {
+        notifiedRow = row;
+        row.classList.add('record-notification-target');
+      }
       const request = latestTrackRecordRequest(friend);
       const imported = importedFriendRecordLap(friend,request);
       const ownRecord = localBest.get(recordContestKey(dimensions));
+      const canCompare = ownRecord?.session.path && compatibleReferenceSessions(ownRecord.session,imported);
+      const canRequest = friend.requestable && privateRequestsAvailable && settings.primaryDriver && lmu.trackRecordRequest;
+      const canDownload = request?.status === 'uploaded';
+      const transferring = pendingRecordRequests.has(friend.id) || pendingRecordTransfers.has(request?.id);
+      const requestStatus = {pending:'Request Sent',accepted:'Request Accepted',denied:'Request Denied',revoked:'Access Revoked'}[request?.status];
+      const status = imported ? 'Ready to Open' : transferring ? (canDownload ? 'Downloading Lap…' : 'Sending Request…') :
+        requestStatus ?? (canDownload ? 'Ready to Download' : friend.requestable ? 'Request Required' :
+          friend.resultOnly ? 'No Telemetry' : 'Unavailable');
       time.textContent = lapTime(bestLap.time);
+      telemetryCell.append(node('span',status,'telemetry-status'));
       if (imported) {
         bindTelemetryRow(row,() => openImportedLap(imported));
         addLoadedLapLabel(time,imported.path,imported.lap.id);
-      }
-      telemetryCell.textContent = imported ? 'Ready to Open' : request?.status === 'uploaded' ? 'Ready to Download' :
-        friend.requestable ? 'Request Required' : friend.resultOnly ? 'No Telemetry' : 'Unavailable';
-      if (!imported && (!friend.requestable || !privateRequestsAvailable || !settings.primaryDriver || !lmu.trackRecordRequest)) {
-        referenceCell.textContent = friend.requestable && !settings.primaryDriver ? 'Confirm Your Driver' : '—';
-      }
-      else {
-        const requestLabel = 'Request the Telemetry for This Lap from ' + friend.driver;
-        const action = node('button',imported ? useAsReferenceLabel :
-          request ? {pending:'Request Sent',accepted:'Request Accepted',denied:'Request Denied',uploaded:'Download Telemetry Lap',expired:requestLabel,revoked:'Access Revoked'}[request.status]
-            : requestLabel,imported ? 'reference-add' : 'record-request');
-        const actionIcon = imported ? 'bookmark' : request?.status === 'uploaded' ? 'download' : 'request';
-        addButtonIcon(action, actionIcon);
-        action.disabled = !imported && ((!!request && !['uploaded','expired'].includes(request.status)) || pendingRecordRequests.has(friend.id) || pendingRecordTransfers.has(request?.id));
-        if (imported) {
-          action.hidden = !matchesReferenceSession(imported) || selected.path === imported.path;
-          action.setAttribute('aria-pressed', String(referenceSessionPath === imported.path));
-          action.onclick = event => {
-            event.stopPropagation();
-            selectReferenceSession(imported.path);
-          };
-          addLoadedReferenceLabel(referenceCell,imported.path);
-        } else action.onclick = async () => {
-          if (pendingRecordRequests.has(friend.id)) return;
+        const action = node('button',useAsReferenceLabel,'reference-add');
+        action.type = 'button';
+        addButtonIcon(action,'bookmark');
+        action.hidden = canCompare || !matchesReferenceSession(imported) || selected.path === imported.path;
+        action.setAttribute('aria-pressed',String(referenceSessionPath === imported.path));
+        action.onclick = event => {
+          event.stopPropagation();
+          selectReferenceSession(imported.path);
+        };
+        referenceCell.append(action);
+        addLoadedReferenceLabel(referenceCell,imported.path);
+      } else if (canRequest && !requestStatus && !transferring) {
+        const action = node('button',canDownload ? 'Download Lap' : 'Request Telemetry','record-request');
+        action.type = 'button';
+        addButtonIcon(action,canDownload ? 'download' : 'request');
+        action.setAttribute('aria-label',action.textContent + ' · ' + friend.driver);
+        action.onclick = async () => {
+          if (pendingRecordRequests.has(friend.id) || pendingRecordTransfers.has(request?.id)) return;
           const connection = friendConnectionGeneration;
           pendingRecordRequests.add(friend.id);
           action.disabled = true;
           try {
-            if (request?.status === 'uploaded') {
+            if (canDownload) {
               settings.comparisonLaps = await lmu.trackRecordRequest('download',request.id);
               renderLibrary();
             } else {
@@ -1960,9 +2073,11 @@ function renderRecords(lastSession) {
             refreshRecordsFromScan();
           }
         };
-        referenceCell.prepend(action);
+        referenceCell.append(action);
+      } else if (friend.requestable && !settings.primaryDriver) {
+        referenceCell.textContent = 'Confirm Your Driver';
       }
-      if (imported && ownRecord?.session.path) {
+      if (canCompare) {
         const compare = node('button','Compare Best Laps','reference-add');
         compare.type = 'button';
         addButtonIcon(compare,'wave');
@@ -1982,7 +2097,7 @@ function renderRecords(lastSession) {
       if (session.path) {
         bindTelemetryRow(row,() => openSession(session,bestLap));
         addLoadedLapLabel(time,session.path,bestLap.id);
-        telemetryCell.append(node('span','Ready to Open'));
+        telemetryCell.append(node('span','Ready to Open','telemetry-status'));
         if (settings.communityConfigured && lmu.exportBestLap &&
             !sharedRecordLaps.has(sharedRecordLapKey(session,bestLap))) {
           const upload = node('button','Export to Server','button-secondary');
@@ -2009,35 +2124,33 @@ function renderRecords(lastSession) {
       addLoadedReferenceLabel(referenceCell, session.path, bestLap.id);
     }
     if (bestLap.validity === 'unconfirmed') time.append(node('small', 'Validity unconfirmed'));
-    const bestSectors = friend || session.resultOnly
-      ? (friend?.bestSectors ?? session.bestSectors ?? []).map(value => Number.isFinite(value) && value > 0 ? value : Infinity) :
-      [0,1,2].map(index => Math.min(Infinity,...session.laps.filter(item => eligibleRecordLap(item) && item.validity === 'official')
-        .map(item => item.sectors?.[index]).filter(value => Number.isFinite(value) && value > 0)));
-    const optimalTime = bestSectors.length === 3 ? bestSectors.reduce((total, sector) => total + sector, 0) : Infinity;
-    const optimal = node('td', lapTime(optimalTime), 'numeric-cell record-optimal');
-    if (Number.isFinite(optimalTime)) {
-      const difference = Math.round((optimalTime - bestLap.time) * 1000) / 1000;
-      optimal.append(node('small', '(' + timeGapLabel(difference) + ')'));
-    }
-    const carCell = node('td', car);
-    carCell.append(node('small', session.driver || 'Unknown Driver'));
-    row.append(node('td', carClass), carCell, time,
+    row.append(recordClassCell(session), node('td', car), node('td', session.driver || 'Unknown Driver'), time,
       ...[0, 1, 2].map(index => node('td', Number.isFinite(bestLap.sectors?.[index])
         ? number(bestLap.sectors[index], 3) + ' s' : '—', 'numeric-cell')),
-      optimal, node('td', dateLabel(session.recorded, australianDate), 'record-date'),
+      node('td', dateLabel(session.recorded, australianDate), 'record-date'),
       node('td', version || 'Unknown'), telemetryCell, referenceCell);
     rows.push(row);
   }
   $('record-rows').replaceChildren(...rows);
   $('records-table').hidden = !rows.length;
+  if (notifiedRow) {
+    if (!notifiedRow.hasAttribute('tabindex')) notifiedRow.tabIndex = -1;
+    if (notifiedRecord.scrollPending || restoreNotifiedFocus) notifiedRow.focus({preventScroll:true});
+    if (notifiedRecord.scrollPending) {
+      notifiedRow.scrollIntoView({block:'center',inline:'nearest'});
+      notifiedRecord.scrollPending = false;
+    }
+  }
   setListCount('records-list-count',records.length,unfilteredRecords.size,'Record');
   $('records-load-guide').hidden = !rows.some(row => row.classList.contains('session-row'));
   positionListActions('records',!records.length);
-  $('records-status').textContent = records.length ? ''
-    : locked && communityMinimumGameVersion === null ? 'Waiting for the Community Server Game Version.'
+  $('records-status').textContent = locked && communityMinimumGameVersion === null ? 'Waiting for the Community Server Game Version.'
+    : notifiedRecord && !notifiedRow ? 'That record is currently unavailable.'
+    : records.length ? ''
     : compatibleReferencesOnly ? noCompatibleReferences : 'No matching records.';
 }
 
+recordsFilters.addEventListener('change', () => { notifiedRecord = undefined; }, true);
 $('record-driver').onchange = () => renderRecords();
 for (const [key] of recordFields) {
   $('record-' + key).onchange = () => {
@@ -2052,9 +2165,13 @@ $('record-version').onchange = event => {
 $('record-last-session').onclick = () => {
   const lastSession = sessions[0];
   if (!lastSession) return;
+  notifiedRecord = undefined;
   renderRecords(lastSession);
 };
 $('record-clear').onclick = () => {
+  notifiedRecord = undefined;
+  setCompatibleReferencesOnly(false);
+  $('hide-friend-records').checked = false;
   for (const [key] of recordFields) $('record-' + key).value = '';
   $('record-driver').value = '';
   unlockedRecordVersion = '';
@@ -2115,7 +2232,10 @@ function recentSessionRow(session) {
   if (Number.isNaN(+date)) {
     timestamp.textContent = session.recorded;
   } else {
-    timestamp.append(node('strong', weekdayPeriod(date)), node('small', australianDateTime.format(date)));
+    const dateAndTime = australianDateTime.format(date);
+    const oneWeek = 7 * 24 * 60 * 60 * 1000;
+    if (Date.now() - date > oneWeek) timestamp.textContent = dateAndTime;
+    else timestamp.append(node('strong', weekdayPeriod(date)), node('small', dateAndTime));
   }
   const track = node('td');
   const trackName = node('strong', session.track || session.filename);
@@ -2133,7 +2253,7 @@ function recentSessionRow(session) {
   bindTelemetryRow(row,() => openSession(session));
   const layout = session.trackLayout;
   track.append(trackName, node('small', [
-    layout && layout !== session.track ? layout : '', session.car, session.driver, session.session
+    layout && layout !== session.track ? layout : '', session.car, session.driver
   ].filter(Boolean).join(' · ')));
   addLoadedLapLabel(track,session.path);
   const comparison = node('td', undefined, 'session-comparison');
@@ -2148,6 +2268,7 @@ function recentSessionRow(session) {
   row.append(
     timestamp,
     track,
+    node('td', session.session?.trim() || '—'),
     result,
     node('td', lapTime(session.best), 'session-metric session-best numeric-cell'),
     node('td', session.timed, 'session-metric numeric-cell'),
@@ -2221,11 +2342,14 @@ async function scan() {
     }
     scanKey = nextKey;
     sessions = response.sessions;
-    offerPrimaryDriver(response.suggestedDriver);
-    $('settings-confirm-driver').hidden = Boolean(settings.primaryDriver || !primaryDriverSuggestion);
+    primaryDriverChoices = response.recordedDrivers ?? [];
+    const driverDialog = $('confirm-primary-driver');
+    if (driverDialog.open) fillDriverChoices($('primary-driver-choice').value);
+    else if (primaryDriverChoices.length && !settings.primaryDriver && lmu.confirmPrimaryDriver && !deferredDriverConfirmation) openDriverPicker();
+    $('settings-confirm-driver').hidden = !lmu.confirmPrimaryDriver || (!settings.primaryDriver && !primaryDriverChoices.length);
     renderResultsDistance();
     void refreshFriendRecords(true);
-    if (settings.driverTrainerEnabled === true && view === 'trainer') void scanDriverTrainer(sessions);
+    if (view === 'trainer') void scanDriverTrainer(sessions);
     resultGameVersions = response.resultGameVersions || [];
     resultRecords = response.resultRecords || [];
     $('issues').hidden = !response.errors.length;
@@ -2236,12 +2360,14 @@ async function scan() {
       const updated = sessions.find(item => item.path === selected.path);
       if (updated) {
         const oldKey = referenceKey(reference);
+        const oldLabels = chartDriverLabels();
         selected = updated;
         lap = updated.laps.find(item => item.id === lap.id) || lap;
         renderSessionSummary();
         fillLaps();
         fillReferences();
         if (oldKey !== referenceKey(reference)) await readReference();
+        else if (ready && chartDriverLabels().some((label, index) => label !== oldLabels[index])) buildCharts();
         updateContext();
       }
     }
@@ -2531,16 +2657,24 @@ const bestLapExportDiscord = $('best-lap-export-discord');
 const bestLapExportCommunity = $('best-lap-export-community');
 const bestLapExportCancel = $('best-lap-export-cancel');
 let exportSessionPath, exportRecordLapId;
+function updateBestLapShareActions(session) {
+  const primary = normaliseDriverName(settings.primaryDriver);
+  const canShare = Boolean(primary && primary === normaliseDriverName(session?.driver));
+  bestLapExportDiscord.disabled = !canShare || !settings.discordWebhookConfigured;
+  bestLapExportCommunity.disabled = !canShare || !settings.communityConfigured;
+  return canShare;
+}
 function openBestLapExport(session, recordLap) {
   if (exportingBestLap) return;
   exportSessionPath = session.path;
   exportRecordLapId = recordLap?.id;
   bestLapExportLocal.hidden = bestLapExportDiscord.hidden = Boolean(recordLap);
   $('best-lap-export-lap').textContent = [session.driver, session.track, lapTime(recordLap?.time ?? session.best)].filter(Boolean).join(' · ');
-  bestLapExportDiscord.disabled = !settings.discordWebhookConfigured;
-  bestLapExportCommunity.disabled = !settings.communityConfigured;
+  const canShare = updateBestLapShareActions(session);
   setStatus(bestLapExportStatus,
-    recordLap ? 'This shares the selected record lap with the community.' :
+    !settings.primaryDriver ? 'Confirm your primary driver to share telemetry.' :
+      !canShare ? 'Only laps recorded under your primary driver can be shared.' :
+      recordLap ? 'This shares the selected record lap with the community.' :
       settings.discordWebhookConfigured ? '' : 'Add a Discord webhook in Settings to export to Discord.',
     {temporary:false});
   bestLapExportDialog.showModal();
@@ -2578,8 +2712,7 @@ async function exportBestLap(target) {
     exportingBestLap = false;
     updateBestLapExport();
     bestLapExportLocal.disabled = bestLapExportCancel.disabled = false;
-    bestLapExportDiscord.disabled = !settings.discordWebhookConfigured;
-    bestLapExportCommunity.disabled = !settings.communityConfigured;
+    updateBestLapShareActions(session);
   }
 }
 bestLapExportLocal.onclick = () => exportBestLap('local');
@@ -2612,7 +2745,7 @@ async function readPrimary() {
   updatePin();
   $('charts').replaceChildren();
   $('channel-list').replaceChildren();
-  $('position').textContent = '';
+  $('position').hidden = true;
   $('map-status').textContent = '';
   for (const canvas of [$('map'), racingMap]) {
     const map = canvasContext(canvas);
@@ -2815,7 +2948,7 @@ function refreshUnitFields() {
     unitOptions.every(input => unitPresets[preset][input.dataset.measurementUnit] === input.value)) ?? 'custom';
   const unit = displayUnit('','°C');
   for (const text of document.querySelectorAll('[data-temperature-unit]')) text.textContent = unit;
-  $('trainer-cold-unit').textContent = unit;
+  refreshTrainerColdThreshold();
   for (const input of document.querySelectorAll('[data-hot-temperature]')) {
     input.value = temperatureInputValue(hotTemperature(input.dataset.carClass,input.dataset.hotTemperature));
     input.setAttribute('aria-label',input.dataset.temperatureLabel + ' (' + unit + ')');
@@ -3393,7 +3526,7 @@ function sessionLength(seconds) {
   const hours = Math.floor(total / 3600);
   const minutes = Math.floor(total / 60) % 60;
   const remainder = String(total % 60).padStart(2, '0');
-  return hours ? hours + ':' + String(minutes).padStart(2, '0') + ':' + remainder : minutes + ':' + remainder;
+  return hours ? `${hours}h:${String(minutes).padStart(2, '0')}m:${remainder}s` : `${minutes}m:${remainder}s`;
 }
 let summaryCategory = 'vehicle';
 const summaryViews = {
@@ -4750,16 +4883,15 @@ function speedActivationControls(controls, track = false) {
 let cornerTimeLossOpen = true;
 let cornerTimeLossHeight;
 
-function cornerComparisonLabel(currentLap, comparison) {
-  const current = currentLap.number == null ? loadedTraceLabel : 'Lap ' + currentLap.number;
-  const [, driver] = chartDriverLabels(selected?.driver, comparison.session.driver);
+function cornerComparisonLabel(currentLap, comparison, loadedLabel, referenceLabel) {
+  const current = currentLap.number == null ? loadedLabel : loadedLabel + ' · Lap ' + currentLap.number;
   const referenceLap = comparison.lap;
-  const referenceLabel = referenceLap.number == null ? 'Reference Lap' : 'Lap ' + referenceLap.number;
+  const lapNumber = referenceLap.number == null ? '' : 'Lap ' + referenceLap.number;
   if (!comparison.imported && comparison.session.path === referenceSessionPath) {
-    return current + ' vs ' + (referenceLap.number == null ? 'a lap' : referenceLabel) + ' of the Reference Session';
+    return current + ' vs ' + [referenceLabel, lapNumber, 'Reference Session'].filter(Boolean).join(' · ');
   }
   const time = referenceLap.time > 0 ? lapTime(referenceLap.time) : '';
-  const target = driver === 'Reference' ? referenceLabel : driver + ' ' + (time || referenceLabel);
+  const target = [referenceLabel, time || lapNumber].filter(Boolean).join(' · ');
   return current + ' vs ' + target;
 }
 
@@ -4952,11 +5084,13 @@ function reviewingPracticeCorner() {
   return practiceComparison && selected?.path === practiceComparison.path && lap?.id === practiceComparison.lapId &&
     reference?.session.path === practiceComparison.path && reference.lap.id === practiceComparison.benchmarkId;
 }
-function cornerTimeLossPanel() {
+function cornerTimeLossPanel(loadedLabel, referenceLabel) {
+  const selectedDriver = loadedLabel === loadedTraceLabel ? loadedLabel : loadedLabel.split(' ', 1)[0];
+  const comparedDriver = referenceLabel === referenceTraceLabel ? referenceLabel : referenceLabel.split(' ', 1)[0];
   const panel = node('section', undefined, 'corner-time-loss');
   panel.id = 'corner-time-loss';
   panel.setAttribute('aria-label', 'Corner Time Loss');
-  const comparisonLabel = cornerComparisonLabel(lap, reference);
+  const comparisonLabel = cornerComparisonLabel(lap, reference, selectedDriver, comparedDriver);
   panel.append(node('p', comparisonLabel));
 
   const gps = route(primary);
@@ -5002,12 +5136,9 @@ function cornerTimeLossPanel() {
     scheduleRender();
   };
 
-  const [selectedDriver, referenceDriver] = chartDriverLabels(selected?.driver, reference.session.driver);
-  const comparedDriver = referenceDriver === 'Reference' ? 'Reference Lap' : referenceDriver;
   const speedDigits = telemetryDecimalPlaces('Ground Speed');
-  const note = corners.length ? 'Estimated corners · Largest time loss first'
-    : 'No comparable corners were detected in the recorded GPS route.';
-  panel.append(node('p', note));
+  const note = node('p');
+  panel.append(note);
   const speedText = value => Number.isFinite(value) ? number(value, speedDigits) + ' ' + displayUnit('','km/h') : '—';
   const cornerRows = corners.map(({index, from, apex, to, change, minimums}) => {
     const displayed = Math.round(change * 1000) / 1000;
@@ -5022,6 +5153,23 @@ function cornerTimeLossPanel() {
     ]};
   });
   const list = node('ol');
+  const items = [];
+  const sortByNumber = node('input');
+  sortByNumber.type = 'checkbox';
+  sortByNumber.checked = settings.sortCornersByNumber === true;
+  sortByNumber.disabled = cornerRows.length < 2;
+  const sortControl = node('label', undefined, 'corner-sort check');
+  sortControl.append(sortByNumber, 'Sort by Corner Number');
+  function orderCorners() {
+    const ordered = sortByNumber.checked ? [...items].sort((a,b) => a.index - b.index) : items;
+    list.replaceChildren(...ordered.map(({item}) => item));
+    note.textContent = !items.length ? 'No comparable corners were detected in the recorded GPS route.'
+      : sortByNumber.checked ? 'Estimated corners · Corner number order' : 'Estimated corners · Largest time loss first';
+  }
+  sortByNumber.onchange = () => {
+    save({sortCornersByNumber:sortByNumber.checked});
+    orderCorners();
+  };
   const resetHeight = () => {
     cornerTimeLossHeight = undefined;
     list.style.removeProperty('max-height');
@@ -5122,8 +5270,9 @@ function cornerTimeLossPanel() {
       seek(from, false);
     };
     item.append(button);
-    list.append(item);
+    items.push({index,item});
   }
+  orderCorners();
   if (cornerRows.length) {
     const handle = node('button', undefined, 'resize corner-time-loss-resize');
     handle.type = 'button';
@@ -5136,19 +5285,22 @@ function cornerTimeLossPanel() {
     attachChartResize(handle, () => list.getBoundingClientRect().height, setHeight, undefined, resetHeight);
     panel.append(handle);
   }
-  return {toggle, panel};
+  return {toggle, sortControl, panel};
 }
 
 function viewerCarDetails(session) {
-  return [session.model || session.car, session.carClass].filter(Boolean).join(' · ');
+  return [session.model || session.car, recordClassLabel(session)].filter(Boolean).join(' · ');
 }
-function viewerLapDetails(label, session, currentLap) {
-  const driverAndCar = [label, session.driver, viewerCarDetails(session)].filter(Boolean).join(' · ');
+function viewerLapDetails(labels, session, currentLap) {
+  const driverAndCar = [...labels, viewerCarDetails(session)].filter(Boolean).join(' · ');
   const dateAndLap = [dateLabel(session.recorded), lapLabel(currentLap)].filter(Boolean).join(' · ');
   return driverAndCar + '\n' + dateAndLap;
 }
 function updateActiveLapComparison() {
   updateGraphAxisButtons();
+  const [loadedLabel, referenceLabel] = chartDriverLabels();
+  $('track-selected-key').textContent = loadedLabel;
+  $('track-reference-key').textContent = referenceLabel;
   const graphReferenceToggle = $('show-graph-reference');
   const dockedReferenceToggle = $('show-track-reference');
   if (graphReferenceToggle) {
@@ -5161,12 +5313,12 @@ function updateActiveLapComparison() {
   if (focusGraphs) focusGraphs.hidden = !lap;
   if (!lap) return;
   renderMapSectorTimes();
-  $('viewer-loaded-session').textContent = viewerLapDetails('Loaded Session', selected, lap);
+  $('viewer-loaded-session').textContent = viewerLapDetails(['Loaded Session', selected.driver], selected, lap);
   const comparing = !!(reference && secondary);
   const loadedReference = $('viewer-loaded-reference');
   loadedReference.classList.toggle('reference-color', comparing);
   loadedReference.textContent = comparing
-    ? viewerLapDetails('Loaded Reference', reference.session, reference.lap)
+    ? viewerLapDetails(['Loaded Reference', reference.session.driver], reference.session, reference.lap)
     : referenceLoading ? 'Loading Reference Lap…' : 'No Reference Lap Loaded';
 }
 
@@ -5377,7 +5529,8 @@ function renderAeroVisualiser() {
   const limits = settings.suspensionLimits;
   const phase = $('aero-phase').value;
   const distanceAxis = usesDistanceAxis();
-  const key = [primary,comparison,range[0],range[1],distanceAxis,limits,settings.measurementUnits,phase];
+  const drivers = chartDriverLabels();
+  const key = [primary,comparison,range[0],range[1],distanceAxis,limits,settings.measurementUnits,phase,...drivers];
   if (key.some((value,index) => value !== aeroRenderKey[index])) {
     aeroRenderKey = key;
     charts.replaceChildren();
@@ -5391,7 +5544,7 @@ function renderAeroVisualiser() {
         const car = session.model || session.car;
         const threshold = Object.hasOwn(limits ?? {},car) ? limits[car][axle+4] : null;
         return suspensionEvents(points,threshold,true).map(run => ({...run,floor:true,
-          label:[index ? 'Reference' : 'Loaded','Possible Floor Contact',axle ? 'Rear' : 'Front',
+          label:[drivers[index],'Possible Floor Contact',axle ? 'Rear' : 'Front',
             run.first[0].toFixed(1)+(distanceAxis ? ' m' : ' s'),run.value.toFixed(2)+' mm'].join(' · ')}));
       });
       const speedUnit = displayUnit('Ground Speed', 'km/h');
@@ -5448,8 +5601,12 @@ function renderAeroVisualiser() {
     const valid = Number.isFinite(front) && Number.isFinite(rear);
     group.style.visibility = valid ? 'visible' : 'hidden';
     output.hidden = index === 1 && !comparison;
-    output.textContent = valid ? `Front ${front.toFixed(1)} mm · Rear ${rear.toFixed(1)} mm · Rake ${(rear-front).toFixed(1)} mm`
-      : 'Ride height unavailable at cursor';
+    output.title = valid ? '' : 'Ride height unavailable at cursor';
+    const values = [front, rear, rear-front];
+    output.querySelectorAll('.fixed-reading').forEach((reading, i) => {
+      const value = values[i];
+      reading.textContent = Number.isFinite(value) ? value.toFixed(1) : '—';
+    });
     if (valid) {
       const height = value => 98 - Math.max(-10,Math.min(140,value))*(profile === 'lexus' ? .22 : .44);
       const start = height(front), end = height(rear);
@@ -5460,11 +5617,17 @@ function renderAeroVisualiser() {
 $('aero-show-reference').onchange = $('aero-phase').onchange = renderAeroVisualiser;
 
 function renderVisualiserLaps() {
+  if (!popoutWindows.has('aero') && !popoutWindows.has('suspension')) return;
+  const drivers = chartDriverLabels();
   for (const name of Object.keys(visualizerSettings)) {
     if (!popoutWindows.has(name)) continue;
-    $(name + '-loaded').textContent = selected && lap ? viewerLapDetails('Loaded Lap',selected,lap) : 'No lap loaded';
-    $(name + '-reference').textContent = secondary && reference
-      ? viewerLapDetails('Reference Lap',reference.session,reference.lap) : 'No reference lap loaded';
+    const loadedLabel = selected && lap ? viewerLapDetails([drivers[0]],selected,lap) : 'No lap loaded';
+    const referenceLabel = secondary && reference
+      ? viewerLapDetails([drivers[1]],reference.session,reference.lap) : 'No reference lap loaded';
+    const loadedOutput = $(name + '-loaded');
+    const referenceOutput = $(name + '-reference');
+    if (loadedOutput.textContent !== loadedLabel) loadedOutput.textContent = loadedLabel;
+    if (referenceOutput.textContent !== referenceLabel) referenceOutput.textContent = referenceLabel;
   }
   if (popoutWindows.has('aero')) renderAeroVisualiser();
   if (!popoutWindows.has('suspension')) return;
@@ -5481,7 +5644,7 @@ function renderVisualiserLaps() {
   const distanceAxis = usesDistanceAxis();
   const referenceCar = reference?.session.model || reference?.session.car;
   const referenceLimits = Object.hasOwn(limits,referenceCar) ? limits[referenceCar] : undefined;
-  const key = [primary,useReference,range[0],range[1],distanceAxis,car,carLimits,referenceLimits];
+  const key = [primary,useReference,range[0],range[1],distanceAxis,car,carLimits,referenceLimits,...drivers];
   if (key.some((value,index) => value !== suspensionRenderKey[index])) {
     suspensionRenderKey = key;
     const content = $('suspension-plots');
@@ -5499,7 +5662,7 @@ function renderVisualiserLaps() {
       return series.flatMap((points,index) => {
         const limit = thresholds?.[index + (floor ? 4 : 0)];
         return suspensionEvents(points,limit,floor).map(run => ({...run,floor,
-          label:[lapIndex ? 'Reference' : 'Loaded', floor ? 'Possible Floor Contact' : limit == null ? 'Possible Bottoming' : 'Suspension Travel Limit',
+          label:[drivers[lapIndex], floor ? 'Possible Floor Contact' : limit == null ? 'Possible Bottoming' : 'Suspension Travel Limit',
             floor ? ['Front','Rear'][index] : suspensionCorners[index],
             run.first[0].toFixed(1) + (distanceAxis ? ' m' : ' s'), run.value.toFixed(2)+' mm'].join(' · ')}));
       });
@@ -5592,8 +5755,20 @@ function changeReferenceTrace(event) {
   scroll.scrollTop = scrollTop;
   if (secondary) message(referenceAlignmentMessage());
 }
-function loadedLapPrefix(separator = ' ') {
-  return visibleReferenceLap() ? loadedTraceLabel + separator : '';
+function lapReadingPrefix(label, separator = ' ') {
+  return label ? label + separator : '';
+}
+
+function chartTraceReading(prefix, value, width, reference, peak, unit) {
+  const trace = node('span', prefix, reference ? 'reference-color' : 'selected-color');
+  const suffix = unit ? ' ' + unit : '';
+  const live = suffix && value.endsWith(suffix) ? value.slice(0, -suffix.length) : value;
+  const reading = node('span', live.trimStart(), 'fixed-reading');
+  reading.style.inlineSize = Math.max(1, width - suffix.length) + 'ch';
+  trace.append(reading);
+  if (peak) trace.append(' (top ' + peak + ')');
+  if (unit) trace.append('\u00a0' + unit);
+  return trace;
 }
 
 function graphScrollContainer() {
@@ -5609,6 +5784,10 @@ function buildCharts() {
   selection = null;
   chartRows = [];
   const visibleReference = visibleReferenceLap();
+  const [loadedDriver, referenceLabel] = chartDriverLabels();
+  const loadedLabel = visibleReference ? loadedDriver : '';
+  const loadedPrefix = lapReadingPrefix(loadedLabel);
+  const referencePrefix = lapReadingPrefix(referenceLabel);
   const hidden = new Set(settings.hiddenGraphs ?? defaultHiddenGraphs);
   const chosen = new Set(settings.extraGraphChannels);
   const extra = [...chosen].filter(name => !builtInGraphKeys.has(name))
@@ -5631,10 +5810,12 @@ function buildCharts() {
     const group = channels.length ? {channels} : null;
     const mainLayout = key === 'delta' ? null : chartReadingLayout(primary, channelName);
     const referenceLayout = key !== 'delta' && visibleReference ? chartReadingLayout(visibleReference, channelName) : null;
+    const speed = key === 'Ground Speed' ? speedReadingDetails(visibleReference) : null;
     const readingWidth = mainLayout
-      ? loadedLapPrefix().length + mainLayout.length + (referenceLayout ? referenceTraceLabel.length + 4 + referenceLayout.length : 0)
+      ? loadedPrefix.length + mainLayout.length + (referenceLayout ? referencePrefix.length + 4 + referenceLayout.length : 0)
       : deltaWidth;
-    output.style.inlineSize = readingWidth + 'ch';
+    if (speed) head.classList.add('speed-chart-head');
+    else output.style.inlineSize = readingWidth + 'ch';
     head.append(node('h2', title));
     head.append(colorControl(title,key,palette[0],()=>{
       wheelOptions.updateSwatches?.();
@@ -5644,7 +5825,7 @@ function buildCharts() {
       }
       scheduleRender();
     }));
-    const cornerAnalysis = key === 'delta' && usesDistanceAxis() ? cornerTimeLossPanel() : null;
+    const cornerAnalysis = key === 'delta' && usesDistanceAxis() ? cornerTimeLossPanel(loadedLabel, referenceLabel) : null;
     const edit = node('button', configured.length ? 'Edit Overlays' : 'Add Channels', 'chart-edit button-secondary');
     edit.type = 'button';
     edit.setAttribute('aria-label', edit.textContent + ' for ' + title);
@@ -5713,13 +5894,7 @@ function buildCharts() {
       head.append(...speedActivationControls(activationControls));
     }
     const headerEnd = node('div', undefined, 'chart-header-end');
-    if (key === 'Ground Speed') {
-      const readouts = node('span', undefined, 'speed-readouts');
-      readouts.append(speedPeaks(), output);
-      headerEnd.append(readouts);
-    } else {
-      headerEnd.append(output);
-    }
+    headerEnd.append(output);
     const exportActions = node('span', undefined, 'chart-export-actions');
     exportActions.append(exportImage);
     if (key !== 'delta') {
@@ -5746,7 +5921,8 @@ function buildCharts() {
     canvas.setAttribute('aria-label', title);
     const resizer = node('button', undefined, 'resize');
     resizer.setAttribute('aria-label', 'Resize ' + title + ' chart. Use arrow keys.');
-    const row = {key, edit, canvas, output, cache:null, group, hasSpeedTrace, cornerAnalysis, deltaWidth, mainLayout, referenceLayout, hiddenWheels:wheelOptions.hiddenWheels, readings:[]};
+    const row = {key, edit, canvas, output, cache:null, group, hasSpeedTrace, cornerAnalysis, deltaWidth, speed,
+      loadedLabel, referenceLabel, mainLayout, referenceLayout, hiddenWheels:wheelOptions.hiddenWheels, readings:[]};
     const legend = node('div',undefined,'merge legend');
     if (group) {
         group.channels.forEach((name,index) => {
@@ -5758,7 +5934,7 @@ function buildCharts() {
         const read = node('span', undefined, 'chart-reading');
         const main = chartReadingLayout(primary, name);
         const ref = visibleReference ? chartReadingLayout(visibleReference, name) : null;
-        read.style.inlineSize = (loadedLapPrefix().length + main.length + (ref ? referenceTraceLabel.length + 4 + ref.length : 0)) + 'ch';
+        read.style.inlineSize = (loadedPrefix.length + main.length + (ref ? referencePrefix.length + 4 + ref.length : 0)) + 'ch';
         const fallback = mergeColors[(index + 1) % mergeColors.length], colorKey = key+'|'+name;
         text.style.color = graphColor(colorKey,fallback);
         const wheelOptions = wheelTraceControls(key, name, () => graphColor(colorKey,fallback), redrawWheels);
@@ -5773,7 +5949,7 @@ function buildCharts() {
         row.readings.push({name,read,axisLabel,main,ref,hiddenWheels:wheelOptions.hiddenWheels});
         legend.append(item);
       });
-      if (visibleReference) legend.prepend(node('span',loadedTraceLabel + ' · Solid  |  ' + referenceTraceLabel + ' · Dashed'));
+      if (visibleReference) legend.prepend(node('span',loadedLabel + ' · Solid  |  ' + referenceLabel + ' · Dashed'));
     }
     chartRows.push(row);
     const setHeight = height => {
@@ -5843,7 +6019,7 @@ function buildCharts() {
     chart.append(canvas,resizer);
     if (cornerAnalysis) {
       const cornerBar = node('div', undefined, 'corner-toggle-bar');
-      cornerBar.append(cornerAnalysis.toggle);
+      cornerBar.append(cornerAnalysis.toggle, cornerAnalysis.sortControl);
       chart.append(cornerBar, cornerAnalysis.panel);
     }
     return chart;
@@ -5934,18 +6110,19 @@ function deltaHeadingLimits(low, high, plotHeight) {
   const opposite = share / (1 - share);
   return [Math.min(low, -high * opposite), Math.max(high, -low * opposite)];
 }
-function paintDeltaHeadings(ctx, left, right, top, bottom) {
+function paintDeltaHeadings(ctx, left, right, top, bottom, referenceLabel) {
   const inset = 9 * textScale();
   const maxWidth = Math.max(1, right - left - 2 * inset);
+  const opponent = referenceLabel === referenceTraceLabel ? 'the reference lap' : referenceLabel;
   ctx.globalAlpha = 1;
   ctx.font = '600 ' + 13 * textScale() + 'px "Segoe UI", sans-serif';
   ctx.fillStyle = (lightGraphBackground ? '#253329' : '#b5c2b4');
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
-  ctx.fillText(usesDistanceAxis() ? 'Losing time compared to the reference lap' : 'Behind the reference lap',
+  ctx.fillText((usesDistanceAxis() ? 'Losing time compared to ' : 'Behind ') + opponent,
     left + inset, top + inset, maxWidth);
   ctx.textBaseline = 'bottom';
-  ctx.fillText(usesDistanceAxis() ? 'Gaining time compared to the reference lap' : 'Ahead of the reference lap',
+  ctx.fillText((usesDistanceAxis() ? 'Gaining time compared to ' : 'Ahead of ') + opponent,
     left + inset, bottom - inset, maxWidth);
 }
 function* activationIntervals(data, name, enabled = settings.speedActivations?.[name]) {
@@ -6168,7 +6345,7 @@ function baseChart(row, width, height, ratio) {
   if (name === 'delta') {
     ctx.setLineDash([3,3]);ctx.strokeStyle=(elementColour('graph-axis',lightGraphBackground ? '#253329' : '#a4b3a7'));ctx.beginPath();
     ctx.moveTo(left,y(0));ctx.lineTo(right,y(0));ctx.stroke();
-    paintDeltaHeadings(ctx, left, right, top, bottom);
+    paintDeltaHeadings(ctx, left, right, top, bottom, row.referenceLabel);
   }
   ctx.restore();
   if (name !== 'delta' && ![first,second].some(points => points.some(([,values]) => values.some(Number.isFinite)))) {
@@ -6211,7 +6388,7 @@ function paintCursorValues(ctx, row, name) {
         if (hiddenWheels?.has(component)) return;
         const shown = typeof value === 'boolean' ? Number(value) : convert(channelName, value, channel.unit);
         const wheel = values.length === 4 ? wheels[component] + ' ' : '';
-        const lapPrefix = referenceLap ? referenceTraceLabel + ' · ' : loadedLapPrefix(' · ');
+        const lapPrefix = lapReadingPrefix(referenceLap ? row.referenceLabel : row.loadedLabel, ' · ');
         const prefix = lapPrefix + (row.group ? telemetryName(channelName) + ' · ' : '');
         const normalColours = referenceLap ? comparison : [graphColor(row.key), ...palette.slice(1)];
         const colour = overlay ? graphColor(row.key + '|' + channelName, mergeColors[(overlayIndex + 1) % mergeColors.length])
@@ -6372,25 +6549,20 @@ exportSummaryButton.onclick = async () => {
     exportSummaryButton.disabled = false;
   }
 };
-function speedPeaks() {
+function speedReadingDetails(visibleReference) {
   const name = 'Ground Speed';
   const peak = data => {
     const max = trace(data, name).reduce((best, [, [speed]]) =>
       Number.isFinite(speed) ? Math.max(best, speed) : best, -Infinity);
-    const unit = displayUnit(name, data.channels[name]?.unit) || displayUnit('','km/h');
-    return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) + ' ' + unit : '—';
+    return Number.isFinite(max) ? number(max, telemetryDecimalPlaces(name)) : '—';
   };
-  const peaks = node('span', telemetryName(name, 'Top Speed') + ' · ', 'chart-reading');
-  peaks.append(node('span', loadedLapPrefix() + peak(primary), 'selected-color'));
-  const visibleReference = visibleReferenceLap();
-  if (visibleReference) peaks.append(' | ', node('span', referenceTraceLabel + ' ' + peak(visibleReference), 'reference-color'));
-  return peaks;
-}
-function chartDriverLabels(selectedDriver, referenceDriver) {
-  const selectedNames = selectedDriver?.trim().split(/\s+/) ?? [];
-  const referenceNames = referenceDriver?.trim().split(/\s+/) ?? [];
-  const sameDriver = selectedNames.join(' ').toLowerCase() === referenceNames.join(' ').toLowerCase();
-  return [selectedNames[0] || 'Selected', sameDriver ? 'Reference' : referenceNames[0] || 'Reference'];
+  const unit = data => displayUnit(name, data.channels[name]?.unit);
+  return {
+    loadedPeak:peak(primary),
+    referencePeak:visibleReference ? peak(visibleReference) : '',
+    loadedUnit:unit(primary),
+    referenceUnit:visibleReference ? unit(visibleReference) : ''
+  };
 }
 function paintChart(row) {
   const display=canvasContext(row.canvas);
@@ -6436,12 +6608,14 @@ function paintChart(row) {
   const name=row.key==='tyres'?tyreName():row.key;
   const showValues = row.hovering || (pinned && pinnedGraph === row.key);
   if (showValues && !selection && cursor >= range[0] && cursor <= range[1]) paintCursorValues(ctx, row, name);
+  const loadedPrefix = lapReadingPrefix(row.loadedLabel);
+  const referencePrefix = lapReadingPrefix(row.referenceLabel);
   if(row.group) {
     for(const entry of row.readings){
-      entry.read.replaceChildren(node('span',loadedLapPrefix() +
-        readings(primary, entry.name, false, entry.main.widths, entry.hiddenWheels),'selected-color'));
-      if (entry.ref) entry.read.append(' | ',node('span',referenceTraceLabel + ' ' +
-        readings(secondary, entry.name, false, entry.ref.widths, entry.hiddenWheels),'reference-color'));
+      entry.read.replaceChildren(chartTraceReading(loadedPrefix,
+        readings(primary, entry.name, false, entry.main.widths, entry.hiddenWheels), entry.main.length, false));
+      if (entry.ref) entry.read.append(' | ',chartTraceReading(referencePrefix,
+        readings(secondary, entry.name, false, entry.ref.widths, entry.hiddenWheels), entry.ref.length, true));
       const channel=primary.channels[entry.name] || secondary?.channels[entry.name];
       const unit=displayUnit(entry.name,channel?.unit) || entry.name;
       const limits=row.cache.scales.get(unit);
@@ -6451,8 +6625,14 @@ function paintChart(row) {
   if(name==='delta') {
     row.output.textContent=graphDeltaLabel(graphDelta(cursor));
   } else {
-    row.output.replaceChildren(node('span', loadedLapPrefix() + readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels), 'selected-color'));
-    if (row.referenceLayout) row.output.append('  |  ', node('span', referenceTraceLabel + ' ' + readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels), 'reference-color'));
+    const loadedValue = readings(primary, name, false, row.mainLayout.widths, row.hiddenWheels);
+    row.output.replaceChildren(chartTraceReading(loadedPrefix, loadedValue, row.mainLayout.length, false,
+      row.speed?.loadedPeak, row.speed?.loadedUnit));
+    if (row.referenceLayout) {
+      const referenceValue = readings(secondary, name, false, row.referenceLayout.widths, row.hiddenWheels);
+      row.output.append(' | ', chartTraceReading(referencePrefix, referenceValue, row.referenceLayout.length, true,
+        row.speed?.referencePeak, row.speed?.referenceUnit));
+    }
   }
 }
 function route(data) {
@@ -7080,17 +7260,33 @@ function paintMap(canvas, interactive = false) {
   }
   if (!interactive) paintMapWind(ctx, width, height, project, all[0], correction, [a, b, selectedCorner?.route ?? []], xy);
 }
-function playbackDistance() {
-  if (!primary.useDistance) return '';
-  const liveDistance = measurement(primary.distanceAt(playTime), 'm', 0);
+function renderPlaybackPosition() {
+  const duration = lapTime(lap.end - lap.start, 2);
+  const elapsed = $('position-elapsed');
+  elapsed.style.inlineSize = duration.length + 'ch';
+  elapsed.textContent = lapTime(playTime - lap.start, 2);
+  $('position-duration').textContent = duration;
+  $('position').hidden = false;
+  $('position-distance').hidden = !primary.useDistance;
+  $('position-section').hidden = true;
+  if (!primary.useDistance) return;
+
+  const [startDistance, finishDistance] = primary.extent;
+  const distance = $('position-distance-value');
+  distance.style.inlineSize = Math.max(measurement(startDistance, 'm', 0).length,
+    measurement(finishDistance, 'm', 0).length) + 'ch';
+  distance.textContent = measurement(primary.distanceAt(playTime), 'm', 0);
   const section = selection && Math.abs(selection.initial - selection.x) > .01
     ? [selection.initial, selection.x]
     : isWholeLapRange(range) ? null : range;
-  if (!section) return liveDistance;
+  if (!section) return;
   const [start, end] = section.map(position => usesDistanceAxis()
     ? position
     : primary.distanceAt(graphTime(primary, position)));
-  return liveDistance + ' · Section ' + measurement(Math.abs(end - start), 'm', 0);
+  const sectionLength = $('position-section-length');
+  sectionLength.style.inlineSize = measurement(finishDistance - startDistance, 'm', 0).length + 'ch';
+  sectionLength.textContent = measurement(Math.abs(end - start), 'm', 0);
+  $('position-section').hidden = false;
 }
 function scheduleRender(){
   if(renderRequested)return;
@@ -7109,10 +7305,7 @@ function scheduleRender(){
     }
     paintMap($('map'));
     if (!trackPanel.hidden) paintMap(racingMap, true);
-    const elapsed = lapTime(playTime - lap.start, 2);
-    const duration = lapTime(lap.end - lap.start, 2);
-    const distance = playbackDistance();
-    $('position').textContent = distance ? `${elapsed} / ${duration} · ${distance}` : `${elapsed} / ${duration}`;
+    renderPlaybackPosition();
     $('scrub').value=Math.round(1000*(playTime-lap.start)/Math.max(.01,lap.end-lap.start));
   });
 }
@@ -7321,7 +7514,7 @@ $('colour-preset').onchange = () => {
 
 async function promptForColourScheme() {
   const version = settings.appVersion;
-  if (!version || settings.colourSchemePromptVersion === version) return;
+  if (!version || settings.colourSchemePromptVersion) return;
   const dialog = $('colour-scheme-prompt');
   const select = $('launch-colour-preset');
   const apply = $('apply-launch-colour');
@@ -7549,10 +7742,12 @@ $('recent-session-filters').addEventListener('change', event => {
 });
 $('imported-lap-filters').addEventListener('change', renderComparisonLaps);
 $('reset-imported-lap-filters').onclick = () => {
+  setCompatibleReferencesOnly(false);
   for (const select of $('imported-lap-filters').querySelectorAll('select')) select.value = '';
-  renderComparisonLaps();
+  renderLibrary();
 };
 $('reset-library-filters').onclick = () => {
+  setCompatibleReferencesOnly(false);
   for (const select of $('recent-session-filters').querySelectorAll('select')) select.value = '';
   renderLibrary({resetRecentSessions:true});
 };
@@ -8071,10 +8266,10 @@ window.addEventListener('resize', () => {
 });
 (async()=>{
   settings=await lmu.settings();
+  refreshTrainerColdThreshold();
   cornerTimeLossOpen = settings.cornerTimeLossOpen !== false;
   loadRecordNotifications();
   communityMinimumGameVersion = settings.communityMinimumGameVersion ?? null;
-  syncDriverTrainerSetting();
   syncVisualizerSettings();
   if (settings.appVersion) {
     $('app-version').textContent = 'v' + settings.appVersion;
@@ -8141,31 +8336,15 @@ let trainerPickerCurrent;
 let trainerTrack;
 let trainerFocus = 0;
 let trainerCorner;
-let trainerScanRun = 0;
 let trainerScanSource;
 let trainerScanPending = false;
 
-function syncDriverTrainerSetting() {
-  const enabled = settings.driverTrainerEnabled === true;
-  $('enable-driver-trainer').checked = enabled;
-  $('trainer-tab').hidden = !enabled;
-  if (!enabled) {
-    trainerScanRun++;
-    trainerScanSource = undefined;
-    $('trainer-scan').hidden = true;
-    if (view === 'trainer') setView('library');
-  }
-}
-
-$('enable-driver-trainer').onchange = event => {
-  save({driverTrainerEnabled:event.target.checked});
-  syncDriverTrainerSetting();
-};
 $('trainer-tab').onclick = () => setView('trainer');
 
 function trainerTrackKey(session) { return trainerNormalize(session.trackName || session.track); }
 function trainerStintMatch(a, b) {
   return a.condition !== 'unknown' && a.condition !== 'changing' && a.condition === b.condition &&
+    recordClassLabel(a.session) === recordClassLabel(b.session) &&
     ['car', 'track', 'trackLayout', 'driver'].every(key =>
       trainerNormalize(a.session[key]) === trainerNormalize(b.session[key]));
 }
@@ -8277,10 +8456,9 @@ function evaluateTrainerTrophies() {
 }
 
 async function scanDriverTrainer(source) {
-  if (scanKey === undefined || trainerScanPending || trainerScanSource === source || settings.driverTrainerEnabled !== true) return;
+  if (scanKey === undefined || trainerScanPending || trainerScanSource === source) return;
   trainerScanPending = true;
   trainerScanSource = source;
-  const run = ++trainerScanRun;
   const recordings = source.filter(session => /^practice/i.test(session.session) && trainerTrackKey(session)).sort((a,b) => b.recorded.localeCompare(a.recorded));
   const meter = $('trainer-progress');
   meter.max = Math.max(1,recordings.length);
@@ -8346,7 +8524,6 @@ async function scanDriverTrainer(source) {
       if (!paths.has(recording)) { trainerCache.delete(recording); dirty = true; }
     }
     for (const [index, session] of recordings.entries()) {
-      if (run !== trainerScanRun) return;
       nextTracks.set(trainerTrackKey(session),{name:session.trackName || session.track});
       const laps = trainerCleanLaps(session);
       const key = JSON.stringify([session.recordingStamp, session.recorded, session.laps.map(lap => [lap.id,lap.kind]), laps.map(lap => [lap.id,lap.start,lap.end,lap.time,lap.number])]);
@@ -8362,7 +8539,6 @@ async function scanDriverTrainer(source) {
       } catch { failures++; }
       meter.value = index + 1;
       $('trainer-progress-label').textContent = meter.value + ' / ' + recordings.length + ' sessions checked';
-      if (run !== trainerScanRun) return;
       const first = nextStints.find(stint => stint.laps.length >= 3);
       const comparisonReady = !foundComparison && first && nextStints.some(stint =>
         stint.session.path !== first.session.path && stint.laps.length >= 3 && trainerStintMatch(first,stint));
@@ -8372,14 +8548,13 @@ async function scanDriverTrainer(source) {
       }
       if (Date.now() - checkpoint >= 10000) await saveCache();
     }
-    if (run !== trainerScanRun) return;
     $('trainer-scan').hidden = true;
     $('trainer-status').title = failures ? failures + ' practice recordings could not be checked.' : '';
     publishResults();
   } finally {
     await saveCache();
     trainerScanPending = false;
-    if (view === 'trainer' && settings.driverTrainerEnabled === true && trainerScanSource !== sessions) void scanDriverTrainer(sessions);
+    if (view === 'trainer' && trainerScanSource !== sessions) void scanDriverTrainer(sessions);
   }
 }
 
@@ -8511,10 +8686,11 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
     canvas.setAttribute('aria-label','Corner trace unavailable');
     return;
   }
-  const byTime = stint.laps.filter(lap => Number.isFinite(lap.cornerTimes[cornerOffset]))
+  const fastestLap = fastestValidLap(stint);
+  const byTime = stint.laps.filter(lap => Number.isFinite(lap.cornerTimes[cornerOffset]) && lap.cornerTimes[cornerOffset] > 0)
     .sort((a,b) => a.cornerTimes[cornerOffset] - b.cornerTimes[cornerOffset]);
-  const fastest = byTime[0];
-  const laps = fastest ? [fastest,...stint.laps.filter(lap => lap !== fastest)] : stint.laps;
+  const fastestCorner = byTime[0];
+  const laps = [...new Set([fastestLap,fastestCorner,...stint.laps].filter(Boolean))];
   const key = JSON.stringify([stint.id,stint.session.recordingStamp,focus,corner.from,corner.to,
     laps.map(lap => [lap.id,lap.start,lap.end])]);
   if (trainerTrace?.key !== key) {
@@ -8582,8 +8758,25 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
   if (!readings.length) return;
   $('trainer-chart-legend').hidden = false;
   const painted = data.filter((lap,index) => traces[index].some(([,value]) => Number.isFinite(value)));
-  const fastestIndex = data.findIndex(lap => lap.lap.id === fastest?.id && painted.includes(lap));
-  $('trainer-current-legend').hidden = fastestIndex < 0;
+  const fastestLapIndex = data.findIndex(lap => lap.lap.id === fastestLap?.id && painted.includes(lap));
+  const fastestCornerIndex = data.findIndex(lap => lap.lap.id === fastestCorner?.id && painted.includes(lap));
+  const fastestIndices = new Set([fastestLapIndex,fastestCornerIndex].filter(index => index >= 0));
+  const showFastestLap = fastestLapIndex >= 0 && settings.trainerShowFastestLap !== false;
+  const showFastestCorner = fastestCornerIndex >= 0 && settings.trainerShowFastestCorner !== false;
+  const sameLap = fastestLapIndex >= 0 && fastestLapIndex === fastestCornerIndex;
+  const lapColour = elementColour('accent','#c5fa78');
+  const cornerColour = elementColour('fastest-corner',lightGraphBackground ? '#7441ad' : '#b28aff');
+  $('trainer-current-legend').hidden = true;
+  for (const [id,lap,available,checked,label,colour] of [
+    ['lap',fastestLap,fastestLapIndex >= 0,showFastestLap,'Fastest Lap',lapColour],
+    ['corner',fastestCorner,fastestCornerIndex >= 0,showFastestCorner,'Fastest Corner',sameLap && showFastestLap ? lapColour : cornerColour]
+  ]) {
+    const control = $('trainer-fastest-' + id + '-control');
+    control.hidden = !available;
+    control.style.setProperty('--trace-colour',colour);
+    $('trainer-show-fastest-' + id).checked = checked;
+    if (available) $('trainer-fastest-' + id + '-label').textContent = 'Lap ' + (lap.number ?? lap.id) + ' · ' + label;
+  }
   const previousFastest = comparison?.laps.filter(lap => Number.isFinite(lap.cornerTimes[comparisonOffset]))
     .sort((a,b) => a.cornerTimes[comparisonOffset] - b.cornerTimes[comparisonOffset])[0];
   const previousFastestIndex = showComparison ? previousData.findIndex((lap,index) =>
@@ -8593,7 +8786,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
   if (previousFastestIndex >= 0) {
     previousLegend.textContent = 'Lap ' + (previousFastest.number ?? previousFastest.id) + ' · ' + comparisonLabel + ' Fastest Corner Lap';
   }
-  const otherCount = painted.length - Number(fastestIndex >= 0);
+  const otherCount = painted.length - fastestIndices.size;
   $('trainer-other-legend').hidden = !otherCount;
   $('trainer-other-legend').textContent = otherCount + (otherCount === 1 ? ' other lap' : ' other laps');
   const otherPreviousCount = previousCount - Number(previousFastestIndex >= 0);
@@ -8602,14 +8795,17 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
     comparisonLabel + ' · ' + otherPreviousCount + (previousFastestIndex >= 0 ? ' other' : '') +
     (otherPreviousCount === 1 ? ' lap' : ' laps');
   $('trainer-plot-axis').textContent = axis;
-  if (fastest) $('trainer-current-legend').textContent = 'Lap ' + (fastest.number ?? fastest.id) + ' · Fastest corner lap';
-  canvas.setAttribute('aria-label',axis + ' versus distance · ' + painted.length + ' shown out of ' + stint.laps.length + ' clean laps');
+  const showSeparateCorner = showFastestCorner && !(sameLap && showFastestLap);
+  const shownCount = otherCount + Number(showFastestLap) + Number(showSeparateCorner);
+  canvas.setAttribute('aria-label',axis + ' versus distance · ' + shownCount + ' shown out of ' + stint.laps.length + ' clean laps');
   const min = braking ? 0 : Math.floor(Math.min(...readings) / 10) * 10;
   const max = braking ? 100 : Math.max(min + 10,Math.ceil(Math.max(...readings) / 10) * 10);
   const assist = braking ? 'ABS' : 'TC';
   const assistEnabled = $(braking ? 'trainer-show-abs' : 'trainer-show-tc').checked;
   const highlights = [
-    {trace:data[fastestIndex], points:traces[fastestIndex], colour:elementColour('accent','#c5fa78'),
+    {trace:showFastestLap ? data[fastestLapIndex] : null, points:traces[fastestLapIndex], colour:lapColour,
+      dotted:false, label:sameLap && showFastestCorner ? 'Current session fastest lap and corner' : 'Current session fastest lap'},
+    {trace:showSeparateCorner ? data[fastestCornerIndex] : null, points:traces[fastestCornerIndex], colour:cornerColour,
       dotted:false, label:'Current session fastest corner lap'},
     {trace:previousData[previousFastestIndex], points:previousTraces[previousFastestIndex],
       colour:elementColour('reference','#f5a982'), dotted:true, label:comparisonLabel + ' Fastest Corner Lap'}
@@ -8670,7 +8866,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
     if (index !== previousFastestIndex) drawTrace(points,elementColour('prior-stint','#e0787d'),.35,1.5);
   }
   for (const [index,points] of traces.entries()) {
-    if (index !== fastestIndex) drawTrace(points,elementColour('other-laps','#90ac98'),.45,1.5);
+    if (!fastestIndices.has(index)) drawTrace(points,elementColour('other-laps','#90ac98'),.45,1.5);
   }
   for (const {points,colour,dotted} of highlights) drawTrace(points,colour,1,2.5,dotted);
   ctx.globalAlpha = 1;
@@ -8706,7 +8902,7 @@ function renderTrainerCornerTrace(stint, corner, cornerOffset, comparison, compa
 }
 
 function trainerTyresAreCold(temperature) {
-  return Number.isFinite(temperature) && temperature < (settings.trainerColdTyreTemperature ?? 60);
+  return Number.isFinite(temperature) && temperature <= (settings.trainerColdTyreTemperature ?? 60);
 }
 
 function trainerExcludeColdLaps(stint) {
@@ -8729,12 +8925,25 @@ function trainerCompletedLaps(session) {
     .sort((a,b) => a.start - b.start);
 }
 
+const trainerColdTemperatures = [70, 68, 66, 64, 62, 60, 58, 56, 54, 52, 50, 40, 30, 20, 10, 0];
 const trainerColdThreshold = $('trainer-cold-threshold');
-trainerColdThreshold.onchange = () => {
-  if (Number.isFinite(trainerColdThreshold.valueAsNumber) && trainerColdThreshold.validity.valid) {
-    save({trainerColdTyreTemperature:temperatureSettingValue(trainerColdThreshold.valueAsNumber)});
+function refreshTrainerColdThreshold() {
+  const saved = settings.trainerColdTyreTemperature ?? 60;
+  const unit = displayUnit('', '°C');
+  const label = temperature => temperatureInputValue(temperature) + ' ' + unit;
+  trainerColdThreshold.replaceChildren();
+  if (!trainerColdTemperatures.includes(saved)) {
+    option(trainerColdThreshold, label(saved), saved);
+    trainerColdThreshold.options[0].disabled = true;
   }
-  trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
+  for (const temperature of trainerColdTemperatures) option(trainerColdThreshold, label(temperature), temperature);
+  trainerColdThreshold.value = String(saved);
+}
+trainerColdThreshold.onchange = () => {
+  const choice = trainerColdThreshold.selectedOptions[0];
+  if (!choice || choice.disabled) return;
+  save({trainerColdTyreTemperature:Number(choice.value)});
+  trainerColdThreshold.querySelector('option:disabled')?.remove();
   renderDriverTrainer();
 };
 
@@ -8748,6 +8957,7 @@ function renderTrainerLapTimes(values, prior, manualComparison) {
   canvas.setAttribute('aria-label','Per-lap values in ' + unit + (prior.length ? ', with the matching comparison session' : ''));
   const measured = [...values,...prior].map(lap => lap.time);
   $('trainer-chart-legend').hidden = !measured.length;
+  $('trainer-fastest-lap-control').hidden = $('trainer-fastest-corner-control').hidden = true;
   $('trainer-plot-axis').textContent = 'Completed Lap in Session';
   $('trainer-cold-legend').hidden = ![...values,...prior].some(isCold);
   $('trainer-other-legend').hidden = true;
@@ -8840,7 +9050,7 @@ function renderTrainerTrophies() {
     $(id).max = total || 1;
     $(id).value = earned;
   }
-  $('trainer-trophy-progress').textContent = earned + ' of ' + total + ' unlocked trophies earned';
+  $('trainer-trophy-progress').textContent = earned + ' of ' + total + ' unlocked achievements earned';
   $('trainer-percent').textContent = (total ? Math.round(100 * earned / total) : 0) + '%';
   trainerTrack = trainerTracks.has(trainerTrack) ? trainerTrack : trainerTracks.keys().next().value;
   const detail = trainerTracks.get(trainerTrack);
@@ -8855,7 +9065,7 @@ function renderTrainerTrophies() {
     card.append(emblem,node('strong',name,'trainer-trophy-title'),node('p',description
       .replace('10 m',measurement(10,'m',usingImperial('distance') ? 1 : 0))
       .replace('3 km/h',measurement(3,'km/h',usingImperial('speed') ? 2 : 0))),
-      node('small',awarded ? 'Awarded' : detail ? 'Available' : 'Visit a track in Practice to unlock','trainer-trophy-state'));
+      node('small',awarded ? 'Earned' : detail ? 'Available' : 'Visit a track in Practice to unlock','trainer-trophy-state'));
     return card;
   }));
   $('trainer-tracks').replaceChildren(...[...trainerTracks].map(([key,track]) => {
@@ -8905,6 +9115,10 @@ function renderDriverTrainer() {
       const priority = item => item.stats.count >= 3 ? item.stats.spread : -1;
       return priority(b) - priority(a) || a.corner.index - b.corner.index;
     });
+  const sortByNumber = $('trainer-sort-corners');
+  sortByNumber.checked = settings.sortTrainerCornersByNumber === true;
+  sortByNumber.disabled = ranked.length < 2;
+  const ordered = sortByNumber.checked ? [...ranked].sort((a,b) => a.corner.index - b.corner.index) : ranked;
   const chosen = trainerFocus === 2 ? undefined : ranked.find(item => item.corner.index === trainerCorner) ?? ranked[0];
   const completed = lapTimes ? trainerCompletedLaps(stint.session) : [];
   const comparisonCompleted = lapTimes ? trainerCompletedLaps(earlier?.session) : [];
@@ -8917,30 +9131,34 @@ function renderDriverTrainer() {
   const unit = ['m','km/h','s'][trainerFocus];
   const spreadReading = (value,digits) => measurement(value,unit,digits) + ' spread';
 
-  const headings = ['Brake at a repeatable point','Make your corner exits consistent','Consistent Lap Times'];
+  const headings = ['Brake at a Repeatable Point','Make Your Corner Exits Consistent','Session Lap Times'];
   $('trainer-metric').textContent = headings[trainerFocus];
   $('trainer-corner-controls').hidden = !chosen;
   $('trainer-corner-label').textContent = chosen ? 'Corner ' + (chosen.corner.index + 1) : '';
   if (chosen) {
-    const position = ranked.indexOf(chosen);
+    const position = ordered.indexOf(chosen);
     for (const [id,step] of [['trainer-prev-corner',-1],['trainer-next-corner',1]]) {
       const button = $(id);
-      button.disabled = ranked.length < 2;
+      button.disabled = ordered.length < 2;
       button.onclick = () => {
-        trainerCorner = ranked[(position + step + ranked.length) % ranked.length].corner.index;
+        trainerCorner = ordered[(position + step + ordered.length) % ordered.length].corner.index;
         renderDriverTrainer();
       };
     }
   }
-  $('trainer-spread').textContent = stats.count >= 3 ? spreadReading(stats.spread,trainerFocus === 2 ? 3 : 1) : '—';
+  const hasSpread = stats.count >= 3;
+  $('trainer-spread').textContent = hasSpread ? spreadReading(stats.spread,lapTimes ? 3 : 1) : '—';
   const lapCount = count => count + (count === 1 ? ' lap' : ' laps') + ' counted';
   const comparisonLabel = manual ? 'Comparison Session' : 'Previous Session';
   $('trainer-evidence').textContent = 'Current Session: ' + lapCount(stats.count) +
+    (hasSpread ? '' : ' · 3 needed to calculate spread') +
     (earlier ? ' · ' + comparisonLabel + ': ' + lapCount(previous.count) : '');
   const priority = $('trainer-priorities');
   priority.hidden = trainerFocus === 2 || !ranked.length;
-  $('trainer-priority-label').hidden = priority.hidden;
-  priority.replaceChildren(...(trainerFocus === 2 ? [] : ranked.map(({corner,stats:spread}) => {
+  $('trainer-priority-header').hidden = priority.hidden;
+  $('trainer-priority-label').textContent = sortByNumber.checked
+    ? 'Corners Ordered by Number' : 'Corners Ordered by Variance: Most to Least';
+  priority.replaceChildren(...(trainerFocus === 2 ? [] : ordered.map(({corner,stats:spread}) => {
     const button = node('button');
     const cornerNumber = String(corner.index + 1);
     const detail = spread.count >= 3 ? spreadReading(spread.spread,1) : 'Insufficient data';
@@ -8958,9 +9176,8 @@ function renderDriverTrainer() {
   $('trainer-comparison-label').textContent = manual ? 'Comparison Traces' : 'Previous Session Traces';
   $('trainer-show-comparison').disabled = !(earlier && priorOffset >= 0);
   $('trainer-cold-control').hidden = false;
-  $('trainer-cold-label').textContent = 'Temperature at Which Tyres Are Considered Cold' + (lapTimes ? '' : ' (Exclude Laps)');
+  $('trainer-cold-exclusion').hidden = lapTimes;
   $('trainer-cold-legend').hidden = true;
-  if (document.activeElement !== trainerColdThreshold) trainerColdThreshold.value = temperatureInputValue(settings.trainerColdTyreTemperature ?? 60);
   if (lapTimes) renderTrainerLapTimes(completed,comparisonCompleted,Boolean(manual));
   else renderTrainerCornerTrace(cornerStint,chosen?.corner,chosen?.offset,priorOffset >= 0 ? cornerComparison : undefined,priorOffset,comparisonLabel);
   renderTrainerMap(stint,chosen?.corner);
@@ -8968,6 +9185,16 @@ function renderDriverTrainer() {
 }
 
 $('trainer-show-abs').onchange = renderDriverTrainer;
+for (const [id,key] of [['lap','trainerShowFastestLap'],['corner','trainerShowFastestCorner']]) {
+  $('trainer-show-fastest-' + id).onchange = event => {
+    save({[key]:event.currentTarget.checked});
+    renderDriverTrainer();
+  };
+}
+$('trainer-sort-corners').onchange = event => {
+  save({sortTrainerCornersByNumber:event.currentTarget.checked});
+  renderDriverTrainer();
+};
 $('trainer-show-tc').onchange = renderDriverTrainer;
 $('trainer-show-comparison').onchange = renderDriverTrainer;
 

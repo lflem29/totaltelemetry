@@ -1,7 +1,7 @@
 {
   "name": "total-telemetry",
   "productName": "Total Telemetry",
-  "version": "1.2.2",
+  "version": "1.2.15",
   "description": "Local Le Mans Ultimate telemetry viewer",
   "main": "main.js",
   "communityDefaults": {

@@ -1,4 +1,5 @@
-- Switch telemetry graphs between Distance and Time. Compare elapsed time at the same track position or distance at the same elapsed time.
-- See the live lap position and the selected section length beside the playback time.
-- Speeds up reference-lap loading and reuses recently loaded telemetry.
-- All 62 cars from the 2026 Le Mans spotter guide can drive across the header, with random intervals of 10 to 60 seconds.
+- Track Records separates LMP2 WEC and ELMS for filters, standings, trophies, and comparisons. Older LMP2 records use WEC.
+- Track Records has a Driver column beside Car.
+- My Recent Sessions has a Session Type column and uses date and time alone for entries older than a week.
+- The driver statistics panel fills the available height on wide windows and scales the totals with the window.
+- Separate ELMS record sharing requires the updated Community Server.

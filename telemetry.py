@@ -355,6 +355,15 @@ def car_class(value):
     return CAR_CLASSES.get(re.sub(r'[^a-z0-9]', '', value.casefold()), '')
 
 
+def lmp2_variant(value):
+    normalized = re.sub(r'[^a-z0-9]', '', value.casefold())
+    if normalized in ('lmp2wec', 'weclmp2'):
+        return 'WEC'
+    if normalized in ('lmp2elms', 'elmslmp2', 'lmp2elmsspec'):
+        return 'ELMS'
+    return ''
+
+
 def session_model(car):
     return re.sub(r'\s+custom team\b.*$', '', car, flags=re.IGNORECASE).strip()
 
@@ -493,7 +502,8 @@ def results_track_records(results, recordings, primary_driver):
                 continue
             best = min(timed, key=lambda lap: lap['time'])
             category = car_class(driver['carClass'])
-            key = (track, layout, normalize(name), model, category, result['gameVersion'])
+            variant = lmp2_variant(driver['carClass']) or ('WEC' if category == 'LMP2' else '')
+            key = (track, layout, normalize(name), model, category, variant, result['gameVersion'])
             if key in records and records[key]['laps'][0]['time'] <= best['time']:
                 continue
 
@@ -504,7 +514,8 @@ def results_track_records(results, recordings, primary_driver):
             best_sectors = [min((value for lap in timed if (value := split(lap, index)) is not None), default=None)
                             for index in range(3)]
             records[key] = dict(trackName=track, trackLayout=layout, driver=name, model=model,
-                                carClass=category, gameVersion=result['gameVersion'], recorded=result['recorded'],
+                                carClass=category, lmp2Variant=variant,
+                                gameVersion=result['gameVersion'], recorded=result['recorded'],
                                 resultOnly=True, bestSectors=best_sectors,
                                 laps=[dict(number=best['number'], kind='complete', validity='official',
                                            time=best['time'], sectors=sectors)])
@@ -562,7 +573,10 @@ def index(payload):
         if match and 'raceGaps' in match:
             item['raceGaps'] = match['raceGaps']
         item['model'] = (match['model'] if match else '') or session_model(item['car'])
+        item['lmp2Variant'] = lmp2_variant(item['carClass']) or lmp2_variant(match['carClass'] if match else '')
         item['carClass'] = car_class(item['carClass']) or car_class(match['carClass'] if match else '')
+        if item['carClass'] == 'LMP2' and not item['lmp2Variant']:
+            item['lmp2Variant'] = 'WEC'
         item['gameVersion'] = item['gameVersion'] or (match['gameVersion'] if match else '')
         times = [lap['time'] for lap in item['laps'] if lap['time']]
         item['best'] = min(times, default=None)
@@ -588,6 +602,10 @@ def index(payload):
 def results_distance(payload):
     totals = {}
     car_totals = {}
+    driver_names = {}
+    primary_name = payload.get('primaryDriver') or ''
+    primary_key = normalize(primary_name)
+    previous_key = normalize(payload.get('previousStatsDriver') or '')
     seen = set()
     errors = 0
 
@@ -608,6 +626,9 @@ def results_distance(payload):
         key = normalize(name)
         if key in ('', 'a driver'):
             return
+        driver_names.setdefault(key, name.strip())
+        if primary_key and previous_key and key in (primary_key, previous_key):
+            key, name = primary_key, primary_name
         total = totals.setdefault(key, {'id': key, 'name': name.strip(), 'km': 0, 'laps': 0})
         km = laps * length / 1000
         total['km'] += km
@@ -689,7 +710,8 @@ def results_distance(payload):
     for total in totals.values():
         tracks = total.get('favouriteTracks', {})
         total['favouriteTracks'] = sorted(tracks.values(), key=lambda entry: (-entry['km'], normalize(entry['track'])))
-    return {'drivers': sorted(totals.values(), key=lambda row: row['id']), 'errors': errors}
+    return {'drivers': sorted(totals.values(), key=lambda row: row['id']),
+            'driverNames': sorted(driver_names.values(), key=normalize), 'errors': errors}
 
 
 def activation_seconds_by_lap(rows, laps, finish):
@@ -966,6 +988,12 @@ def load_lap(payload):
     return channels
 
 
+def comparison_sectors(values, duration):
+    if type(duration) not in (int, float) or not isinstance(values, list) or len(values) != 3:
+        return [None, None, None]
+    return [value if type(value) in (int, float) and 0 < value < duration else None for value in values]
+
+
 def export_lap(payload):
     destination = Path(payload['destination'])
     if destination.suffix.lower() != '.zip':
@@ -982,33 +1010,48 @@ def export_lap(payload):
     try:
         with tempfile.NamedTemporaryFile(suffix='.tmp', dir=destination.parent, delete=False) as file:
             temporary = Path(file.name)
-        with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED) as archive, \
-                archive.open(destination.with_suffix('.csv').name, 'w') as member, \
-                io.TextIOWrapper(member, encoding='utf-8-sig', newline='') as file:
-            writer = csv.writer(file)
-            writer.writerow(['track', 'car', 'lap', 'lap_time_s', 'validity', 'elapsed_s', 'channel',
-                             'unit', 'component', 'value', 'sample_rate_hz', 'car_class', 'driver', 'track_name', 'track_layout', 'game_version'])
-            for name, channel in channels.items():
-                rate = channel.get('rate')
-                for index, row in enumerate(channel['rows']):
-                    if rate:
-                        time, values = channel['origin'] + index / rate, row
-                        if time < start - 1e-6:
-                            continue
-                    else:
-                        time, *values = row
-                    if time >= finish - 1e-6:
-                        break
-                    elapsed = round(max(0, time - start), 6)
-                    prefix = [*metadata, elapsed, csv_cell(name), csv_cell(channel['unit'])]
-                    for component, value in enumerate(values, 1):
-                        writer.writerow([*prefix, component, csv_cell(value), rate, csv_cell(payload.get('carClass', '')), csv_cell(payload.get('driver', '')),
-                                         *(csv_cell(payload.get(key) or '') for key in ('trackName', 'trackLayout', 'gameVersion'))])
+        with zipfile.ZipFile(temporary, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            with archive.open(destination.with_suffix('.csv').name, 'w') as member, \
+                    io.TextIOWrapper(member, encoding='utf-8-sig', newline='') as file:
+                writer = csv.writer(file)
+                writer.writerow(['track', 'car', 'lap', 'lap_time_s', 'validity', 'elapsed_s', 'channel',
+                                 'unit', 'component', 'value', 'sample_rate_hz', 'car_class', 'driver', 'track_name', 'track_layout', 'game_version', 'lmp2_variant'])
+                for name, channel in channels.items():
+                    rate = channel.get('rate')
+                    for index, row in enumerate(channel['rows']):
+                        if rate:
+                            time, values = channel['origin'] + index / rate, row
+                            if time < start - 1e-6:
+                                continue
+                        else:
+                            time, *values = row
+                        if time >= finish - 1e-6:
+                            break
+                        elapsed = round(max(0, time - start), 6)
+                        prefix = [*metadata, elapsed, csv_cell(name), csv_cell(channel['unit'])]
+                        for component, value in enumerate(values, 1):
+                            writer.writerow([*prefix, component, csv_cell(value), rate, csv_cell(payload.get('carClass', '')), csv_cell(payload.get('driver', '')),
+                                             *(csv_cell(payload.get(key) or '') for key in ('trackName', 'trackLayout', 'gameVersion', 'lmp2Variant'))])
+            sectors = comparison_sectors(payload.get('sectors'), payload['time'])
+            if any(value is not None for value in sectors):
+                archive.writestr('lap-metadata.json', json.dumps({'sectors': sectors}))
         os.replace(temporary, destination)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
     return {'saved': True}
+
+
+def read_comparison_sectors(archive):
+    try:
+        entry = archive.getinfo('lap-metadata.json')
+        if entry.file_size <= 1024:
+            metadata = json.loads(archive.read(entry))
+            if isinstance(metadata, dict):
+                return metadata.get('sectors')
+    except (KeyError, ValueError, RuntimeError, zipfile.BadZipFile):
+        pass
+    return None
 
 
 @contextmanager
@@ -1018,7 +1061,7 @@ def open_comparison_lap(path):
     if path.suffix.lower() == '.csv':
         # Earlier app versions stored imported laps as plain CSV in app data.
         with path.open(encoding='utf-8-sig', newline='') as file:
-            yield file
+            yield file, None
         return
     if path.suffix.lower() != '.zip':
         raise ValueError('Choose a Total Telemetry ZIP.')
@@ -1030,8 +1073,9 @@ def open_comparison_lap(path):
                 raise ValueError('The ZIP must contain exactly one lap CSV.')
             if members[0].file_size > 512 * 1024 * 1024:
                 raise ValueError('The lap CSV exceeds 512 MiB when expanded from the ZIP.')
+            sectors = read_comparison_sectors(archive)
             with archive.open(members[0]) as member, io.TextIOWrapper(member, encoding='utf-8-sig', newline='') as file:
-                yield file
+                yield file, sectors
     except zipfile.BadZipFile as error:
         raise ValueError('This is not a readable Total Telemetry ZIP.') from error
 
@@ -1050,7 +1094,7 @@ def import_comparison_lap(payload):
     last_samples = {}
     fields = ('track', 'car', 'lap', 'lap_time_s', 'validity')
     required = {*fields, 'elapsed_s', 'channel', 'unit', 'component', 'value'}
-    with open_comparison_lap(path) as file:
+    with open_comparison_lap(path) as (file, sectors):
         reader = csv.reader(file)
         columns = next(reader, [])
         index = {name: position for position, name in enumerate(columns)}
@@ -1115,11 +1159,18 @@ def import_comparison_lap(payload):
             samples[-1].append(text if value is None and text else value)
     if 'Lap Dist' not in last_samples:
         raise ValueError('This CSV has no lap-distance data for comparison.')
-    result = {'track':track, 'car':car, 'driver':first_metadata.get('driver') or '', 'carClass':car_class(first_metadata.get('car_class') or ''),
+    raw_class = first_metadata.get('car_class') or ''
+    category = car_class(raw_class)
+    variant = ''
+    if category == 'LMP2':
+        saved_variant = first_metadata.get('lmp2_variant')
+        variant = saved_variant if saved_variant in ('WEC', 'ELMS') else lmp2_variant(raw_class) or 'WEC'
+    result = {'track':track, 'car':car, 'driver':first_metadata.get('driver') or '', 'carClass':category,
+              'lmp2Variant':variant,
               'trackName':first_metadata.get('track_name') or track, 'trackLayout':first_metadata.get('track_layout') or track,
               'gameVersion':first_metadata.get('game_version') or '',
               'lap':{'id':0, 'number':number, 'time':duration, 'validity':validity,
-                     'start':0, 'end':end, 'kind':'complete'}}
+                     'start':0, 'end':end, 'kind':'complete', 'sectors':comparison_sectors(sectors, duration)}}
     if channels is not None:
         result['channels'] = channels
     return result

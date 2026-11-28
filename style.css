@@ -221,7 +221,7 @@ main{min-width:0}
 .session-row{cursor:pointer}
 .session-comparison{text-align:right}
 .reference-add{font-size:.75em;text-transform:none}
-.table-load-guide{flex:0 0 100%;color:var(--muted);font-size:.85em;margin:0}
+.table-load-guide{flex:1 1 18em;color:var(--muted);font-size:.85em;margin:0}
 
 
 .map-card .card-head h2{font-size:calc(25.2px * var(--text-scale))}
@@ -322,10 +322,8 @@ button.button-secondary:hover:not(:disabled){background:var(--raised)}
 .library-filter-bar{display:flex;flex-wrap:wrap}
 .library-filter-bar > label{flex:1 0 auto;min-width:min(100%,9em);max-width:100%}
 .library-filter-bar > label > select{width:auto;max-width:100%}
-.library-filter-bar > .filter-actions{flex:0 0 100%}
-.recent-filter-actions{align-items:center;justify-content:space-between}
-.recent-filter-actions .list-result-actions{margin-inline-start:auto}
-#imported-list-toolbar .list-result-actions{margin-inline-start:auto}
+.library-filter-bar > .filter-actions{flex:0 0 100%;align-items:center;justify-content:flex-start}
+.library-filter-bar > .filter-actions .list-result-actions{margin-inline-start:auto}
 .filter-bar .compatible-reference-filter{display:inline-flex;align-items:center;gap:6px;font-size:.85em}
 .filter-bar .compatible-reference-filter input{width:auto}
 .list-count{align-self:center;color:var(--muted);font-size:.85em}
@@ -343,12 +341,25 @@ button.button-secondary:hover:not(:disabled){background:var(--raised)}
   #results-distance{grid-column:1}
 }
 @media(min-width:1320px){
-  .library-content:has(#results-distance:not([hidden])){grid-template-columns:minmax(0,1fr) clamp(220px,18vw,320px)}
+  .library-content:has(#results-distance:not([hidden])){
+    block-size:100%;grid-template-columns:minmax(0,1fr) clamp(260px,22vw,390px);
+    grid-template-rows:minmax(0,1fr)
+  }
   .library-sessions{grid-row:1}
-  #results-distance{grid-area:1 / 2}
+  #results-distance{grid-area:1 / 2;align-self:stretch;min-block-size:0;overflow:auto}
 }
-#results-distance{display:grid;justify-items:start;gap:6px;min-width:0;padding:10px 14px;background:var(--raised);border:1px solid var(--rule);border-radius:8px}
-#distance-total,#track-hours-total{color:var(--accent);font-size:calc(24px * var(--text-scale));font-weight:700;font-variant-numeric:tabular-nums}
+#results-distance{
+  display:grid;align-content:start;justify-items:start;gap:clamp(6px,1vh,12px);
+  min-width:0;container-type:inline-size;padding:10px 14px;background:var(--raised);
+  border:1px solid var(--rule);border-radius:8px;overflow-wrap:anywhere
+}
+#results-distance :is(#results-distance-title,#track-hours-title){
+  font-size:calc(clamp(18px,min(2.4vh,8cqi),25px) * var(--text-scale))
+}
+#distance-total,#track-hours-total{
+  color:var(--accent);font-size:calc(clamp(22px,min(3.5vh,12cqi),42px) * var(--text-scale));
+  font-weight:700;font-variant-numeric:tabular-nums
+}
 #distance-total:empty{display:none}
 #distance-driver-label,#distance-status{font-size:calc(14px * var(--text-scale))}
 #distance-driver{max-width:100%;padding:3px 6px}
@@ -369,7 +380,8 @@ button.button-secondary:hover:not(:disabled){background:var(--raised)}
 .telemetry-display-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 6.5em;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--rule);font-size:calc(14px * var(--text-scale));overflow-wrap:anywhere}
 #telemetry-name-fields input{min-width:0;width:100%}
 
-.playbar #position{inline-size:44ch;min-inline-size:0;max-inline-size:60%;text-align:right}
+.playbar #position{display:flex;flex-wrap:wrap;justify-content:flex-end;column-gap:1ch;inline-size:44ch;min-inline-size:0;max-inline-size:60%}
+.playbar #position>span{white-space:nowrap}
 .plot-footer{--graph-control-height:calc(28.42px * var(--text-scale) + 16px);flex-wrap:wrap}
 #telemetry-graphs-toolbar :is(button,select){block-size:var(--graph-control-height)}
 .graph-axis-switch{display:inline-flex;align-items:center;flex:none;border-radius:5px;
@@ -383,12 +395,12 @@ button.button-secondary:hover:not(:disabled){background:var(--raised)}
 #favourite-car-classes{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 12px;margin:6px 0 0;font-size:calc(14px * var(--text-scale))}
 #favourite-car-classes dt{font-weight:650}
 #favourite-car-classes dd{margin:0;overflow-wrap:anywhere}
-#favourite-car-classes small{display:block}
+.favourite-distance-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:baseline}
+.favourite-distance-row small{white-space:nowrap;text-align:end;font-variant-numeric:tabular-nums}
 
 #favourite-car-classes ol{margin:0;padding-inline-start:1.35em}
 #favourite-car-classes li+li,#favourite-track-list li+li{margin-top:4px}
 #favourite-track-list{margin:6px 0 0;padding-inline-start:1.35em;font-size:calc(14px * var(--text-scale));overflow-wrap:anywhere}
-#favourite-track-list small{display:block}
 
 #comparison-laps{min-width:0}
 .imported-laps-actions{justify-content:center;flex-wrap:wrap;margin-bottom:8px}
@@ -430,27 +442,44 @@ button{text-transform:capitalize}
 .lap-list-table .records-track-group th{padding-block:5px;font-size:.82em;font-weight:600;color:var(--muted);background:var(--panel)}
 .records-track-group:not(:first-child) th{border-top:4px solid var(--bg)}
 .numeric-cell{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-#records-table :is(.record-optimal,.record-date){padding-inline:16px;text-align:center;white-space:nowrap}
-#records-table .record-optimal small{display:inline;margin-inline-start:.35em}
+#records-table .record-date{padding-inline:16px;text-align:center;white-space:nowrap}
 .loaded-lap-label,.loaded-reference-label{display:block;margin-top:3px;font-weight:650;white-space:nowrap}
 .lap-list-table td .loaded-lap-label{color:var(--accent)}
 .lap-list-table td .loaded-reference-label{color:var(--reference)}
 .record-result td{white-space:nowrap}
+.record-class-badge{
+  display:inline-block;padding:3px 7px;border-radius:4px;
+  background:var(--class-colour);color:#fff;font-size:.85em;font-weight:700;line-height:1.2
+}
+.record-class-badge[data-class="gte"]{--class-colour:#b93511}
+.record-class-badge[data-class="gt3"]{--class-colour:#007a38}
+.record-class-badge:is([data-class="lmp2 wec"],[data-class="lmp2 elms"]){--class-colour:#005398}
+.record-class-badge[data-class="lmp2 elms"]{position:relative;overflow:hidden}
+.record-class-badge[data-class="lmp2 elms"]::after{
+  content:"";position:absolute;inset-block-start:0;inset-inline-end:0;pointer-events:none;
+  inline-size:10px;block-size:10px;background:#ffd343;clip-path:polygon(0 0,100% 0,100% 100%)
+}
+.record-class-badge[data-class="lmp3"]{--class-colour:#51266d}
+.record-class-badge[data-class="hypercar"]{--class-colour:#be1e24}
+#records-table .record-notification-target{
+  background:color-mix(in srgb,var(--accent) 12%,var(--panel));
+  outline:2px solid var(--accent);outline-offset:-2px;scroll-margin-block-start:42px
+}
 
-.chart .speed-readouts{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px 18px;margin-left:auto}
-.chart .speed-readouts output{margin-left:0}
-
-.chart-reading{display:inline-block;max-inline-size:100%;white-space:nowrap;text-align:end}
-.chart .speed-readouts{min-width:0;max-width:100%}
+.chart-reading{display:inline-block;max-inline-size:100%;overflow-wrap:anywhere;text-align:end}
+.fixed-reading{display:inline-block;max-inline-size:100%;text-align:end;font-variant-numeric:tabular-nums}
 
 .chart .card-head{gap:9px}
 .chart-header-end{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px 9px;min-width:0;max-width:100%;margin-inline-start:auto}
 .chart .card-head .chart-reading{color:var(--fg);font:700 calc(16.8px * var(--text-scale)) Consolas,monospace;font-variant-numeric:tabular-nums}
 .chart .card-head .chart-header-end output{flex-shrink:0;margin-left:0;overflow-x:auto}
+.chart .speed-chart-head{gap:6px}
+.chart .card-head.speed-chart-head output{font:700 calc(15.4px * var(--text-scale)) Geist,"Segoe UI",system-ui,sans-serif;font-variant-numeric:tabular-nums}
 .chart-export{flex-shrink:0}
 .icon-button:not([hidden]){display:inline-flex;align-items:center;justify-content:center;gap:.48em}
 .icon-button > svg{width:1em;height:1em;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.corner-toggle-bar{border-top:1px solid var(--rule);padding:5px 12px 2px}
+.corner-toggle-bar{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;border-top:1px solid var(--rule);padding:5px 12px 2px}
+.corner-sort{display:inline-flex;align-items:center;gap:6px;margin-inline-start:auto}
 .corner-toggle-bar button{display:inline-flex;align-items:center;gap:8px;background:transparent;color:var(--fg);border-color:transparent;padding:4px 0;font-weight:650}
 .corner-toggle-chevron{display:inline-block;color:var(--accent);font-size:1.2em}
 .corner-toggle-bar button[aria-expanded="true"] .corner-toggle-chevron{transform:rotate(90deg)}
@@ -596,8 +625,9 @@ button{text-transform:capitalize}
 #trainer-analysis{flex:1 0 auto;display:flex;flex-direction:column}
 #trainer .trainer-chart{flex:1;display:flex;flex-direction:column}
 #trainer-plot{width:100%;height:0;min-height:85px;flex:1 0 85px;display:block}
+.trainer-metric-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px}
 #trainer-spread,#trainer-awards,#trainer-unlocked,#trainer-percent{color:var(--accent)}
-#trainer-spread{white-space:nowrap;font-size:1.35em}
+#trainer-spread{min-inline-size:16ch;white-space:nowrap;font-size:1.35em;font-variant-numeric:tabular-nums}
 #trainer-evidence{font-size:.9em}
 #trainer-priorities,#trainer-tracks{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:5px;margin-top:7px}
 #trainer-priorities button{min-width:0;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;font-size:.8em;padding:3px 5px}
@@ -605,13 +635,13 @@ button{text-transform:capitalize}
 #trainer-priorities button small{display:block;color:var(--muted);text-transform:none}
 #trainer-priorities button[aria-pressed=true] small{color:inherit}
 .trainer-footer{flex:none;display:flex;align-items:center;gap:14px;padding:8px 0;margin-top:auto;position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--rule);z-index:2}
-.trainer-trophy-summary{min-width:0}
+.trainer-trophy-summary{min-width:0;font-size:calc(19.6px * var(--text-scale));line-height:1.3}
 :is(#reset-zoom,#trainer-trophies){padding:7px 10px;font:calc(19.6px * var(--text-scale))/1.45 Geist,"Segoe UI",system-ui,sans-serif}
 #trainer-trophies{flex:none;margin-inline-start:auto;background:var(--button-fill);color:var(--button-ink)}
 #trainer-trophies:hover{background:color-mix(in srgb,var(--button-fill) 88%,var(--button-shade))}
 .trainer-unlock-note{color:inherit;font-size:inherit}
 #trainer progress,#trainer-trophy-dialog progress{accent-color:var(--accent);height:8px}
-#trainer #trainer-awards-meter{width:min(16vw,170px);height:14px;appearance:none;border:0;border-radius:4px;overflow:hidden;background:var(--rule)}
+#trainer #trainer-awards-meter{width:min(16vw,170px);height:calc(30px * var(--text-scale));appearance:none;border:0;border-radius:4px;overflow:hidden;background:var(--rule)}
 #trainer-awards-meter::-webkit-progress-bar{background:var(--rule)}
 #trainer-awards-meter::-webkit-progress-value{background:var(--accent)}
 #trainer-awards-meter::-moz-progress-bar{background:var(--accent)}
@@ -639,9 +669,11 @@ button{text-transform:capitalize}
 
 .trainer-trophy-title{font-size:1em;line-height:1.15}
 
-#trainer-chart-legend{margin-top:clamp(5px,2vh,19px);display:flex;justify-content:flex-end;align-items:center;gap:12px;color:var(--muted);font-size:.75em}
-#trainer-chart-legend span:first-child{margin-right:auto}
-#trainer-chart-legend span:not(:first-child)::before{content:"";display:inline-block;vertical-align:middle;width:16px;margin-right:5px;border-top:2px solid var(--accent,#c5fa78)}
+#trainer-chart-legend{margin-top:clamp(5px,2vh,19px);display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:4px 12px;color:var(--muted);font-size:.75em}
+#trainer-plot-axis{margin-inline-end:auto}
+#trainer-chart-legend>span:not(:first-child)::before,.trainer-fastest-control span::before{content:"";display:inline-block;vertical-align:middle;width:16px;margin-right:5px;border-top:2px solid var(--trace-colour,var(--accent,#c5fa78))}
+.trainer-fastest-control{display:inline-flex;align-items:center;gap:4px}
+.trainer-fastest-control:has(input:not(:checked)) span{opacity:.65}
 #trainer-chart-legend #trainer-previous-legend::before{border-top:2px dashed var(--reference,#f5a982)}
 #trainer-chart-legend #trainer-other-legend::before{border-top-color:var(--other-laps,#90ac98);opacity:.6}
 
@@ -651,7 +683,8 @@ button{text-transform:capitalize}
 #trainer-corner-controls{display:flex;align-items:center;gap:8px;color:inherit;font-weight:700;margin-bottom:4px}
 #trainer-corner-controls button{min-width:1.55em;min-height:1.45em;padding:0 .3em;line-height:1;background:var(--button-fill);color:var(--button-ink)}
 #trainer-corner-controls button:hover:not(:disabled){background:color-mix(in srgb,var(--button-fill) 88%,var(--button-shade))}
-#trainer #trainer-priority-label{margin-top:8px;padding-top:5px;border-top:1px solid var(--rule);color:var(--muted);font-size:.8em}
+.trainer-priority-header{display:flex;align-items:center;flex-wrap:wrap;gap:2px 12px;margin-top:8px;padding-top:5px;border-top:1px solid var(--rule);font-size:.8em}
+.trainer-priority-header .corner-sort{font-size:inherit}
 #trainer-priorities{margin-top:4px}
 
 @media(max-height:740px){
@@ -691,7 +724,7 @@ button{text-transform:capitalize}
 .chart-close{inline-size:1.65em;block-size:1.65em;padding:0;font-size:calc(16px * var(--text-scale));line-height:1}
 
 #trainer-cold-control{display:inline-flex;align-items:center;gap:6px;font-size:.85em}
-#trainer-cold-threshold{width:5em;padding:3px 5px}
+#trainer-cold-threshold{min-inline-size:6em;padding:3px 5px}
 #trainer-chart-legend #trainer-cold-legend::before{border-top-color:var(--cold,#91d5ff)}
 
 .trainer-chart-heading:has(#trainer-cold-control:not([hidden])){flex-wrap:wrap}
@@ -760,9 +793,19 @@ button.record-request{color:var(--reference);border-color:var(--reference);backg
 .requested-upload-progress{margin-block:6px;color:var(--muted);font-size:.9em}
 .requested-upload-progress progress{display:block;width:100%;height:9px;margin-top:4px;accent-color:var(--accent)}
 .notification-dialog-actions{display:flex;align-items:center;gap:8px}
-#records-table .record-telemetry{text-align:center;white-space:nowrap}
+.telemetry-status{color:var(--muted)}
+#records-table .record-telemetry{
+  inline-size:calc(185px * var(--text-scale));min-inline-size:calc(185px * var(--text-scale));
+  max-inline-size:calc(185px * var(--text-scale));text-align:center;white-space:normal
+}
+#records-table .session-comparison{
+  inline-size:calc(200px * var(--text-scale));min-inline-size:calc(200px * var(--text-scale));
+  max-inline-size:calc(200px * var(--text-scale));white-space:normal
+}
+#records-table .session-comparison > button{display:flex;max-inline-size:100%;margin-inline-start:auto;white-space:normal}
+#records-table .session-comparison > button + button{margin-block-start:4px}
 .record-telemetry button{display:block;margin:4px auto 0;font-size:.8em;padding:3px 7px}
-#records-table .record-request{font-size:.82em;max-width:17em;white-space:normal;text-transform:none}
+#records-table .record-request{font-size:.82em;text-transform:none}
 
 .library-filter-bar{padding-bottom:8px;border-bottom:1px solid var(--rule)}
 .lap-list-table tr:has(.loaded-lap-label:not([hidden])) > td:first-child{
@@ -909,6 +952,8 @@ body.panel-popout.graph-popout{grid-template-rows:minmax(0,1fr) auto}
 .aero-loaded-platform{fill:var(--accent);fill-opacity:.12;stroke:var(--accent)}
 .aero-reference-platform{fill:none;stroke:var(--reference);stroke-dasharray:5 4}
 .aero-readings{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:.8em}
+.aero-readings output>span{display:inline-block;white-space:nowrap}
+.aero-readings .fixed-reading{inline-size:6ch}
 .aero-key{margin:8px 0;font-size:.8em;color:var(--muted)}
 .aero-key span:first-child{color:var(--accent)}
 .aero-key span:nth-child(2){color:#7baeff}

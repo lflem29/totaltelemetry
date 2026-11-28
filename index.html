@@ -12,7 +12,7 @@
 <header class="masthead">
   <div class="brand"><img class="brand-icon" src="total-telemetry-icon.png" alt="" width="44" height="44"><div>Total Telemetry <span id="app-version" hidden></span><small>LE MANS ULTIMATE</small></div></div>
   <div class="masthead-actions">
-    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave">Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button" hidden>Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
+    <nav aria-label="Views"><button id="library-tab" data-ui-icon="folder" class="active">Session Library</button><button id="viewer-tab" data-ui-icon="wave">Telemetry Viewer</button><button id="trainer-tab" data-ui-icon="wheel" type="button">Driver Trainer</button><button id="records-tab" data-ui-icon="watch" type="button">Track Records</button></nav>
   </div>
   <div class="head-right"><span id="status" role="status"></span><button id="server-connection" type="button" aria-haspopup="dialog" data-state="disconnected"><span class="server-light" aria-hidden="true"></span><span id="server-connection-label">Disconnected</span><svg class="server-lock" aria-hidden="true" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4.5" y="9" width="11" height="8" rx="1.5"/><path class="server-lock-closed" d="M7 9V6a3 3 0 0 1 6 0v3"/><path class="server-lock-open" d="M7 9V6a3 3 0 0 1 6 0"/></svg></button><button id="notifications-button" data-ui-icon="bell" type="button" aria-haspopup="dialog"><span id="notification-count">No Notifications</span></button><button id="tpr-update-available" data-ui-icon="update" type="button" hidden>Update Available</button><button id="settings-button" data-ui-icon="settings">Settings</button></div>
   <span id="header-car-lane" aria-hidden="true"><span id="header-race-car"></span></span>
@@ -107,7 +107,18 @@
         <g class="aero-reference-platform"><use href="#aero-outline-gt3"/></g>
         <text x="80" y="117" text-anchor="middle">Front</text><text x="380" y="117" text-anchor="middle">Rear</text>
       </svg>
-      <div class="aero-readings"><output id="aero-loaded-reading" class="selected-color"></output><output id="aero-reference-reading" class="reference-color"></output></div>
+      <div class="aero-readings">
+        <output id="aero-loaded-reading" class="selected-color">
+          <span>Front <span class="fixed-reading">—</span> mm</span> ·
+          <span>Rear <span class="fixed-reading">—</span> mm</span> ·
+          <span>Rake <span class="fixed-reading">—</span> mm</span>
+        </output>
+        <output id="aero-reference-reading" class="reference-color" hidden>
+          <span>Front <span class="fixed-reading">—</span> mm</span> ·
+          <span>Rear <span class="fixed-reading">—</span> mm</span> ·
+          <span>Rake <span class="fixed-reading">—</span> mm</span>
+        </output>
+      </div>
       <small>Schematic · ride height exaggerated</small>
     </section>
     <div class="aero-key"><span>Front</span> · <span>Rear</span> · <span>Possible Floor Contact</span></div>
@@ -142,20 +153,41 @@
   </section>
   <section id="trainer" hidden aria-labelledby="trainer-title">
     <div class="trainer-intro">
-    <header class="trainer-heading"><h1 id="trainer-title">Driver Trainer is for Practice Sessions Only</h1><div id="trainer-scan" hidden><progress id="trainer-progress" aria-label="Practice history scan"></progress> <span id="trainer-progress-label"></span><small class="trainer-scan-note">Checking saved practice sessions may take a few minutes.</small></div></header>
+    <header class="trainer-heading"><h1 id="trainer-title">Driver Trainer Is for Practice Sessions Only</h1><div id="trainer-scan" hidden><progress id="trainer-progress" aria-label="Practice history scan"></progress> <span id="trainer-progress-label"></span><small class="trainer-scan-note">Checking saved practice sessions may take a few minutes.</small></div></header>
     <p class="trainer-intro-copy">Use telemetry from in-game Practice sessions to pick one thing to work on in your next stint.</p>
     <div class="trainer-context"><p id="trainer-combo"></p><div class="trainer-session-row"><strong>Current Session</strong> <span id="trainer-current"></span> <strong class="trainer-session-laps" id="trainer-current-laps"></strong> <button id="trainer-choose" type="button">Choose a Different Session</button></div><div class="trainer-session-row"><strong>Comparing With</strong> <span id="trainer-reference"></span> <strong class="trainer-session-laps" id="trainer-reference-laps"></strong> <button id="trainer-choose-reference" type="button">Choose Comparison Session</button></div><small>New practice sessions load automatically after three clean, timed laps in one stint.</small></div>
     <div class="trainer-map-frame"><canvas id="trainer-map" aria-label="Track map" role="img"></canvas></div>
     </div>
     <p id="trainer-status" role="status"></p>
     <div id="trainer-analysis" hidden>
-      <div id="trainer-focus" role="group" aria-label="Practice Focus"><button data-focus="0" aria-pressed="true">Consistent Braking</button><button data-focus="1" aria-pressed="false">Consistent Corner Exits</button><button data-focus="2" aria-pressed="false">Consistent Lap Times</button></div>
-      <section class="trainer-chart"><div class="trainer-chart-heading"><div class="trainer-corner-heading"><div id="trainer-corner-controls" role="group" aria-label="Corner navigation" hidden><button id="trainer-prev-corner" type="button" aria-label="Previous corner">‹</button><span id="trainer-corner-label" aria-live="polite"></span><button id="trainer-next-corner" type="button" aria-label="Next corner">›</button></div><h2 id="trainer-metric"></h2></div><div class="trainer-chart-heading"><label id="trainer-cold-control" hidden><span id="trainer-cold-label">Temperature at Which Tyres Are Considered Cold</span> <input id="trainer-cold-threshold" type="number" step="any" value="60" required> <span id="trainer-cold-unit">°C</span></label><strong id="trainer-spread"></strong><label class="trainer-assist" id="trainer-abs-control" hidden><input id="trainer-show-abs" type="checkbox" checked> ABS</label><label class="trainer-assist" id="trainer-tc-control" hidden><input id="trainer-show-tc" type="checkbox" checked> TC</label><label class="trainer-assist" id="trainer-comparison-control" hidden><input id="trainer-show-comparison" type="checkbox" checked> <span id="trainer-comparison-label">Previous Session Traces</span></label></div></div><div id="trainer-chart-legend" hidden><span id="trainer-plot-axis">Lap in Stint</span><span id="trainer-current-legend">Current Stint</span><span id="trainer-previous-legend">Previous Stint</span><span id="trainer-cold-legend" hidden>Cold Tyres</span><span id="trainer-other-legend" hidden></span><span id="trainer-comparison-legend" hidden></span></div><canvas id="trainer-plot" role="img"></canvas><span id="trainer-hover-guide" aria-hidden="true" hidden></span><div id="trainer-hover-reading" hidden></div><p id="trainer-evidence"></p><p id="trainer-priority-label" hidden>Corners Ordered by Variance: Most to Least</p><div id="trainer-priorities" role="group" aria-labelledby="trainer-priority-label"></div></section>
+      <div id="trainer-focus" role="group" aria-label="Practice Focus"><button data-focus="0" aria-pressed="true">Consistent Braking</button><button data-focus="1" aria-pressed="false">Consistent Corner Exits</button><button data-focus="2" aria-pressed="false">Session Lap Times</button></div>
+      <section class="trainer-chart">
+        <div class="trainer-chart-heading">
+          <div class="trainer-corner-heading">
+            <div id="trainer-corner-controls" role="group" aria-label="Corner navigation" hidden><button id="trainer-prev-corner" type="button" aria-label="Previous corner">‹</button><span id="trainer-corner-label" aria-live="polite"></span><button id="trainer-next-corner" type="button" aria-label="Next corner">›</button></div>
+            <div class="trainer-metric-heading"><h2 id="trainer-metric"></h2><strong id="trainer-spread"></strong></div>
+          </div>
+          <div class="trainer-chart-heading">
+            <label id="trainer-cold-control" hidden><span>Consider Tyres Cold When at or Below</span> <select id="trainer-cold-threshold"></select> <span id="trainer-cold-exclusion">(Exclude Laps)</span></label>
+            <label class="trainer-assist" id="trainer-abs-control" hidden><input id="trainer-show-abs" type="checkbox"> ABS</label>
+            <label class="trainer-assist" id="trainer-tc-control" hidden><input id="trainer-show-tc" type="checkbox" checked> TC</label>
+            <label class="trainer-assist" id="trainer-comparison-control" hidden><input id="trainer-show-comparison" type="checkbox" checked> <span id="trainer-comparison-label">Previous Session Traces</span></label>
+          </div>
+        </div>
+        <div id="trainer-chart-legend" hidden><span id="trainer-plot-axis">Lap in Stint</span><span id="trainer-current-legend">Current Stint</span>
+        <label id="trainer-fastest-lap-control" class="trainer-fastest-control" hidden><input id="trainer-show-fastest-lap" type="checkbox" aria-label="Show Fastest Lap" checked><span id="trainer-fastest-lap-label"></span></label>
+        <label id="trainer-fastest-corner-control" class="trainer-fastest-control" hidden><input id="trainer-show-fastest-corner" type="checkbox" aria-label="Show Fastest Corner" checked><span id="trainer-fastest-corner-label"></span></label><span id="trainer-previous-legend">Previous Stint</span><span id="trainer-cold-legend" hidden>Cold Tyres</span><span id="trainer-other-legend" hidden></span><span id="trainer-comparison-legend" hidden></span></div><canvas id="trainer-plot" role="img"></canvas><span id="trainer-hover-guide" aria-hidden="true" hidden></span><div id="trainer-hover-reading" hidden></div><p id="trainer-evidence"></p>
+        <div id="trainer-priority-header" class="trainer-priority-header" hidden>
+          <p id="trainer-priority-label">Corners Ordered by Variance: Most to Least</p>
+          <label class="corner-sort check"><input id="trainer-sort-corners" type="checkbox"> Sort by Corner Number</label>
+        </div>
+        <div id="trainer-priorities" role="group" aria-labelledby="trainer-priority-label"></div>
+      </section>
     </div>
-    <footer class="trainer-footer"><span class="trainer-trophy-summary">You’ve Earned <strong id="trainer-awards"></strong> Out of <strong id="trainer-unlocked"></strong> Unlocked Trophies <small class="trainer-unlock-note">(Visit More Tracks to Unlock More Trophies)</small></span><progress id="trainer-awards-meter" aria-hidden="true"></progress><button id="trainer-trophies" type="button" aria-haspopup="dialog">View Trophies</button></footer>
+    <footer class="trainer-footer"><span class="trainer-trophy-summary"><strong id="trainer-awards"></strong> of <strong id="trainer-unlocked"></strong> unlocked achievements earned. <small class="trainer-unlock-note">Visit more tracks in Practice to unlock more.</small></span><progress id="trainer-awards-meter" aria-hidden="true"></progress><button id="trainer-trophies" type="button" aria-haspopup="dialog">View Training Achievements</button></footer>
   </section>
   <dialog id="trainer-session-dialog" aria-labelledby="trainer-session-heading"><form method="dialog"><h2 id="trainer-session-heading">Choose a Different Session</h2><label for="trainer-session-choice">Practice session</label><select id="trainer-session-choice"></select><div class="trainer-dialog-actions"><button value="cancel">Cancel</button><button value="load">Load Session</button></div></form></dialog>
-  <dialog id="trainer-trophy-dialog" aria-labelledby="trainer-trophy-heading"><div class="trainer-chart-heading"><h2 id="trainer-trophy-heading">Trophies</h2><form method="dialog"><button>Close</button></form></div><p id="trainer-trophy-progress"></p><div class="trainer-completion"><progress id="trainer-completion-meter" aria-label="Unlocked trophies earned"></progress><strong id="trainer-percent"></strong></div><h3 id="trainer-trophy-track"></h3><p id="trainer-streak"></p><div id="trainer-trophy-cards"></div><div id="trainer-tracks" role="group" aria-label="Track trophy progress"></div></dialog>
+  <dialog id="trainer-trophy-dialog" aria-labelledby="trainer-trophy-heading"><div class="trainer-chart-heading"><h2 id="trainer-trophy-heading">Training Achievements</h2><form method="dialog"><button>Close</button></form></div><p id="trainer-trophy-progress"></p><div class="trainer-completion"><progress id="trainer-completion-meter" aria-label="Unlocked achievements earned"></progress><strong id="trainer-percent"></strong></div><h3 id="trainer-trophy-track"></h3><p id="trainer-streak"></p><div id="trainer-trophy-cards"></div><div id="trainer-tracks" role="group" aria-label="Training achievement progress by track"></div></dialog>
   <section id="library">
     <div class="library-content">
       <div class="library-sessions">
@@ -182,10 +214,10 @@
             <label>Sort By<select name="sort">
               <option value="">Newest First</option><option value="track">Track</option><option value="class">Class</option><option value="car">Car</option>
             </select></label>
-            <div id="recent-list-toolbar" class="filter-actions recent-filter-actions">
+            <div id="recent-list-toolbar" class="filter-actions">
+              <p id="recent-load-guide" class="table-load-guide" hidden>Click a session row to open it in the Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
               <label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="recent-list-actions" class="list-result-actions"><span id="recent-list-count" class="list-count" role="status" hidden></span><button id="reset-library-filters" class="button-secondary" type="button">Reset Filters</button></div>
             </div>
-            <p id="recent-load-guide" class="table-load-guide" hidden>Click a session row to open it in the Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
           </div>
           <div id="library-loading" hidden>
             <p id="library-loading-label" role="status">Loading session recordings…</p>
@@ -201,7 +233,7 @@
             </figure>
             <button id="empty-folders">Choose Folder</button>
           </div>
-          <div class="table-wrap lap-list-table" id="session-wrap" role="region" aria-label="My Recent Sessions Table" tabindex="0" hidden><table aria-labelledby="recent-sessions-title"><thead><tr><th>Date and Time</th><th>Track</th><th scope="col" class="numeric-cell">Session Result</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">Timed Laps</th><th class="numeric-cell" title="Estimated from recorded speed over time">Distance Driven</th><th scope="col" class="session-comparison">Reference</th></tr></thead><tbody id="sessions"></tbody></table></div>
+          <div class="table-wrap lap-list-table" id="session-wrap" role="region" aria-label="My Recent Sessions Table" tabindex="0" hidden><table aria-labelledby="recent-sessions-title"><thead><tr><th>Date and Time</th><th>Track</th><th scope="col">Session Type</th><th scope="col" class="numeric-cell">Session Result</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">Timed Laps</th><th class="numeric-cell" title="Estimated from recorded speed over time">Distance Driven</th><th scope="col" class="session-comparison">Reference</th></tr></thead><tbody id="sessions"></tbody></table></div>
           <details id="issues" hidden><summary>Files That Did Not Import</summary><ul id="issue-list"></ul></details>
         </section>
         <section id="comparison-laps" role="tabpanel" aria-labelledby="comparison-laps-title" tabindex="0" hidden>
@@ -218,8 +250,10 @@
             <label>Sort By<select name="sort">
               <option value="">Newest First</option><option value="track">Track</option><option value="class">Class</option><option value="car">Car</option><option value="driver">Driver</option>
             </select></label>
-            <div id="imported-list-toolbar" class="filter-actions"><label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="imported-list-actions" class="list-result-actions"><span id="imported-list-count" class="list-count" role="status" hidden></span><button id="reset-imported-lap-filters" class="button-secondary" type="button">Reset Filters</button></div></div>
-            <p id="imported-load-guide" class="table-load-guide" hidden>Click a lap row to open it in Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
+            <div id="imported-list-toolbar" class="filter-actions">
+              <p id="imported-load-guide" class="table-load-guide" hidden>Click a lap row to open it in the Telemetry Viewer. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
+              <label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="imported-list-actions" class="list-result-actions"><span id="imported-list-count" class="list-count" role="status" hidden></span><button id="reset-imported-lap-filters" class="button-secondary" type="button">Reset Filters</button></div>
+            </div>
           </div>
           <p id="comparison-import-status" role="status"></p>
           <div id="imported-empty-state" class="list-empty"><p id="imported-laps-empty" hidden>No laps imported yet.</p></div>
@@ -231,7 +265,7 @@
           </div>
         </section>
       </div>
-      <section id="results-distance" aria-labelledby="results-distance-title" hidden>
+      <section id="results-distance" aria-labelledby="results-distance-title" tabindex="0" hidden>
         <h2 id="results-distance-title">Total distance driven</h2>
         <output id="distance-total" aria-live="polite"></output>
         <p id="distance-status" role="status"></p>
@@ -279,8 +313,10 @@
           <span id="record-version-lock" hidden>Set by Community Server</span>
         </div>
       </div>
-      <div id="records-list-toolbar" class="filter-actions"><label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="records-list-actions" class="list-result-actions"><span id="records-list-count" class="list-count" role="status" hidden></span><button id="record-clear" class="button-secondary" type="button">Reset Filters</button></div></div>
-      <p id="records-load-guide" class="table-load-guide" hidden>Click a record marked Ready to Open to view its telemetry. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
+      <div id="records-list-toolbar" class="filter-actions">
+        <p id="records-load-guide" class="table-load-guide" hidden>Click a record marked Ready to Open to view its telemetry. <span class="reference-match-guide" hidden>References must match the track, layout, and car class.</span></p>
+        <label class="compatible-reference-filter" hidden><input type="checkbox"> Show Compatible References Only</label><div id="records-list-actions" class="list-result-actions"><span id="records-list-count" class="list-count" role="status" hidden></span><button id="record-clear" class="button-secondary" type="button">Reset Filters</button></div>
+      </div>
     </div>
     <div class="records-feedback">
 
@@ -289,7 +325,7 @@
     </div>
     <div id="records-empty-state" class="list-empty"><p id="records-status" role="status"></p></div>
     <div id="records-table" class="table-wrap lap-list-table" role="region" aria-label="Track Records Table" tabindex="0" hidden><table>
-      <thead><tr><th>Class</th><th>Car</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">S1</th><th class="numeric-cell">S2</th><th class="numeric-cell">S3</th><th class="numeric-cell record-optimal">Optimal</th><th class="record-date">Date</th><th>Game Version</th><th scope="col" class="record-telemetry">Telemetry Available</th><th scope="col" class="session-comparison">Reference</th></tr></thead>
+      <thead><tr><th>Class</th><th>Car</th><th scope="col">Driver</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">S1</th><th class="numeric-cell">S2</th><th class="numeric-cell">S3</th><th class="record-date">Date</th><th>Game Version</th><th scope="col" class="record-telemetry">Telemetry Available</th><th scope="col" class="session-comparison">Reference</th></tr></thead>
       <tbody id="record-rows"></tbody>
     </table></div>
   </section>
@@ -373,7 +409,16 @@
                 <small id="map-sector-note" hidden>Includes unconfirmed laps</small>
               </section>
             </div>
-            <div class="playbar"><button id="play" data-ui-icon="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Playback position"><output id="position"></output><select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></div>
+            <div class="playbar">
+              <button id="play" data-ui-icon="play">Play</button>
+              <input id="scrub" type="range" min="0" max="1000" value="0" aria-label="Playback position">
+              <output id="position" hidden>
+                <span><span id="position-elapsed" class="fixed-reading"></span> / <span id="position-duration"></span></span>
+                <span id="position-distance" hidden>· <span id="position-distance-value" class="fixed-reading"></span></span>
+                <span id="position-section" hidden>· Section <span id="position-section-length" class="fixed-reading"></span></span>
+              </output>
+              <select id="play-rate" aria-label="Playback speed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+            </div>
           </section>
           <section id="telemetry-graphs-panel" aria-label="Telemetry Graphs">
             <div id="charts"></div>
@@ -620,6 +665,9 @@
       <h3 class="settings-heading">LMU Folders</h3>
       <p>Primary Driver <strong id="settings-primary-driver">Awaiting Confirmation</strong></p>
       <button id="settings-confirm-driver" type="button" hidden>Confirm Your Driver</button>
+      <label>Previous Driver Name <select id="previous-stats-driver" aria-describedby="previous-stats-driver-note"></select></label>
+      <p id="previous-stats-driver-note">Includes this name in your local driving stats. Sharing uses your primary driver.</p>
+      <p id="previous-stats-driver-status" role="status"></p>
       <p>Choose the game installation to fill both paths, or select each folder separately.</p>
       <button type="button" data-folder="installation">Choose LMU installation</button>
       <div class="folder-item"><div><strong>Telemetry</strong><p id="telemetry-path"></p></div><button type="button" data-folder="telemetry">Choose Folder</button></div>
@@ -658,7 +706,6 @@
   <div id="settings-panel-beta" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-beta" tabindex="0" hidden>
     <label class="trainer-setting"><input id="enable-aero" type="checkbox"><span>Enable Aero Visualiser (beta)</span></label>
     <label class="trainer-setting"><input id="enable-suspension" type="checkbox"><span>Enable Suspension Visualiser (beta)</span></label>
-        <label class="trainer-setting"><input id="enable-driver-trainer" type="checkbox"><span>Enable Driver Trainer (beta)</span></label>
   </div>
   <div id="settings-panel-temperatures" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-temperatures" tabindex="0" hidden>
     <section class="settings-section" aria-labelledby="hot-temperatures-title">
@@ -768,8 +815,8 @@
 <dialog id="preset-dialog"><form id="preset-form" method="dialog"><h2 id="preset-dialog-title">Save Telemetry Preset</h2><label>Preset name<input id="preset-name" required maxlength="60"></label><div class="actions"><button type="button" id="cancel-preset">Cancel</button><button>Save</button></div></form></dialog>
 <dialog id="confirm-primary-driver" aria-labelledby="confirm-primary-driver-title">
   <h2 id="confirm-primary-driver-title">Confirm Your Driver Name</h2>
-  <p id="primary-driver-suggestion"></p>
-  <p>Total Distance Driven and shared Track Records use this name. A full settings reset is required to change it.</p>
+  <label>Recorded driver name <select id="primary-driver-choice"></select></label>
+  <p>Total Distance Driven and shared Track Records use the selected name.</p>
   <p id="primary-driver-status" role="status"></p>
   <div class="actions"><button id="primary-driver-confirm" type="button">Confirm Driver</button>
     <button id="primary-driver-later" type="button" class="button-secondary">Later</button></div>

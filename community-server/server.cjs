@@ -130,7 +130,8 @@ function timingRecord(raw) {
       !Number.isFinite(Date.parse(record.recorded)) || !validTime(raw.time)) throw new Error('Invalid timing record.');
   const sectors = key => [0,1,2].map(index => validTime(raw[key]?.[index]) ? raw[key][index] : null);
   const lapKey = recordLapKeyPattern.test(raw.lapKey ?? '') ? raw.lapKey : '';
-  return {...record,lapKey,...(!lapKey && raw.resultOnly === true && {resultOnly:true}),
+  const variant = record.carClass.toLowerCase() === 'lmp2' && ['WEC','ELMS'].includes(raw.lmp2Variant) ? raw.lmp2Variant : '';
+  return {...record,...(variant && {lmp2Variant:variant}),lapKey,...(!lapKey && raw.resultOnly === true && {resultOnly:true}),
     time:raw.time,sectors:sectors('sectors'),bestSectors:sectors('bestSectors'),
     validity:raw.validity === 'official' ? 'official' : 'unconfirmed'};
 }
@@ -151,20 +152,23 @@ function ownsRecordIdentity(identity, secret) {
 
 function sharedRecordId(client,record) {
   return createHash('sha256').update(JSON.stringify([client,...['driver','track','layout','carClass']
-    .map(field => (record[field].trim() || (field === 'carClass' ? 'Unknown' : '')).toLowerCase())])).digest('hex');
+    .map(field => (record[field].trim() || (field === 'carClass' ? 'Unknown' : '')).toLowerCase()),
+    ...(record.lmp2Variant === 'ELMS' ? ['ELMS'] : [])])).digest('hex');
+}
+
+function exactTrackRecordKey(record) {
+  return JSON.stringify([
+    record.driver.trim().toLowerCase(),record.lapKey || 'results',record.track,record.layout,record.carClass,
+    record.car,record.gameVersion,record.time,Date.parse(record.recorded)
+  ]);
 }
 
 function trackRecordGroups(records) {
   const groups = new Map();
   for (const [id,entry] of Object.entries(records)) {
     const {record} = entry;
-    const key = entry.removed ? id : record.resultOnly ? JSON.stringify([
-      'results',record.driver.toLowerCase(),record.track,record.layout,record.carClass,
-      record.car,record.gameVersion,record.time,Date.parse(record.recorded)
-    ]) : record.lapKey ? JSON.stringify([
-      record.driver.trim().toLowerCase(),record.lapKey,record.track,record.layout,record.carClass,
-      record.car,record.gameVersion,record.time,Date.parse(record.recorded)
-    ]) : id;
+    const key = !entry.removed && (record.resultOnly || record.lapKey)
+      ? JSON.stringify([exactTrackRecordKey(record),record.lmp2Variant === 'ELMS']) : id;
     const group = groups.get(key);
     if (group) group.push([id,entry]);
     else groups.set(key,[[id,entry]]);
@@ -488,7 +492,7 @@ async function serve(request, response, {root, expected, owner, syncTrackRecords
     return syncTrackRecords(request,response,['owner-' + (recordOwnerRoute[1] || 'list'),recordOwnerRoute[2]]);
   }
   if (url.pathname === '/v1/track-records' && request.method === 'GET') {
-    return reply(response,200,{privateRecordProtocol:1,resultOnlyTrackRecords:true});
+    return reply(response,200,{privateRecordProtocol:1,resultOnlyTrackRecords:true,lmp2Variants:true});
   }
   if (url.pathname === '/v1/track-records' && request.method === 'POST') return syncTrackRecords(request,response);
   if (url.pathname === '/v1/track-records/requests' && request.method === 'GET') return syncTrackRecords(request,response,['list']);
