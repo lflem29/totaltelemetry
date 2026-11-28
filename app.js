@@ -632,7 +632,9 @@ function settingsFields() {
   $('racing-line-spread').value = racingLineSpread();
   $('settings-channels').disabled = !ready;
   $('settings-channel-note').hidden = ready;
-  for (const type of ['telemetry', 'results']) $(type + '-path').textContent = settings[type] || 'Folder not set';
+  for (const type of ['telemetry', 'secondaryTelemetry', 'results']) $(type + '-path').textContent = settings[type] || 'Folder not set';
+  $('remove-secondary-telemetry').hidden = !settings.secondaryTelemetry;
+  $('move-telemetry').disabled = movingTelemetry || !settings.telemetry || !settings.secondaryTelemetry;
   refreshUnitFields();
 }
 let distanceReport, distanceRequest;
@@ -686,9 +688,9 @@ function renderResultsDistance() {
   const preferred = driver ? totals.find(total => normaliseDriverName(total.name || total.id) === driver) : undefined;
   $('distance-total').textContent = preferred ? distanceNumber.format(convert('',preferred.km,'km')) + ' ' + displayUnit('','km') : '';
   $('track-hours').hidden = !preferred;
-  const minutes = Math.round((preferred?.trackSeconds ?? 0) / 60);
+  const hours = Math.round((preferred?.trackSeconds ?? 0) / 3600);
   $('track-hours-total').textContent = Number.isFinite(preferred?.trackSeconds)
-    ? Math.floor(minutes / 60).toLocaleString() + ' h ' + minutes % 60 + ' min' : '—';
+    ? hours.toLocaleString() + (hours === 1 ? ' hour' : ' hours') : '—';
   $('favourite-cars').hidden = !preferred;
   const classDistance = preferred?.classDistanceKm ?? {};
   const rankedClasses = [...carClasses].sort((a, b) => (classDistance[b] ?? 0) - (classDistance[a] ?? 0));
@@ -700,7 +702,9 @@ function renderResultsDistance() {
       list.append(...favourites.map(({car,km}) => favouriteDistanceRow(carLabel('span',car),km)));
       value.append(list);
     }
-    return [node('dt', category), value];
+    const heading = node('dt');
+    heading.append(recordClassBadge({carClass:category}, category));
+    return [heading, value];
   }));
   const tracks = preferred?.favouriteTracks ?? [];
   $('favourite-tracks').hidden = !tracks.length;
@@ -1216,9 +1220,8 @@ function recordClassLabel({carClass,lmp2Variant}) {
   return carClass === 'LMP2' ? (lmp2Variant === 'ELMS' ? 'LMP2 ELMS' : 'LMP2 WEC') : carClass;
 }
 
-function recordClassBadge(session) {
+function recordClassBadge(session, label = recordClassLabel(session)) {
   if (!carClasses.includes(session.carClass)) return;
-  const label = recordClassLabel(session);
   const badge = node('span', label, 'record-class-badge');
   badge.dataset.class = label.toLowerCase();
   return badge;
@@ -2422,11 +2425,12 @@ function renderLibrary({resetRecentSessions = false} = {}) {
   noMatches.textContent = compatibleReferencesOnly ? noCompatibleReferences : 'No recent sessions match these filters.';
   positionListActions('recent',!noMatches.hidden);
   $('empty').hidden = !$('library-loading').hidden || timedSessions.length > 0;
-  $('empty-recording-guide').hidden = scanKey === undefined || !settings.telemetry || timedSessions.length > 0;
+  const telemetryPaths = [settings.telemetry,settings.secondaryTelemetry].filter(Boolean);
+  $('empty-recording-guide').hidden = scanKey === undefined || !telemetryPaths.length || timedSessions.length > 0;
   recentSessionTable.hidden = !matches.length;
   $('recent-load-guide').hidden = !matches.length;
-  $('empty-title').textContent = settings.telemetry ? 'Waiting for timed laps' : 'Choose your telemetry folder';
-  $('empty-text').textContent = settings.telemetry ? settings.telemetry
+  $('empty-title').textContent = telemetryPaths.length ? 'Waiting for timed laps' : 'Choose your telemetry folder';
+  $('empty-text').textContent = telemetryPaths.length ? telemetryPaths.join(' · ')
     : 'Choose the LMU installation or set the telemetry and results folders separately.';
   recentSessionRows.replaceChildren();
   appendRecentSessionRows(rowCount);
@@ -2496,6 +2500,10 @@ function showLibraryLoading(loading) {
   if (loading) $('empty').hidden = $('recent-sessions-no-matches').hidden = true;
 }
 let scannedTelemetryFolder;
+function telemetryFolderKey() {
+  const folders = [settings.telemetry, settings.secondaryTelemetry].filter(Boolean);
+  return folders.length ? JSON.stringify(folders) : '';
+}
 const seenTelemetry = new Set();
 const pendingTelemetry = new Set();
 
@@ -2537,20 +2545,22 @@ async function autoLoadNewTelemetry(recordings, folder) {
 }
 
 async function scan() {
+  if (movingTelemetry) return;
   if (windowFocus === 'background') return;
   refreshResultsDistance();
   if (scanBusy) { runningScanAgain = true; return; }
-  if (!settings.telemetry && !settings.results) { renderLibrary(); return; }
+  if (!telemetryFolderKey() && !settings.results && scanKey === undefined) { renderLibrary(); return; }
   scanBusy = true;
   updateRecordsLoading();
   const initialScan = scanKey === undefined;
-  const telemetryFolder = settings.telemetry;
+  const telemetryFolder = telemetryFolderKey();
   const resultsFolder = settings.results;
   if (initialScan) showLibraryLoading(true);
   try {
     const response = await lmu.scan();
     if (windowFocus === 'background') return;
-    if (response.stale || telemetryFolder !== settings.telemetry || resultsFolder !== settings.results) {
+    if (response.moving || movingTelemetry) return;
+    if (response.stale || telemetryFolder !== telemetryFolderKey() || resultsFolder !== settings.results) {
       runningScanAgain = true;
       return;
     }
@@ -2575,6 +2585,7 @@ async function scan() {
     resultGameVersions = response.resultGameVersions || [];
     resultRecords = response.resultRecords || [];
     $('issues').hidden = !response.errors.length;
+    $('trash-failed-imports').hidden = !response.failedImports?.length;
     $('issue-list').replaceChildren(...response.errors.map(error => node('li', error)));
     renderLibrary();
     if (await autoLoadNewTelemetry(sessions,telemetryFolder)) return;
@@ -2601,6 +2612,7 @@ async function scan() {
     if (!scanFailed) notifySystem('Folder scan failed', {error:true});
     scanFailed = true;
     $('issues').hidden = false;
+    $('trash-failed-imports').hidden = true;
     $('issue-list').replaceChildren(node('li', error.message));
   } finally {
     scanBusy = false;
@@ -8358,6 +8370,75 @@ lmu.onTprUpdateProgress?.(percent => {
   updateStatus.textContent = percent === 100 ? 'Verifying the installer…' : 'Downloading update… ' + percent + '%';
 });
 
+let movingTelemetry = false;
+const telemetryMoveProgress = $('telemetry-move-progress');
+const telemetryMoveStatus = $('telemetry-move-status');
+const telemetryMoveIssues = $('telemetry-move-issues');
+lmu.onTelemetryMoveProgress?.(({completed,total,filename}) => {
+  telemetryMoveProgress.max = total;
+  telemetryMoveProgress.value = completed;
+  telemetryMoveProgress.hidden = false;
+  telemetryMoveStatus.textContent = filename
+    ? `Moving ${completed + 1} of ${total} · ${filename}` : 'Refreshing the telemetry library…';
+});
+$('move-telemetry').onclick = async () => {
+  if (movingTelemetry || choosingLmuFolder) return;
+  movingTelemetry = true;
+  $('move-telemetry').disabled = true;
+  telemetryMoveStatus.textContent = '';
+  telemetryMoveIssues.replaceChildren();
+  telemetryMoveIssues.hidden = true;
+  try {
+    const {moved,issues,cancelled} = await lmu.moveTelemetry();
+    if (cancelled) return;
+    const paths = new Map(moved.map(({source,destination}) => [source,destination]));
+    for (const destination of paths.values()) seenTelemetry.add(destination);
+    if (paths.has(selected?.path)) selected = {...selected,path:paths.get(selected.path)};
+    const currentReference = referenceKey(reference);
+    const savedReference = savedReferenceLapKey();
+    if (paths.has(referenceSessionPath)) {
+      referenceSessionPath = paths.get(referenceSessionPath);
+      if (manualReference === savedReference) manualReference = savedReferenceLapKey();
+    }
+    if (paths.has(reference?.session.path)) {
+      reference = {...reference,session:{...reference.session,path:paths.get(reference.session.path)}};
+      if (manualReference === currentReference) manualReference = referenceKey(reference);
+    }
+    telemetryMoveStatus.textContent = moved.length || issues.length
+      ? `Moved ${moved.length} of ${moved.length + issues.length} recordings.`
+      : 'No telemetry files to move.';
+    telemetryMoveIssues.replaceChildren(...issues.map(issue => node('li',issue)));
+    telemetryMoveIssues.hidden = !issues.length;
+  } catch (error) {
+    setStatus(telemetryMoveStatus,error.message,{error:true,temporary:false});
+  } finally {
+    movingTelemetry = false;
+    telemetryMoveProgress.hidden = true;
+    settingsFields();
+    void scan();
+  }
+};
+$('trash-failed-imports').onclick = async event => {
+  if (movingTelemetry || choosingLmuFolder) return;
+  const button = event.currentTarget;
+  const status = $('trash-failed-imports-status');
+  movingTelemetry = true;
+  button.disabled = true;
+  status.textContent = '';
+  try {
+    const {trashed,issues,cancelled} = await lmu.trashFailedImports();
+    if (!cancelled) {
+      status.textContent = [`Moved ${trashed} files to the Recycle Bin.`,...issues].join(' ');
+      if (trashed && !issues.length) notifySystem(status.textContent);
+    }
+  } catch (error) {
+    setStatus(status,error.message,{error:true,temporary:false});
+  } finally {
+    movingTelemetry = false;
+    button.disabled = false;
+    void scan();
+  }
+};
 let choosingLmuFolder = false;
 for (const id of ['settings-button','empty-folders']) $(id).onclick = () => {
   if (choosingLmuFolder) return;
@@ -8367,23 +8448,25 @@ for (const id of ['settings-button','empty-folders']) $(id).onclick = () => {
   $('folders').showModal();
 };
 for (const button of document.querySelectorAll('[data-folder]')) button.onclick = async () => {
-  if (choosingLmuFolder) return;
+  if (choosingLmuFolder || movingTelemetry) return;
   choosingLmuFolder = true;
   const settingsDialog = $('folders');
   const status = $('folder-selection-status');
   setStatus(status, '');
   settingsDialog.close();
   try {
-    const {telemetry,results} = settings;
+    const telemetry = telemetryFolderKey();
+    const {results} = settings;
     Object.assign(settings, await lmu.folder(button.dataset.folder));
     settingsFields();
-    if (settings.telemetry !== telemetry || settings.results !== results) void scan();
+    if (telemetryFolderKey() !== telemetry || settings.results !== results) void scan();
   } catch (error) {
     setStatus(status, error.message, {error:true,temporary:false});
   } finally {
     choosingLmuFolder = false;
     if (!settingsDialog.open) settingsDialog.showModal();
-    button.focus();
+    if (button.hidden) document.querySelector('[data-folder="secondaryTelemetry"]').focus();
+    else button.focus();
   }
 };
 const telemetryWorkbench = $('telemetry-workbench');
@@ -8867,7 +8950,7 @@ lmu.onWindowFocus?.(updateWindowFocus);
   showTrackView(true);
   renderLibrary();
   lmu.onFolderChange(scan);
-  if (!settings.telemetry && !settings.results) {
+  if (!telemetryFolderKey() && !settings.results) {
     try {
       if (!settings.telemetryReminderSeen) {
         const reminder = $('first-run-telemetry');

@@ -571,7 +571,7 @@ button{text-transform:capitalize}
 }
 .record-class-badge[data-class="gte"]{--class-colour:#b93511}
 .record-class-badge[data-class="gt3"]{--class-colour:#007a38}
-.record-class-badge:is([data-class="lmp2 wec"],[data-class="lmp2 elms"]){--class-colour:#005398}
+.record-class-badge:is([data-class="lmp2"],[data-class="lmp2 wec"],[data-class="lmp2 elms"]){--class-colour:#005398}
 .record-class-badge[data-class="lmp2 elms"]{position:relative;overflow:hidden}
 .record-class-badge[data-class="lmp2 elms"]::after{
   content:"";position:absolute;inset-block-start:0;inset-inline-end:0;pointer-events:none;
@@ -872,6 +872,8 @@ button{text-transform:capitalize}
 
 #folders .telemetry-auto-load{display:flex;align-items:center;gap:8px;margin-block:8px}
 .telemetry-auto-load input{margin:0}
+#telemetry-move-progress{display:block;width:100%;margin-block:8px;accent-color:var(--accent)}
+#telemetry-move-status,#telemetry-move-issues{overflow-wrap:anywhere}
 
 @media(max-width:780px){
   .telemetry-data-grid{grid-template-columns:minmax(0,1fr)}

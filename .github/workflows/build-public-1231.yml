@@ -1,0 +1,61 @@
+name: Build public Total Telemetry Windows packages
+on:
+  push:
+    branches: [build-public-v1.2.31]
+permissions:
+  contents: write
+jobs:
+  windows:
+    if: github.repository == 'lflem29/totaltelemetry' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [desktop]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and publish Windows package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          curl --retry 3 -fLsS https://github.com/electron/electron/releases/download/v42.0.0/electron-v42.0.0-win32-x64.zip -o electron.zip
+          echo '2707fbf25e0e18211a00f90b97e0fb2a00cf10a17ef0fa9d873e177e1d3286bc  electron.zip' | sha256sum -c
+          unzip -q electron.zip -d win
+          rm -f win/resources/default_app.asar
+          mkdir -p win/resources/app
+          if [[ '${{ matrix.app }}' == desktop ]]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y nsis p7zip-full
+            mv win/electron.exe 'win/LMU Lap Workbench.exe'
+            cp {app.js,index.html,style.css,main.js,preload.js,telemetry.py,package.json,total-telemetry-icon.ico,total-telemetry-icon.png,record-telemetry.png,geist-latin.woff2,geist-OFL.txt} win/resources/app/
+            curl --retry 3 -fLsS https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip -o python.zip
+            curl --retry 3 -fLsS https://files.pythonhosted.org/packages/64/24/ef16dd65e70af5d8f8ea23a948f69354a86a13f47b8727a9c1d084e1fd67/duckdb-2.0.1-cp312-abi3-win_amd64.whl -o duckdb.whl
+            echo '4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3  python.zip' | sha256sum -c
+            echo '67a7dab509897ec1f1d46283783edb8fdc005f02fde6e263fb77a8a3bf7f1b85  duckdb.whl' | sha256sum -c
+            unzip -q python.zip -d win/resources/app/runtime
+            unzip -q duckdb.whl -d win/resources/app/runtime
+            sed -i 's/^#import site/import site/' win/resources/app/runtime/python312._pth
+            makensis -V2 installer.nsi
+            asset=Total-Telemetry-1.2.31-Setup.exe
+            7z t "$asset" >/dev/null
+            tag=v1.2.31
+            title='Total Telemetry 1.2.31'
+            latest=true
+          else
+            mv win/electron.exe 'win/Total Telemetry Community Server.exe'
+            cp community-server/{main.cjs,server.cjs,preload.cjs,index.html,app.js,style.css,README.md,package.json} win/resources/app/
+            python3 community-server/bundle-caddy.py win
+            test -f win/resources/caddy/caddy.exe
+            asset=Total-Telemetry-Community-Server-1.1.15-win-x64.zip
+            (cd win && zip -qr -1 "../$asset" .)
+            unzip -tq "$asset"
+            unzip -p "$asset" resources/app/main.cjs | cmp - community-server/main.cjs
+            echo 'Community Server reports its running version in the Track Records capability response so the desktop app can show it in Server Communication.' > release-notes.md
+            tag=community-server-v1.1.15
+            title='Total Telemetry Community Server 1.1.15'
+            latest=false
+          fi
+          printf '\nSHA-256: `%s`\n' "$(sha256sum "$asset" | cut -d ' ' -f 1)" >> release-notes.md
+          gh release create "$tag" "$asset" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest="$latest" --title "$title" --notes-file release-notes.md
+          python3 scripts/retain-releases.py --repo "$GITHUB_REPOSITORY" --published-tag "$tag" --apply

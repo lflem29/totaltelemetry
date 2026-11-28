@@ -1,4 +1,4 @@
-const {app, BrowserWindow, dialog, ipcMain, Menu, screen, safeStorage} = require('electron');
+const {app, BrowserWindow, dialog, ipcMain, Menu, screen, safeStorage, shell} = require('electron');
 const {execFile, spawn} = require('node:child_process');
 const {once} = require('node:events');
 const {randomUUID, randomBytes, createHash} = require('node:crypto');
@@ -439,6 +439,81 @@ let config = {};
 let sessionIndex = [];
 let resultRecordIndex = [];
 let activeScan;
+async function telemetryDigest(filename) {
+  const hash = createHash('sha256');
+  for await (const chunk of fs.createReadStream(filename)) hash.update(chunk);
+  return hash.digest('hex');
+}
+
+async function telemetryStamp(filename) {
+  const stat = await fs.promises.lstat(filename,{bigint:true});
+  if (!stat.isFile()) throw new Error('Not a regular telemetry file.');
+  return [stat.dev,stat.ino,stat.size,stat.mtimeNs,stat.ctimeNs].join(':');
+}
+
+async function checkTelemetryWal(filename) {
+  try {
+    await fs.promises.lstat(filename + '.wal');
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  throw new Error('This recording has an active database journal.');
+}
+
+async function moveTelemetryFile(source, destination) {
+  await checkTelemetryWal(source);
+  const stamp = await telemetryStamp(source);
+  const hash = await telemetryDigest(source);
+  const temp = destination + '.' + randomUUID() + '.tt-moving';
+  try {
+    let existing;
+    try {
+      existing = await telemetryStamp(destination);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+    if (existing === undefined) {
+      await fs.promises.copyFile(source,temp,fs.constants.COPYFILE_EXCL);
+      if (await telemetryDigest(temp) !== hash || await telemetryStamp(source) !== stamp) {
+        throw new Error('The recording changed during the copy or the copy did not verify.');
+      }
+      const file = await fs.promises.open(temp,'r+');
+      try { await file.sync(); } finally { await file.close(); }
+      await checkTelemetryWal(source);
+      // Publish the complete copy without replacing an existing recording.
+      try {
+        await fs.promises.link(temp,destination);
+      } catch (error) {
+        if (process.platform !== 'win32' || !['EPERM','ENOTSUP','EOPNOTSUPP','ENOSYS'].includes(error.code)) throw error;
+        // Windows File.Move can publish without replacement on volumes without hard links.
+        await new Promise((resolve,reject) => {
+          execFile('powershell.exe',['-NoProfile','-NonInteractive','-Command',
+            "$ErrorActionPreference = 'Stop'; [IO.File]::Move($env:TT_MOVE_TEMP, $env:TT_MOVE_DESTINATION)"],
+          {windowsHide:true,env:{...process.env,TT_MOVE_TEMP:temp,TT_MOVE_DESTINATION:destination}},
+          failure => failure ? reject(failure) : resolve());
+        });
+      }
+      existing = await telemetryStamp(destination);
+    }
+    await checkTelemetryWal(destination);
+    if (await telemetryDigest(destination) !== hash || await telemetryStamp(destination) !== existing) {
+      throw new Error('The destination contains a different or changing recording with the same name.');
+    }
+    if (process.platform !== 'win32') {
+      const folder = await fs.promises.open(path.dirname(destination),'r');
+      try { await folder.sync(); } finally { await folder.close(); }
+    }
+    await checkTelemetryWal(source);
+    if (await telemetryStamp(source) !== stamp) throw new Error('The source recording changed during the move.');
+    await fs.promises.unlink(source);
+  } finally {
+    await fs.promises.unlink(temp).catch(() => {});
+  }
+}
+
+let movingTelemetry = false;
+let failedImports = [];
 let generation = 0;
 let configPath;
 let watchers = [];
@@ -448,7 +523,7 @@ function watchFolders(win, windowFocus) {
   for (const watcher of watchers) watcher.close();
   watchers = [];
   clearTimeout(watchTimer);
-  for (const folder of new Set([config.telemetry, config.results].filter(Boolean))) {
+  for (const folder of new Set([config.telemetry, config.secondaryTelemetry, config.results].filter(Boolean))) {
     try {
       const watcher = fs.watch(folder, () => {
         if (windowFocus() === 'background') return;
@@ -1004,6 +1079,7 @@ if (primaryInstance) app.whenReady().then(async () => {
     return Boolean(config.discordWebhookEncrypted);
   });
   ipcMain.handle('reset-settings', async () => {
+    if (movingTelemetry) throw new Error('Wait for the telemetry move to finish.');
     const result = await dialog.showMessageBox(win, {
       type: 'warning', title: 'Reset all settings', message: 'Reset all Total Telemetry settings?',
       detail: 'This clears saved preferences, presets and folder locations. Your community server address, shared key and Discord webhook setting are kept. You must confirm your driver again. Confirming the same driver restores your Track Records identity and open requests. Your telemetry recordings and results files stay on disk.',
@@ -1027,18 +1103,22 @@ if (primaryInstance) app.whenReady().then(async () => {
     win.webContents.reload();
   });
   ipcMain.handle('folder', async (_, type) => {
+    if (movingTelemetry) throw new Error('Wait for the telemetry move to finish.');
     const automatic = type === 'first-run-installation';
-    if (!automatic && !['installation', 'telemetry', 'results'].includes(type)) return publicSettings();
-    if (automatic && (process.platform !== 'win32' || config.telemetry || config.results)) return publicSettings();
+    if (!automatic && !['installation', 'telemetry', 'secondaryTelemetry', 'remove-secondary-telemetry', 'results'].includes(type)) return publicSettings();
+    if (automatic && (process.platform !== 'win32' || config.telemetry || config.secondaryTelemetry || config.results)) return publicSettings();
     let folder;
     const userData = automatic
       ? await fs.promises.stat(path.join(defaultInstallation, 'UserData')).catch(() => null)
       : null;
-    if (userData?.isDirectory()) {
+    if (type === 'remove-secondary-telemetry') {
+      config.secondaryTelemetry = '';
+    } else if (userData?.isDirectory()) {
       folder = defaultInstallation;
     } else {
       const title = automatic || type === 'installation' ? 'Select your Le Mans Ultimate installation' :
-        type === 'telemetry' ? 'Select your telemetry folder' : 'Select your session results folder';
+        type === 'telemetry' ? 'Select your telemetry folder' :
+        type === 'secondaryTelemetry' ? 'Select your secondary telemetry folder' : 'Select your session results folder';
       const result = await dialog.showOpenDialog(win, {title, properties:['openDirectory']});
       if (result.canceled || !result.filePaths[0]) return publicSettings();
       folder = result.filePaths[0];
@@ -1047,10 +1127,11 @@ if (primaryInstance) app.whenReady().then(async () => {
       const root = path.basename(folder).toLowerCase() === 'userdata' ? folder : path.join(folder, 'UserData');
       config.telemetry = path.join(root, 'Telemetry');
       config.results = path.join(root, 'Log', 'Results');
-    } else {
+    } else if (folder) {
       config[type] = folder;
     }
     generation++;
+    failedImports = [];
     watchFolders(win, windowFocus);
     save();
     return publicSettings();
@@ -1119,13 +1200,100 @@ if (primaryInstance) app.whenReady().then(async () => {
       if (distanceScan === scan) distanceScan = undefined;
     }
   });
+  ipcMain.handle('move-telemetry', async ({sender}) => {
+    if (sender !== win.webContents) throw new Error('Open Maintenance in the main window.');
+    if (movingTelemetry) throw new Error('A telemetry move is already in progress.');
+    const {telemetry,secondaryTelemetry} = config;
+    if (!telemetry || !secondaryTelemetry) throw new Error('Choose both telemetry folders first.');
+    movingTelemetry = true;
+    try {
+      const sourceFolder = await fs.promises.realpath(telemetry);
+      const targetFolder = await fs.promises.realpath(secondaryTelemetry);
+      if (path.relative(sourceFolder,targetFolder) === '') throw new Error('Choose two different folders.');
+      if (!(await fs.promises.stat(targetFolder)).isDirectory()) throw new Error('The secondary folder is unavailable.');
+      const files = (await fs.promises.readdir(sourceFolder,{withFileTypes:true}))
+        .filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === '.duckdb');
+      if (!files.length) return {moved:[],issues:[],cancelled:false};
+      for (const [message,detail,button] of [
+        ['Move all telemetry recordings?', files.length + ' recordings will be moved from:\n' + telemetry +
+          '\n\nTo:\n' + secondaryTelemetry, 'Continue'],
+        ['Are you sure?', 'Close Le Mans Ultimate before moving recordings. Each original is removed after its copy is verified. Recordings with conflicting filenames stay in the main folder.', 'Move Recordings']
+      ]) {
+        const {response} = await dialog.showMessageBox(win,{type:'warning',message,detail,
+          buttons:[button,'Cancel'],defaultId:1,cancelId:1,noLink:true});
+        if (response !== 0) return {moved:[],issues:[],cancelled:true};
+      }
+      generation++;
+      await activeScan?.catch(() => {});
+      const moved = [], issues = [];
+      const progress = (completed,filename) => {
+        if (!sender.isDestroyed()) sender.send('telemetry-move-progress',{completed,total:files.length,filename});
+      };
+      for (const [index,entry] of files.entries()) {
+        if (sender.isDestroyed()) break;
+        progress(index,entry.name);
+        const source = path.join(telemetry,entry.name), destination = path.join(secondaryTelemetry,entry.name);
+        try {
+          await moveTelemetryFile(source,destination);
+          moved.push({source,destination});
+        } catch (error) {
+          issues.push(entry.name + ': ' + error.message);
+        }
+      }
+      progress(moved.length + issues.length,'');
+      return {moved,issues,cancelled:false};
+    } finally {
+      movingTelemetry = false;
+    }
+  });
+  ipcMain.handle('trash-failed-imports', async ({sender}) => {
+    if (sender !== win.webContents || movingTelemetry) throw new Error('Telemetry maintenance is unavailable.');
+    const candidates = [...new Map(failedImports.map(file => [file.path,file])).values()];
+    if (!candidates.length) return {trashed:0,issues:[],cancelled:false};
+    movingTelemetry = true;
+    try {
+      const {response} = await dialog.showMessageBox(win,{type:'warning',
+        message:`Send ${candidates.length} files that did not import to the Recycle Bin?`,
+        detail:'Files that changed since the scan will stay in their folders.',
+        buttons:['Move to Recycle Bin','Cancel'],defaultId:1,cancelId:1,noLink:true});
+      if (response !== 0) return {trashed:0,issues:[],cancelled:true};
+      generation++;
+      await activeScan?.catch(() => {});
+      const index = await indexTelemetry();
+      const stillFailing = new Set((index.failedImports ?? []).map(file => file.path));
+      const issues = [];
+      let trashed = 0;
+      for (const file of candidates) {
+        try {
+          if (!stillFailing.has(file.path)) throw new Error('The file is no longer a failed import.');
+          const info = await fs.promises.lstat(file.path,{bigint:true});
+          if (!info.isFile() || info.size.toString() !== file.size || info.mtimeNs.toString() !== file.modified) {
+            throw new Error('The file changed since the scan.');
+          }
+          if (path.extname(file.path).toLowerCase() === '.duckdb') await checkTelemetryWal(file.path);
+          await shell.trashItem(file.path);
+          trashed++;
+        } catch (error) {
+          issues.push(path.basename(file.path) + ': ' + error.message);
+        }
+      }
+      return {trashed,issues,cancelled:false};
+    } finally {
+      movingTelemetry = false;
+    }
+  });
+  function indexTelemetry() {
+    return backend('index', {telemetry: config.telemetry, secondaryTelemetry: config.secondaryTelemetry,
+      results: config.results, primaryDriver: config.primaryDriver, cache: path.join(app.getPath('userData'), 'lap-index-v1.json')});
+  }
   ipcMain.handle('scan', async () => {
+    if (movingTelemetry) return {moving:true};
     if (activeScan) return activeScan;
     const token = generation;
-    activeScan = backend('index', {telemetry: config.telemetry, results: config.results, primaryDriver: config.primaryDriver,
-      cache: path.join(app.getPath('userData'), 'lap-index-v1.json')}).then(result => {
+    activeScan = indexTelemetry().then(result => {
       if (token !== generation) return {stale: true};
       sessionIndex = result.sessions;
+      failedImports = result.failedImports ?? [];
       resultRecordIndex = result.resultRecords ?? [];
       return {...result,recordedDrivers:recordedDriverChoices()};
     }).finally(() => { activeScan = null; });

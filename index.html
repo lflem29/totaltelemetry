@@ -229,7 +229,7 @@
       <div class="library-sessions">
         <dl class="loaded-sessions" aria-label="Loaded Sessions">
           <div><dt>Loaded Session</dt><dd class="loaded-session-actions"><button id="clear-loaded-session" data-ui-icon="close" type="button" class="button-secondary" hidden>Clear Loaded Session</button></dd><dd id="loaded-session">No session loaded</dd></div>
-          <div><dt>Loaded Reference</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" data-ui-icon="clearBookmark" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
+          <div><dt>Loaded Reference</dt><dd class="loaded-session-actions"><button id="clear-loaded-reference" data-ui-icon="close" type="button" class="button-secondary" hidden>Clear Reference Lap</button></dd><dd id="loaded-comparison">No reference lap loaded</dd></div>
         </dl>
         <div id="library-tabs" class="view-tabs" role="tablist" aria-label="Session Library Views">
           <button id="recent-sessions-title" type="button" role="tab" aria-selected="true" aria-controls="recent-sessions-panel">My Recent Sessions</button>
@@ -270,7 +270,10 @@
             <button id="empty-folders">Choose Folder</button>
           </div>
           <div class="table-wrap lap-list-table" id="session-wrap" role="region" aria-label="My Recent Sessions Table" tabindex="0" hidden><table aria-labelledby="recent-sessions-title"><thead><tr><th>Date and Time</th><th>Track</th><th scope="col">Session Type</th><th scope="col" class="numeric-cell">Session Result</th><th class="numeric-cell">Best Lap</th><th class="numeric-cell">Timed Laps</th><th class="numeric-cell" title="Estimated from recorded speed over time">Distance Driven</th><th scope="col" class="session-comparison">Reference</th></tr></thead><tbody id="sessions"></tbody></table></div>
-          <details id="issues" hidden><summary>Files That Did Not Import</summary><ul id="issue-list"></ul></details>
+          <details id="issues" hidden><summary>Files That Did Not Import</summary><ul id="issue-list"></ul>
+            <button type="button" class="button-secondary" id="trash-failed-imports" hidden>Clean Up Files That Did Not Import</button>
+            <p id="trash-failed-imports-status" role="status"></p>
+          </details>
         </section>
         <section id="comparison-laps" role="tabpanel" aria-labelledby="comparison-laps-title" tabindex="0" hidden>
           <div class="actions imported-laps-actions">
@@ -400,7 +403,7 @@
         </div>
         <div class="viewer-reference-picker">
           <div class="viewer-lap-controls">
-            <button id="remove-reference-session" data-ui-icon="clearBookmark" class="button-secondary" type="button" hidden>Clear Reference Lap</button>
+            <button id="remove-reference-session" data-ui-icon="close" class="button-secondary" type="button" hidden>Clear Reference Lap</button>
             <label for="reference-select">Select Reference Lap</label>
           </div>
           <select id="reference-select">
@@ -718,10 +721,24 @@
       <p>Choose the game installation to fill both paths, or select each folder separately.</p>
       <button type="button" data-folder="installation">Choose LMU installation</button>
       <div class="folder-item"><div><strong>Telemetry</strong><p id="telemetry-path"></p></div><button type="button" data-folder="telemetry">Choose Folder</button></div>
+      <div class="folder-item">
+        <div><strong>Secondary Telemetry (Optional)</strong><p id="secondaryTelemetry-path"></p>
+          <p>Store additional recordings on another drive and see them in My Recent Sessions.</p></div>
+        <div class="actions"><button type="button" data-folder="secondaryTelemetry" aria-label="Choose Secondary Telemetry Folder">Choose Folder</button>
+          <button type="button" id="remove-secondary-telemetry" class="button-secondary" data-folder="remove-secondary-telemetry" hidden>Remove</button></div>
+      </div>
       <label class="telemetry-auto-load"><input id="auto-load-telemetry" type="checkbox" aria-describedby="auto-load-telemetry-description" checked> Open New Telemetry Files in the Telemetry Viewer</label>
       <p id="auto-load-telemetry-description">When a new file is ready, the app switches to the Telemetry Viewer and opens Vehicle Performance in Session Summary.</p>
       <div class="folder-item"><div><strong>Session Results</strong><p id="results-path"></p></div><button type="button" data-folder="results">Choose Folder</button></div>
       <p id="folder-selection-status" role="status"></p>
+      <section class="settings-section" aria-labelledby="telemetry-maintenance-title">
+        <h3 id="telemetry-maintenance-title">Maintenance</h3>
+        <p>Move recordings from the main telemetry folder to the secondary folder. Close Le Mans Ultimate before moving files.</p>
+        <button type="button" class="button-secondary" id="move-telemetry">Move All Telemetry to Secondary Folder</button>
+        <progress id="telemetry-move-progress" aria-label="Telemetry move progress" hidden></progress>
+        <p id="telemetry-move-status" role="status"></p>
+        <ul id="telemetry-move-issues" hidden></ul>
+      </section>
   </div>
   <div id="settings-panel-sharing" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-sharing" tabindex="0" hidden>
       <section class="settings-section" aria-labelledby="community-settings-title">

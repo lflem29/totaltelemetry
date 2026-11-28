@@ -1,1 +1,1 @@
-Telemetry charts snap within 50 px and clear the top fade on alignment. The race-start animation waits three seconds before showing the lights.
+Adds a secondary telemetry folder, a verified move tool with progress, and Recycle Bin cleanup for failed imports. Favourite cars use coloured class badges, total track time rounds to whole hours, and Clear Reference Lap uses an X.

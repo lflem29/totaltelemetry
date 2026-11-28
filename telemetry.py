@@ -530,9 +530,11 @@ def index(payload):
         previous = {}
     cached = {}
     errors = []
+    failed_imports = []
 
     def load(path, parser):
         key = str(path)
+        stats = None
         try:
             stats = path.stat()
             stamp = [stats.st_mtime_ns, stats.st_size]
@@ -561,10 +563,39 @@ def index(payload):
             return entry['data']
         except (OSError, ValueError, duckdb.Error, ET.ParseError) as exc:
             errors.append(f'{path.name}: {exc}')
+            if stats is not None and not isinstance(exc, OSError):
+                failed_imports.append(dict(path=key, size=str(stats.st_size), modified=str(stats.st_mtime_ns)))
             return None
 
     results = [data for path in directory(payload.get('results'), '.xml') if (data := load(path, read_results))]
-    items = [data for path in directory(payload.get('telemetry'), '.duckdb') if (data := load(path, inspect))]
+    items = []
+    seen_telemetry = set()
+    recordings_by_name = {}
+
+    def digest(path):
+        entry = cached[str(path)]
+        if 'digest' not in entry:
+            with path.open('rb') as file:
+                entry['digest'] = hashlib.file_digest(file, 'sha256').hexdigest()
+        return entry['digest']
+
+    for folder in (payload.get('telemetry'), payload.get('secondaryTelemetry')):
+        for path in directory(folder, '.duckdb'):
+            key = os.path.normcase(os.path.realpath(path))
+            if key in seen_telemetry:
+                continue
+            seen_telemetry.add(key)
+            if data := load(path, inspect):
+                name_key = (path.name.casefold(), cached[str(path)]['stamp'][1])
+                previous_path = recordings_by_name.get(name_key)
+                if previous_path is not None:
+                    try:
+                        if digest(previous_path) == digest(path):
+                            continue
+                    except OSError:
+                        pass
+                recordings_by_name[name_key] = path
+                items.append(data)
     matches = {}
     for item in items:
         match = correlate(item, results)
@@ -594,7 +625,7 @@ def index(payload):
         temporary = cache_path.with_suffix('.tmp')
         temporary.write_text(json.dumps(cached, allow_nan=False), encoding='utf8')
         os.replace(temporary, cache_path)
-    return dict(sessions=sorted(items, key=lambda x: x['recorded'], reverse=True), errors=errors,
+    return dict(sessions=sorted(items, key=lambda x: x['recorded'], reverse=True), errors=errors, failedImports=failed_imports,
                 resultRecords=results_track_records(results, items, payload.get('primaryDriver')),
                 resultGameVersions=sorted({result['gameVersion'] for result in results if result['gameVersion']}))
 
